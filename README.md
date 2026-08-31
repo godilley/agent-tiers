@@ -1,9 +1,9 @@
 <a name="top"></a>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./agent-tiers-banner-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="./agent-tiers-banner-light.png">
-    <img alt="agent-tiers: never trusts one model with the whole job" src="./agent-tiers-banner-light.png" width="960">
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/agent-tiers-banner-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="./docs/assets/agent-tiers-banner-light.png">
+    <img alt="agent-tiers: never trusts one model with the whole job" src="./docs/assets/agent-tiers-banner-light.png" width="960">
   </picture>
 </p>
 

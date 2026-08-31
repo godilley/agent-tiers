@@ -5,6 +5,11 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.08.31.8 - 2026-08-31
+
+- Moved banner images into `docs/assets/` to tidy the repository root.
+- Updated the README to reference the new banner image locations.
+
 ## v2026.08.31.7 - 2026-08-31
 
 - Fixed symlink resolution in the dangerous-actions blocker on macOS: `readlink -f` can print a correctly resolved path yet exit nonzero, which previously caused both it and the python3 fallback to run and produce garbled output that let the check fail open. Resolution now trusts readlink's output when present, falling back to python3 and then the raw path.
