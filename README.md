@@ -21,6 +21,7 @@
 <p align="center">
   <a href="#install--update">Install</a> ·
   <a href="#what-ships">What ships</a> ·
+  <a href="#see-it-work">See it work</a> ·
   <a href="#companions-optional-power-ups">Companions</a> ·
   <a href="#how-a-project-extends-the-tiers-3-layers">Extend the tiers</a> ·
   <a href="#history">History</a>
