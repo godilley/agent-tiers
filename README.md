@@ -13,8 +13,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/godilley/agent-tiers/actions/workflows/selfcheck.yml"><img alt="selfcheck" src="https://github.com/godilley/agent-tiers/actions/workflows/selfcheck.yml/badge.svg"></a>
-  <a href="LICENSE"><img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
+  <img src="https://img.shields.io/badge/Claude_Code-1c2128?style=for-the-badge&logo=claude&logoColor=D97757" alt="Claude Code">
+  <img src="https://img.shields.io/badge/POSIX_shell-1c2128?style=for-the-badge&logo=gnubash&logoColor=4EAA25" alt="POSIX shell">
+  <a href="https://github.com/godilley/agent-tiers/actions/workflows/selfcheck.yml"><img src="https://img.shields.io/github/actions/workflow/status/godilley/agent-tiers/selfcheck.yml?style=for-the-badge&label=selfcheck" alt="selfcheck status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/MIT-1c2128?style=for-the-badge" alt="license: MIT"></a>
 </p>
 
 <hr>
