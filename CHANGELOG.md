@@ -5,6 +5,11 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.08.31.6 - 2026-08-31
+
+- Added CONTRIBUTING.md explaining that this repo is a curated mirror of a private working repo: issues (bug reports, portability failures, doc gaps, guard false positives) are welcome, while pull requests cannot be merged directly and adopted fixes land via the next curated release with changelog credit.
+- Documented that security-relevant findings should be reported privately rather than via public issues.
+
 ## v2026.08.31.5 - 2026-08-31
 
 - Changelog entries now use versioned headings (e.g. v2026.08.31.4) instead of dates alone.
