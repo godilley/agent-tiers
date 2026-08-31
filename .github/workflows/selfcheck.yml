@@ -1,0 +1,149 @@
+# agent-tiers CI: the kit's own selfchecks under the shells and OS regex engines a recipient will
+# actually run them on. Exists because two review waves (cold-review 2026-08-10, Tier 1 2026-08-16)
+# found HIGHs in the selfchecks' blind spots that were all shell/OS divergence (BSD sed, GNU \b);
+# a Linux-only local run cannot see them. The macOS job is also the T1.1 probe: it runs on a REAL Mac.
+#
+# In the PRIVATE kit repo: workflow_dispatch only in effect (2026-08-24 - macos-latest bills at a
+# 10x minutes multiplier, and even the linux legs cost minutes on routine dev commits): the push
+# trigger below is fenced to public repos by the repo-visibility `if` on the linux job. In the
+# PUBLIC curated copy (2026-08-31): pushes run the FULL matrix including macOS (all GitHub-hosted
+# runners are free on public repos - the 10x multiplier is private-repo billing), so the README badge
+# carries cross-OS weight; in the private repo macOS remains dispatch-with-run_macos only.
+#
+# The macos job below (2026-08-29) additionally defaults OFF on every dispatch, INCLUDING a fresh
+# real share (`--tag` re-sends never dispatch CI at all - the gate only runs when new code is being
+# tagged, which is exactly when the macOS legs have earned their keep before: TIER1-ACTIONED
+# 2026-08-16 found six macOS-only defects here, one a fail-closed bash-3.2 bug). Defaulting macos
+# off trades that coverage for cost on every real send, not just routine dev iteration - a
+# deliberate call (2026-08-29: cutting a bundle was getting too expensive), not a free win.
+# `run_macos: true` opts a single dispatch into the full cross-OS matrix; `agent-tiers-share --macos`
+# is the caller-facing switch - use it before anything that actually ships.
+name: selfcheck
+on:
+  push:
+    branches: [master]
+  # fires on the private->public visibility flip itself: the first publish lands while the
+  # staging repo is still private (push skips below), so this is what runs the badge's first CI
+  public:
+  workflow_dispatch:
+    inputs:
+      run_macos:
+        description: "Also run the macos-latest legs (10x minutes multiplier - opt in deliberately)"
+        type: boolean
+        default: false
+jobs:
+  selfcheck-linux:
+    # push/public run only where Actions is free (public repo); a private-repo push skips silently
+    # and the private repo keeps its dispatch-only cost profile.
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.repository.private }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [sh, dash, bash]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host facts (evidence for the header record)
+        run: |
+          uname -a
+          echo "shell=${{ matrix.shell }}: $(${{ matrix.shell }} -c 'echo ${BASH_VERSION:-non-bash}')"
+          command -v jq && jq --version
+          grep --version 2>/dev/null | head -1 || echo "grep: $(command -v grep) (BSD, no --version)"
+      - name: T1.1 probe - does /usr/bin/grep honour \b (1 = yes, 0 = DENY-MISS)
+        run: |
+          printf 'probe: '; printf 'dd x\n' | /usr/bin/grep -cE 'dd\b' || true
+      - name: install dash (ubuntu only)
+        if: matrix.shell == 'dash'
+        run: sudo apt-get install -y -qq dash
+      - name: git identity (selfchecks commit in sandboxes)
+        run: |
+          git config --global user.email t@t.local
+          git config --global user.name t
+          git config --global init.defaultBranch master
+      - name: lint-doctrine
+        run: bash scripts/lint-doctrine.sh
+      - name: selfchecks
+        run: |
+          # A SKIP line counts as fail too (opus reviewer 2026-08-24, MEDIUM: the local share preflight
+          # (agent-tiers-share, F-17) now hard-fails on any SKIP, but this matrix - the stronger,
+          # cross-OS evidence F-16's CI gate leans on - was still scoring exit code alone, so a tool
+          # missing on one runner (e.g. macOS lacking a GNU-only flag) would silently read as pass here
+          # exactly where the divergence this workflow exists to catch is most likely to show up.
+          set +e; pass=0; fail=0
+          for sc in scripts/*.selfcheck.sh; do
+            if ${{ matrix.shell }} "$sc" >/tmp/sc.out 2>&1 && ! grep -q '^SKIP' /tmp/sc.out; then
+              pass=$((pass+1)); echo "ok   $sc"
+            else
+              fail=$((fail+1)); echo "FAIL $sc"; cat /tmp/sc.out
+            fi
+          done
+          echo "pass=$pass fail=$fail"
+          [ "$fail" = 0 ]
+
+  # Opt-in only (see workflow header). `if: inputs.run_macos` on a workflow_dispatch boolean input
+  # skips this job entirely when false - it is never queued, never billed, not just fast-failed.
+  #
+  # Single-shell matrix (2026-08-30, cut from [sh, bash]): the one real macOS-only bug this job ever
+  # caught (a 2026-08-16 macOS review finding, wave-review-closing record G1, now in the
+  # operator's driving repo)
+  # hit BOTH shells identically - macOS's /bin/sh is itself old
+  # bash under a different name, so running the suite twice bought no extra coverage, only 2x the
+  # 10x-multiplied minutes. Shell-DIALECT divergence is already covered by the linux job's 3-shell
+  # matrix; this job's own reason to exist is OS/tool divergence (BSD grep/sed), which is
+  # shell-independent. ponytail: this trims coverage for a case that hasn't happened (a future macOS
+  # un-aliasing /bin/sh from bash) - the "verify /bin/sh is still bash" step below is the tripwire:
+  # if that assumption ever goes stale, this job fails loudly instead of the gap reopening silently,
+  # and the fix is one line (add "sh" back to the matrix below).
+  selfcheck-macos:
+    # free on a public-repo push (and on the visibility-flip event); costly (10x) everywhere else
+    if: ${{ inputs.run_macos || (contains(fromJSON('["push","public"]'), github.event_name) && !github.event.repository.private) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [bash]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: host facts (evidence for the header record)
+        run: |
+          uname -a
+          sw_vers
+      - name: verify /bin/sh is still bash-derived (else the single-shell trim above is stale)
+        run: |
+          v="$(/bin/sh -c 'echo ${BASH_VERSION:-}')"
+          if [ -z "$v" ]; then
+            echo "::error::/bin/sh on this macOS runner is no longer bash-derived (BASH_VERSION unset)." \
+                 "The macOS CI matrix was trimmed to [bash] on 2026-08-30 on the assumption that" \
+                 "macOS aliases /bin/sh to bash (both hit the same bug, 2026-08-16 macOS review)." \
+                 "That assumption no longer holds - add 'sh' back to the matrix in this file."
+            exit 1
+          fi
+          echo "ok: /bin/sh is bash $v"
+          echo "shell=${{ matrix.shell }}: $(${{ matrix.shell }} -c 'echo ${BASH_VERSION:-non-bash}')"
+          command -v jq && jq --version
+          grep --version 2>/dev/null | head -1 || echo "grep: $(command -v grep) (BSD, no --version)"
+      - name: T1.1 probe - does /usr/bin/grep honour \b (1 = yes, 0 = DENY-MISS)
+        run: |
+          printf 'probe: '; printf 'dd x\n' | /usr/bin/grep -cE 'dd\b' || true
+      - name: git identity (selfchecks commit in sandboxes)
+        run: |
+          git config --global user.email t@t.local
+          git config --global user.name t
+          git config --global init.defaultBranch master
+      - name: lint-doctrine
+        run: bash scripts/lint-doctrine.sh
+      - name: selfchecks
+        run: |
+          # duplicated from selfcheck-linux (SKIP-counts-as-fail rationale, opus reviewer 2026-08-24,
+          # lives there - a tool missing on this runner, e.g. a GNU-only flag, is exactly the case
+          # this job exists to catch) - keep both copies in step.
+          set +e; pass=0; fail=0
+          for sc in scripts/*.selfcheck.sh; do
+            if ${{ matrix.shell }} "$sc" >/tmp/sc.out 2>&1 && ! grep -q '^SKIP' /tmp/sc.out; then
+              pass=$((pass+1)); echo "ok   $sc"
+            else
+              fail=$((fail+1)); echo "FAIL $sc"; cat /tmp/sc.out
+            fi
+          done
+          echo "pass=$pass fail=$fail"
+          [ "$fail" = 0 ]

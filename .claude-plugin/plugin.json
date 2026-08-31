@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "agent-tiers",
+  "version": "0.1.0",
+  "author": { "name": "George Dilley", "url": "https://github.com/godilley" },
+  "homepage": "https://github.com/godilley/agent-tiers",
+  "license": "MIT",
+  "description": "Portable Lead/Worker/Advisor/Reviewer/Boss sub-agent tier system. Ships generalized advisor + worker + reviewer + boss agents, the gating/delegation/session-handoff workflow skills, and an env-probe (/agent-tiers:init) that self-configures per project by discovering how the local GUI resolves sub-agent model/effort overrides. The Lead (main chat) stays GUI-configured; the kit only configures and verifies the sub-agents."
+}
