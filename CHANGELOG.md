@@ -5,6 +5,10 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.08.31.10 - 2026-08-31
+
+- Fixed selfcheck badge styling in README to match sibling badges (dark label and background colors).
+
 ## v2026.08.31.9 - 2026-08-31
 
 - Redesigned README badge row with a consistent for-the-badge style, adding Claude Code and POSIX shell badges alongside the existing selfcheck and MIT license badges.
