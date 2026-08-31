@@ -299,7 +299,15 @@ if [ -z "$HIT_LINE" ] && [ "$ADD_PRESENT" = 1 ]; then
     fi
     if [ -n "$UNTRACKED_FILES" ]; then
       UNTRACKED_HIT_FILE="$(printf '%s\n' "$UNTRACKED_FILES" | while IFS= read -r f; do
-        [ -n "$f" ] && [ -f "$TOP/$f" ] && printf '%s/%s\0' "$TOP" "$f"
+        [ -n "$f" ] && [ -f "$TOP/$f" ] || continue
+        # Binary skip, untracked path only (2026-08-31, live false-deny on a new PNG
+        # whose raw bytes contained a scanned glyph sequence by chance). Tracked
+        # binaries never hit this class - git renders their diffs as "Binary files
+        # differ" - so byte-scanning only NEW binaries was an asymmetry, not policy.
+        # NUL in the first 8KB = binary. A TEXT file carrying stray NULs is the one
+        # case this loses; the diff-based scan paths never covered that either.
+        if [ "$(head -c 8192 "$TOP/$f" | tr -d '\0' | wc -c)" -ne "$(head -c 8192 "$TOP/$f" | wc -c)" ]; then continue; fi
+        printf '%s/%s\0' "$TOP" "$f"
       done | xargs -0 grep -aF -l -e "$EM" -e "$EN" -e "$NBSP" -e "$ZWSP" -e "$LSQ" -e "$RSQ" -e "$LDQ" -e "$RDQ" -e "$ELL" -- 2>/dev/null | head -1)"
       if [ -n "$UNTRACKED_HIT_FILE" ]; then
         HIT_LINE="$(grep -aF -m1 -e "$EM" -e "$EN" -e "$NBSP" -e "$ZWSP" -e "$LSQ" -e "$RSQ" -e "$LDQ" -e "$RDQ" -e "$ELL" -- "$UNTRACKED_HIT_FILE" 2>/dev/null)"

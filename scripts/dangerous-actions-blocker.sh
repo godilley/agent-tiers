@@ -260,13 +260,16 @@ if [ "$TOOL" = "Write" ] || [ "$TOOL" = "Edit" ] || [ "$TOOL" = "NotebookEdit" ]
   fi
   [ -n "$FP" ] || exit 0
 
-  # `readlink -f` is GNU-only - BSD/macOS readlink has no `-f` flag at all and errors immediately,
-  # even for a symlink that WOULD resolve fine, silently defeating this check's whole point on
-  # macOS (a symlink pointing at ~/.aws/credentials would read as its own harmless name instead of
-  # the real target). python3's os.path.realpath is the portable fallback (ships on macOS by
-  # default); only fall back to the raw literal if neither resolves - matching the ALREADY
-  # disclosed weaker-check ceiling above for a genuinely nonexistent parent dir (2026-08-10 audit).
-  RESOLVED="$(readlink -f -- "$FP" 2>/dev/null || python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FP" 2>/dev/null || printf '%s' "$FP")"
+  # Symlink resolution trusts OUTPUT over exit code: macOS readlink -f PRINTS the
+  # correctly resolved path and STILL exits 1 when the final target does not exist
+  # (probed on macOS 26 public CI, 2026-08-31) - a plain `a || b` chain then ran the
+  # python3 fallback as well, the substitution captured BOTH lines, and the basename
+  # check matched nothing (fail-open). python3's os.path.realpath stays as the
+  # fallback for a readlink with no usable output; the raw literal is last resort,
+  # matching the already-disclosed weaker-check ceiling (2026-08-10 audit).
+  RESOLVED="$(readlink -f -- "$FP" 2>/dev/null || true)"
+  [ -n "$RESOLVED" ] || RESOLVED="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$FP" 2>/dev/null || true)"
+  [ -n "$RESOLVED" ] || RESOLVED="$FP"
   BASE_NAME="$(printf '%s' "$RESOLVED" | sed 's#.*/##')"
 
   # same enumerated .env* suffix set as the global settings.json Read() deny list (not a `.env.*`

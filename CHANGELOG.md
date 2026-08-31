@@ -5,6 +5,14 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.08.31.7 - 2026-08-31
+
+- Fixed symlink resolution in the dangerous-actions blocker on macOS: `readlink -f` can print a correctly resolved path yet exit nonzero, which previously caused both it and the python3 fallback to run and produce garbled output that let the check fail open. Resolution now trusts readlink's output when present, falling back to python3 and then the raw path.
+- Fixed a false denial in the hygiene commit guard when committing new binary files (such as PNGs) whose raw bytes happened to contain a scanned glyph sequence: untracked files detected as binary (NUL byte in the first 8KB) are now skipped by the byte scan, matching how tracked binaries were already handled.
+- Added a self-check case covering the binary-skip behavior, alongside the existing text-file control.
+- Fixed the notes-sync `new` subcommand rejecting every slug on macOS: the lowercase check now uses `[[:upper:]]` instead of an `A-Z` range, which under macOS's default collation also matched lowercase letters.
+- Updated the light and dark banner images.
+
 ## v2026.08.31.6 - 2026-08-31
 
 - Added CONTRIBUTING.md explaining that this repo is a curated mirror of a private working repo: issues (bug reports, portability failures, doc gaps, guard false positives) are welcome, while pull requests cannot be merged directly and adopted fixes land via the next curated release with changelog credit.

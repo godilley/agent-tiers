@@ -214,7 +214,9 @@ cmd_new(){
     */*|*.md) die "new: slug must have no path separators and no .md suffix (got '$slug')";;
   esac
   case "$slug" in
-    *[A-Z]*) die "new: slug must be lowercase (got '$slug')";;
+    # [[:upper:]], not [A-Z]: under macOS's default collation the A-Z range glob
+    # also matches LOWERCASE letters, so every slug died here (public CI, 2026-08-31)
+    *[[:upper:]]*) die "new: slug must be lowercase (got '$slug')";;
   esac
   # The date is ALWAYS computed below, never accepted from the caller - a hand-typed date is the
   # exact bug this subcommand exists to remove, so a leading date in the slug itself is refused

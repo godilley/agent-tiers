@@ -165,6 +165,13 @@ check_other deny "(cd $WORK && git add untracked.txt && git commit -m \"test\")"
 check_other allow "(cd $WORK && git commit -m \"test\")"    # control: no add present -> untracked scan does not run
 reset_repo
 
+# binary skip (2026-08-31, live false-deny on a new PNG): an untracked BINARY whose raw bytes
+# contain a scanned glyph sequence must NOT deny (NUL in the first 8KB = binary); the text
+# control above proves the same glyph in a text file still denies, so this isolates the NUL test.
+printf '\211PNG\015\012\032\012\000\000fake image bytes with an em\342\200\224dash inside\000\n' > fake.png
+check_other allow "(cd $WORK && git add fake.png && git commit -m \"test\")"
+reset_repo
+
 # gap-closure wave 4 (2026-08-16): `--git-dir=`/`--work-tree=` DENY unconditionally, before any cwd
 # resolution or content scan - even on an otherwise-CLEAN tree (no glyph violation at all), proving
 # this is not the glyph deny firing coincidentally but the new unresolved-repo-flag deny specifically.
