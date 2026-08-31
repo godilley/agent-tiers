@@ -1,8 +1,39 @@
 # Changelog
 
-All notable changes to this kit, one entry per shared review bundle. Dates are the bundle's
-commit date. The wave-by-wave development history behind each entry (reviews, findings,
-provenance) is kept privately by the maintainer.
+One entry per public release (auto-appended by the publish flow, mirrored as [GitHub
+release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle entries below
+them are the pre-public review-bundle era. The wave-by-wave development history behind each
+entry is kept privately by the maintainer.
+
+## 2026-08-31
+
+- Reworked the changelog header: entries are now one per public release, auto-appended by the publish flow and mirrored as GitHub release notes, with the older Bundle entries marked as the pre-public review-bundle era.
+- Backfilled changelog entries for the three v2026.08.31 public releases, including the initial-release description of the five-tier sub-agent system.
+- Added a README section recommending two companion plugins the author uses alongside the kit: caveman (compressed agent communication) and ponytail (bias toward the smallest working solution).
+
+## v2026.08.31.3 - 2026-08-31
+
+- Restructured the README: reordered sections, added back-to-top navigation links, and moved the per-project artifacts, probe rationale, lifecycle, and second-account (CLAUDE_CONFIG_DIR) details into a new docs/after-install.md.
+- Moved the uninstall checklist into its own docs/uninstall.md.
+- Added three paste-into-Claude prompts under docs/prompts/: an agent-driven install, an independent pre-install review, and a step-by-step uninstall.
+- Extracted the share tool's install, review, and safety-wrapper prompts from inline heredocs into template files under templates/prompts/, with an early preflight that fails before any state-changing step if a template is missing or has lost its placeholder; selfcheck coverage added for both failure modes.
+- The gc command now snapshots RESUME_SESSION.md verbatim via the notes seam before any extraction, so an over-aggressive trim is recoverable.
+- The notes command gained a --profile option, letting one repo carry several ignored-but-versioned notes directories, each with its own dir, ref, and push policy.
+- Documentation updates: expanded everyday-use examples in docs/private-notes.md (new, push subcommands, profiles) and clarified guard, install, and hooks wording in the README.
+- Refreshed the banner images.
+
+## v2026.08.31.2 - 2026-08-31
+
+- Added a "See it work" link to the README's navigation bar.
+
+## v2026.08.31 - 2026-08-31
+
+Initial public release. Installs a five-tier sub-agent system (Lead, Worker, Advisor, Reviewer,
+Boss) into any project, routing each job to the cheapest model that can handle it and reserving
+stronger models for per-call escalation. Safety-critical rules are enforced by PreToolUse hook
+scripts rather than agent memory; guards are opt-in per install. Self-configures by probing the
+local environment, works as a plugin or flattened into `~/.claude` for hosts that ignore plugins,
+and needs only POSIX shell, no server.
 
 ## Bundle 14 - 2026-08-30
 Glossed undefined jargon in every shipped bundle file.

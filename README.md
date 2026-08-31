@@ -271,6 +271,17 @@ The kit works standalone; two opt-in companions turn it good -> great, both degr
   [the XLAB card](skills/agent-tiers/cards/XLAB.md) - "cards" are this kit's short doctrine-reference
   files under `skills/agent-tiers/cards/`). Two independent minds beat one model reviewing itself.
 
+And two plugins that are not part of the kit at all, but the author won't run a session without
+them - switching to a host that lacked them made everything feel subtly off for a day before the
+cause clicked:
+
+- **[caveman](https://github.com/JuliusBrussee/caveman)** - ultra-compressed agent communication,
+  full technical substance with the filler cut. Pairs naturally with a metered setup: cheaper
+  turns everywhere, not just on the big calls.
+- **[ponytail](https://github.com/DietrichGebert/ponytail)** - makes the agent reach for the
+  laziest solution that actually works before writing new code. The tier system routes work to
+  the cheapest capable model; ponytail keeps the work itself small.
+
 ## How a project extends the tiers (3 layers)<a href="#top"><img align="right" src="docs/assets/nav-up.svg" alt=""></a>
 
 Tiers ship global and generic; a project extends them **without duplication** via one skill (there's no
