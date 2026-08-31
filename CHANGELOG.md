@@ -5,7 +5,13 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
-## 2026-08-31
+## v2026.08.31.5 - 2026-08-31
+
+- Changelog entries now use versioned headings (e.g. v2026.08.31.4) instead of dates alone.
+- Added changelog entries for the three v2026.08.31 public releases, including the initial release of the five-tier sub-agent system.
+- Clarified that changelog entries are created per public release by the publish flow and mirrored as GitHub release notes, with older Bundle entries marked as pre-public history.
+
+## v2026.08.31.4 - 2026-08-31
 
 - Reworked the changelog header: entries are now one per public release, auto-appended by the publish flow and mirrored as GitHub release notes, with the older Bundle entries marked as the pre-public review-bundle era.
 - Backfilled changelog entries for the three v2026.08.31 public releases, including the initial-release description of the five-tier sub-agent system.
