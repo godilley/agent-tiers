@@ -58,6 +58,11 @@ printf 'exit 0\n' > scripts/stub.selfcheck.sh
 printf 'kit readme\n' > README.md
 printf 'secret-ish personal file\n' > docs/personal.md
 printf 'docs/personal.md export-ignore\n' > .gitattributes
+# prompt templates are files since 2026-08-31; the script hard-fails without them
+mkdir -p templates/prompts
+printf 'install prompt stub zip=__ZIPNAME__ tag=__TAG__\n' > templates/prompts/zip-install.txt
+printf 'review prompt stub zip=__ZIPNAME__\n' > templates/prompts/zip-review.txt
+printf 'safety body stub\n' > templates/prompts/safety-wrapper.txt
 git add -A; git commit -qm genesis
 
 share() { bash scripts/agent-tiers-share "$@" -o "$OUT" >/dev/null 2>&1; echo $?; }
@@ -106,6 +111,30 @@ tail -1 "$GH_DISPATCH_LOG" | grep -q 'run_macos=false' && ok 'default dispatch p
 [ "$(git -C "$ORIGIN" rev-parse master)" = "$(git rev-parse master)" ] && \
   git -C "$ORIGIN" rev-parse -q --verify refs/tags/share/test-1 >/dev/null 2>&1 && \
   ok 'CI gate + ledger commit + tag all pushed to origin' || bad 'CI gate should have pushed the tagged commit and the tag ref to origin'
+
+# prompt templates are FILES (2026-08-31): the generated prompt must carry the substituted
+# zipname, the safety wrapper must come from its template file, and a missing template must be
+# a hard error naming the path - never a silently empty prompt.
+PF="$(ls -t "$OUT"/review-prompt-*.txt 2>/dev/null | head -1)"
+[ -n "$PF" ] && grep -q 'zip=agent-tiers-test-1' "$PF" && \
+  ok 'prompt built from template file, __ZIPNAME__ substituted' || bad 'prompt should substitute __ZIPNAME__ from the template file'
+[ "$(share --safe --review --tag share/test-1)" = 0 ] && ok 'safe --tag re-send succeeds' || bad 'safe --tag re-send succeeds'
+SPF="$(ls -t "$OUT"/review-prompt-*-safe.txt 2>/dev/null | head -1)"
+[ -n "$SPF" ] && grep -q 'safety body stub' "$SPF" && \
+  ok 'safety wrapper sourced from template file' || bad 'safety wrapper should come from its template file'
+mv templates/prompts/zip-review.txt templates/prompts/zip-review.txt.hold
+MISSING_RC=0
+MISSING_OUT="$(bash scripts/agent-tiers-share --plain --review --tag share/test-1 -o "$OUT" 2>&1)" || MISSING_RC=$?
+[ "$MISSING_RC" != 0 ] && printf '%s' "$MISSING_OUT" | grep -q 'missing prompt template' && \
+  ok 'missing template hard-fails (nonzero rc) naming the path' || bad 'missing template should die nonzero naming the path'
+# the early preflight means that run appended NO ledger row (nothing state-changing ran)
+mv templates/prompts/zip-review.txt.hold templates/prompts/zip-review.txt
+# the placeholder guard itself: a template that lost __ZIPNAME__ must die, same early preflight
+printf 'no placeholder here\n' > templates/prompts/zip-review.txt
+PH_RC=0; PH_OUT="$(bash scripts/agent-tiers-share --plain --review --tag share/test-1 -o "$OUT" 2>&1)" || PH_RC=$?
+[ "$PH_RC" != 0 ] && printf '%s' "$PH_OUT" | grep -q 'lost its __ZIPNAME__' && \
+  ok 'placeholder-less template hard-fails' || bad 'placeholder-less template should hard-fail'
+printf 'review prompt stub zip=__ZIPNAME__\n' > templates/prompts/zip-review.txt
 
 # --macos: dispatch carries run_macos=true, ledger records the fuller tier
 # TODO (opus reviewer 2026-08-29, LOW): this proves the script's own arg string, never that
@@ -173,7 +202,9 @@ git add -A; git commit -qm "fix stub selfcheck again"
 before="$(git tag | wc -l)"
 [ "$(share --plain --review --tag share/test-1)" = 0 ] && ok 'tag re-send succeeds' || bad 'tag re-send succeeds'
 [ "$(git tag | wc -l)" = "$before" ] && ok 're-send adds no tag' || bad 're-send adds no tag'
-[ "$(grep -c "share/test-1" share-ledger.tsv)" = 2 ] && ok 're-send appends ledger row' || bad 're-send appends ledger row'
+# 3 rows: original send, safe-wrapper re-send, and this re-send. The missing-template attempt
+# appends NOTHING - the early template preflight dies before any state-changing step.
+[ "$(grep -c "share/test-1" share-ledger.tsv)" = 3 ] && ok 're-send appends ledger row' || bad 're-send appends ledger row'
 grep -qE "share/test-1.*	n/a\$" share-ledger.tsv && ok 're-send records ci_gate=n/a (gate never runs on --tag)' || bad 're-send should record ci_gate=n/a'
 # --tag re-send takes the `else` branch entirely, skipping the CI gate section (and its branch
 # variable) altogether - its own ledger commit needs the same push, on its own code path.

@@ -23,18 +23,27 @@ bleed becomes **structurally impossible**.
   dirty tree, or mid-merge**.
 
 Per-repo config is in `.git/config` (machine-local): `notes-sync.dir`, `notes-sync.ref`,
-`notes-sync.push` (`local`, or a remote name).
+`notes-sync.push` (`local`, or a remote name). A named `--profile <p>` namespaces all three as
+`notes-sync.<p>.*`, so one repo can carry several ignored-but-versioned dirs. A named profile
+has no dir default - its `setup --dir <path>` must run once first; the ref defaults to
+`local/<p>`. (Snapshotting a single untracked file like `RESUME_SESSION.md` before a gc trim
+needs no profile at all - `new <slug> --from <file>` on the default profile does it.)
 
 ## Everyday use
 
 ```
 notes-sync status                 # dir file count, ref head, remote, push policy
-notes-sync save  "msg"            # snapshot docs/_local -> local/notes
-notes-sync sync                   # save + push (push only if a remote is configured)
+notes-sync new  my-topic          # create docs/_local/<today>-my-topic.md (STATUS: LIVE stub)
+notes-sync save "msg"             # snapshot docs/_local -> local/notes (skips if unchanged)
+notes-sync push                   # push the ref to the configured remote (no-op if local)
+notes-sync sync                   # save + push
 notes-sync restore                # docs/_local <- local/notes (fresh clone / recovery)
 ```
 
-Author docs directly in `docs/_local/`. Run `sync` (or `save`) whenever; it is safe at any repo state.
+`--profile <p>` before any subcommand applies it to that profile. `new` is the one way a dated
+doc should be created (real UTC date, never typed by hand; `--from <path>` seeds it from an
+existing file, prepending a `STATUS: LIVE` line if missing). Author freely in `docs/_local/`;
+`sync`/`save` are safe at any repo state.
 
 ## Set up a NEW project
 

@@ -1,6 +1,6 @@
 ---
 description: Sync this project's private notes (docs/_local/) to a side git ref (local/notes) from any branch, without touching HEAD or the index. The notes dir is git-ignored, so private planning docs can never bleed into a code branch.
-argument-hint: "[setup [--push <remote|local>] | save [msg] | push | sync [msg] | restore | status | migrate <path>... | new <slug> [--from <path>]]"
+argument-hint: "[--profile <p>] [setup [--dir <path>] [--push <remote|local>] | save [msg] | push | sync [msg] | restore | status | migrate <path>... | new <slug> [--from <path>]]"
 allowed-tools: Bash
 ---
 
@@ -30,13 +30,17 @@ Subcommands:
 - `restore` - extract the ref back into `docs/_local/` (fresh clone / recovery; fetches first if remote).
 - `status` - dir file count, ref head, remote, push policy.
 - `migrate <path>...` - move stray docs into `docs/_local/` (untracking them if tracked), then `save`.
-  Full walkthrough: `${CLAUDE_PLUGIN_ROOT}/docs/private-notes.md` if present - it's a kit-local doc, not
-  bundled to recipients, so proceed without it if absent; the steps above are the whole procedure.
+  Full walkthrough: `${CLAUDE_PLUGIN_ROOT}/docs/private-notes.md` (ships with the kit since
+  2026-08-31; if somehow absent, the steps above are the whole procedure).
 - `new <slug> [--from <path>]` - create `<date>-<slug>.md` in `docs/_local/` (today's real UTC date,
   computed by the script, never caller-supplied), stub content `STATUS: LIVE` by default, or `--from`'s
   content with `STATUS: LIVE` prepended only if it lacks one. Always `mkdir`s + excludes the dir first,
   even if `setup` never ran. This is the only way a new dated doc should be created - see the
   `doc-lifecycle` skill for the close ritual once it's done.
+- `--profile <p>` (before any subcommand) - namespace dir/ref/push as `notes-sync.<p>.*`, letting one
+  repo carry several ignored-but-versioned dirs. A named profile's `setup --dir <path>` must run once
+  before any other subcommand uses it; its ref defaults to `local/<p>`. (A single-file pre-gc
+  snapshot needs no profile - `new <slug> --from <file>` on the default profile covers it.)
 
 ## Report
 

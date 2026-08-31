@@ -1,6 +1,0 @@
-{"hooks":{
- "PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"sh /tmp/modeprobe/rec.sh PreToolUse"}]},
-               {"matcher":"Write|Edit","hooks":[{"type":"command","command":"sh /tmp/modeprobe/rec.sh PreToolUse"},{"type":"command","command":"sh /tmp/modeprobe/denywrite.sh"}]}],
- "PermissionRequest":[{"hooks":[{"type":"command","command":"sh /tmp/modeprobe/rec.sh PermissionRequest"}]}],
- "PermissionDenied":[{"hooks":[{"type":"command","command":"sh /tmp/modeprobe/rec.sh PermissionDenied"}]}]
-}}

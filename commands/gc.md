@@ -46,7 +46,14 @@ areas the argument names (default: every breached area). If nothing is breached,
 - **agent memories** (`.claude/agent-memory*/<name>/`): consolidate loose `notes-*.md` into that agent's
   `MEMORY.md` (dedup, keep durable facts); if `MEMORY.md` exceeds ~150 lines, propose trimming the least-used.
 - **resume** (`RESUME_SESSION.md`): a RESUME far over threshold is being used as a STORE, so this pass is
-  an **extraction, not a trim**. Run the guardrail check above on every section you propose cutting;
+  an **extraction, not a trim**. FIRST, before any rewrite, snapshot the whole pre-gc file verbatim
+  (from the repo root - `--from` resolves against the caller's cwd):
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/notes-sync.sh" new resume-pre-gc-$(date -u +%H%M) --from RESUME_SESSION.md && bash "${CLAUDE_PLUGIN_ROOT}/scripts/notes-sync.sh" save`
+  (works even if the notes seam was never set up - `new` creates + excludes the dir itself; the
+  time suffix keeps a second same-day gc from dying on the existing file). Extraction preserves what
+  this pass *decides* survives; the snapshot preserves everything, so a wrong call is recoverable.
+  The same rule applies to any other UNTRACKED file gc rewrites. Then run the guardrail check above
+  on every section you propose cutting;
   anything that survives only here goes to a **named durable home first** - the notes-seam dir if
   `git config --get notes-sync.dir` is set (then `notes-sync.sh save`), else
   `docs/plans/archive/<date>-<topic>.md`, **committed**. An untracked file is not an archive. Only then
