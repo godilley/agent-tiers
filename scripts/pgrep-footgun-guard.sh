@@ -53,11 +53,13 @@ command -v jq >/dev/null 2>&1 || exit 0
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -n "$CMD" ] || exit 0
 
-case "$CMD" in *'<<'*) exit 0 ;; esac   # heredoc body, not a live invocation (ponytail carve-out)
-
 SELFDIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 [ -n "$SELFDIR" ] && [ -f "$SELFDIR/guard-cmdpos.sh" ] || exit 0
 . "$SELFDIR/guard-cmdpos.sh" 2>/dev/null || exit 0
+
+# heredoc body, not a live invocation. guard_has_heredoc (guard-cmdpos.sh, 2026-09-02): was an inline
+# case here, extracted once a 3rd/4th consumer needed the identical carve-out.
+guard_has_heredoc "$CMD" && exit 0
 SEGMENTS="$(guard_split_segments "$CMD")"
 
 HIT="$(printf '%s\n' "$SEGMENTS" | while IFS= read -r seg; do

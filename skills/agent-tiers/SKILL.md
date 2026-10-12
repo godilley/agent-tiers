@@ -10,8 +10,8 @@ description: >-
   audit, routing work to another provider, or when a session is genuinely stuck.
 ---
 
-# Agent tiers v4 - Lead / Worker / Advisor / Reviewer / Boss
-*doctrine-v16 c=3098324220-58119 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
+# Agent tiers v4 - Lead / Sublead / Worker / Advisor / Reviewer / Boss
+*doctrine-v28 c=2687619049-67907 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
 
 **v4 doctrine: the standing cost is a cheap INTERFACE-LAYER Lead; intelligence is metered.** The Lead
 converses, routes, writes tight briefs, verifies returns, and gates; deep reasoning is bought per
@@ -28,7 +28,7 @@ and check items off as you clear them:**
 - [ ] 1. CLASSIFY - trust-class? disclosure-sensitive? any tripwire? (SC-1.1-1.6)
 - [ ] 2. ROUTE - shape -> tier + band, per the scope matrix (SC-2.1-2.2)
 - [ ] 3. AUTHORIZE - spend rung / disclosure gate / irreversible-action gate / wave lease (SC-3.1-3.4)
-- [ ] 4. BRIEF - shared template, self-contained, gap-check vs discovery split, planted control if a review (SC-4.1-4.2)
+- [ ] 4. BRIEF - shared template, self-contained, gap-check vs discovery split, liveness control if a review, recall seed per SC-4.2c (SC-4.1-4.2c)
 - [ ] 5. ISOLATE/EXECUTE - writer isolation, sandbox, egress preflight if cross-lab (SC-5.1-5.4)
 - [ ] 6. VERIFY + RECOVER - grade the return, check-in line, recovery ladder if it failed (SC-6.1-6.4)
 ```
@@ -48,8 +48,7 @@ Tag two things before routing:
   hypothesis or 2nd material user correction on the SAME hunt** (`see SC-1.3a`; unpacked below).
   - The hunt counter (unit = the HUNT: re-framing the question does not reset the count, only a primary-source
     finding that changes the GOAL does; on the 2nd, route the QUESTION out to a second mind - one dispatch resets
-    the count once, a 2nd trip after a return is BOSS-1's stop-and-ask; log each dead theory to `ATTEMPTS.md`;
-    evidenced 2026-08-06): unpacked below.
+    the count once, a 2nd trip after a return is BOSS-1's stop-and-ask; evidenced 2026-08-06): unpacked below.
 - `SC-1.3a` **The operator words above are ARTICULATION TESTS, not feelings** (they gate SC-1.3, SC-1.4 and
   SC-6.1(c), so they get one owner). Each is satisfied only if you can WRITE the thing it names; if you
   cannot produce it, the answer is the escalating one. A self-assessment cannot be fixed by wording, but it
@@ -95,6 +94,7 @@ deviation - state it and get approval first, `see ROUTE-3`):
 | Fan-out research / audit first pass | worker / auditor / Explore | sonnet | low-medium |
 | Deep reasoning: design, plan, tricky-debug hypothesis (ONE bounded ask) | Advisor | opus | high |
 | Curate a set of cheap audit drafts | Reviewer | opus | high |
+| Lead one independent slice of a larger task over its own children (GATED, `[sublead-approved:<why>]` tag) | Sublead | opus | high |
 | Clever CODE, session pref = codex (per-host, authed) | `codex-write` (isolated worktree) | codex tier (XLAB-11) | low-high |
 | Clever CODE otherwise / no codex this host | Worker with `model: opus` | opus | medium-high |
 | Stuck circuit-breaker (gated) | Boss | different from the Lead (opus; fable if opus implicated) | xhigh |
@@ -111,8 +111,12 @@ Cost is not the only gate. Check each that applies:
   anything fable. A cross-provider (Codex) call is gated by default, but its exact rung is owned by XLAB-9 -
   STOP and load the XLAB card before authorizing it. **The built-in `Explore` agent inherits the Lead's
   model** (measured over two reviewed session corpora, 2026-08-10 and 2026-08-15: every observed case):
-  a 2+ Explore fan-out under an opus Lead IS a rung-3 opus fan-out - pass `model: sonnet` (ROUTE-2's row
-  for it) or gate it.
+  a 2+ Explore fan-out under an opus Lead IS a rung-3 opus fan-out - pass `model: sonnet` (the scope
+  matrix's own row for it) or gate it. A `sublead` spawn is rung 3 too (an opus coordinator plus its
+  own children), and so is a `transcript-miner` (a project-defined coordinator of the same shape; the
+  kit does not ship one); task-spawn-guard Rule D gates both alike: the Lead is asked unless
+  the prompt carries the `[sublead-approved:]` tag, a subagent caller is denied, and neither may spawn
+  general-purpose. N of them in parallel are one named wave under SC-3.4.
 - `SC-3.2` **Cross-provider disclosure** (sending repo content to another lab): gated SEPARATELY via the step-5
   preflight - not folded into spend.
 - `SC-3.3` **Irreversible-or-external action** (deploy, delete, push, external side effect): always GATED, independent
@@ -131,9 +135,9 @@ name is re-gated before it is built, not absorbed because it is adjacent (eviden
 
 ### 4. BRIEF - self-contained (agents start blind)
 `SC-4.1` Every metered spawn rides the ONE shared template `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/templates/escalation-brief.md`:
-goal; facts gathered + paths; attempts WITH results (or point at `ATTEMPTS.md`); the ONE question / acceptance
-criteria; constraints; out-of-scope. STATE the spawned model/effort in the brief so the check-in can report it
-truthfully (agents cannot introspect their live model).
+goal; facts gathered + paths; attempts WITH results; the ONE question / acceptance
+criteria; constraints; out-of-scope. Record requested model/effort in the spawn record as declarations, not runtime proof.
+The shared identity-evidence contract at SC-6.4 governs reporting and verification.
 
 `SC-4.1a` **"Self-contained" is not "pre-framed" - split the brief by TASK SHAPE.** Context naming our own
 concepts (rule ids, tier names, card ids, kit vocabulary) is either the question itself or a primer; it is
@@ -164,18 +168,27 @@ the path. Check at brief-writing time: *can this tier open every artifact I just
 COMPUTED and the reasoning must be independent, the instrument is `Explore` with an explicit `model:` override -
 read-only at the tool layer, and it has Bash (`model:` is not optional there, see SC-3.1).
 
-`SC-4.2` **Planted control - any fan-out REVIEW whose findings you will act on.** Seed the brief with at least
-one claim or defect you have **already verified**, formatted identically to the uncertain items and
-**unmarked**. A reviewer that "refutes" a control has its other refutations discounted; one that confirms them
-has earned its other verdicts. **Prefer a real known defect over an invented one** - nothing to remember to
-remove, and it tests the exact defect class the pass is for. Record the controls in the chat before spawning so
-they cannot ship by accident. This is the cheap instrument for `SC-6.1` tier (c) - grading a reviewer whose
-correctness you cannot evaluate at your own depth. (Review-MODE shape: see Escalation briefs.)
+`SC-4.2` **Planted control = a LIVENESS check - any fan-out REVIEW whose findings you will act on.** Seed the
+brief or target with one claim or defect you have **already verified**, formatted identically to the uncertain
+items and **unmarked**. Expect a catch rate near 100%: a catch proves the reviewer READ that region, nothing
+more, and a miss discounts its other refutations. A caught control does **not** earn the other verdicts -
+recall is a separate instrument (SC-4.2c). **Prefer a real known one-read item over an invented one** - nothing
+to remember to remove; a known real defect that takes reasoning to find is worth more as a recall seed
+(SC-4.2c). Record the controls in the chat before spawning so they cannot ship by accident.
+Necessary, not sufficient, for `SC-6.1` tier (c): it grades attention, never judgment. (Review-MODE shape: see
+Escalation briefs.)
   - `SC-4.2a` **"Discounted" means re-verify its evidence-bearing claims against the primary source and drop its
     unevidenced judgments** - NOT "disregard the return" (unpacked below).
-  - `SC-4.2b` **A control everyone catches has stopped measuring:** scale the COUNT to the findings you expect
-    (not "at least one"), distribute position, vary the class, never reuse across parallel reviewers, and **read a 100% catch rate as a failing instrument** - on this
-    kit's own record every control ever planted was caught (unpacked below).
+  - `SC-4.2b` **A caught control proves liveness, not recall:** every one-read class is caught by any reviewer
+    that opens the file, so ONE control per brief is enough, placed in the region most likely to be skimmed
+    (coverage, not difficulty). A near-100% liveness catch rate is the expected reading (unpacked below).
+  - `SC-4.2c` **Recall needs a defect the reviewer must reason to find, seeded in the TARGET, never named in the
+    brief.** Any review: a **held-back real defect** when one is already known and verified. Top-stakes
+    (the `SC-1.6` list) with none to hold back: **mutation seeding** - a Worker applies one to three mutations from
+    the fixed list (unpacked below) in a scratch copy; the Lead materialises the diff FROM that copy and
+    briefs that copy's paths, so diff and files agree; the mutated copy is never a merge source. A recall
+    miss means the review MODE is short: add a mode or axis (an execution pass), not a re-run. Two-reader
+    capture-recapture is a lower bound only (unpacked below).
 
 ### 5. ISOLATE / EXECUTE - contain writers + gate cross-lab egress
 - `SC-5.1` **DELEGATED writers run isolated:** `codex-write` and worktree-parallel writers write in an **isolated
@@ -210,14 +223,24 @@ correctness you cannot evaluate at your own depth. (Review-MODE shape: see Escal
   discharged against an artifact, and does not carry to the next one. Codex output is never solely Codex-reviewed.
   Measured, not asserted: across 140 sessions and 6 weeks this rule fired in **2.1%** of sessions and did not move
   as the doctrine grew, which is why `authorship-record` exists as a hook rather than a seventh restatement here.
-  Arrival event (2026-08-16): `review-gate-guard` (PreToolUse `ask` at `git commit`, once per session per
-  repo, when the transcript holds no reviewer / advisor / codex-read spawn). Consent-class: wired only via
+  Arrival event (2026-08-16; ship point per repo since 2026-10-06): `review-gate-guard` (PreToolUse `ask`,
+  once per session per repo, when the transcript holds no reviewer / advisor / codex-read spawn). The ship
+  point is where a diff leaves the place only this session uses, set per repo by `review_gate:` in
+  `.claude/agent-tiers.local.md`: `commit` (default) gates `git commit` plus `git push` / `gh pr
+  create|merge`, so a worker there does not commit (the Lead commits after the review); `push` (a
+  commit-first repo, where the pre-commit hook is the check run) lets every caller commit and gates push
+  and PR only (a commit spelled with `--git-dir`/`--work-tree` still asks, and an unresolvable `cd`/`-C`
+  target still denies, in either mode). A command that both commits and pushes is gated as a push. Never set `push` in a repo that
+  does not push (it would gate nothing); `/agent-tiers:doctor` prints the effective mode. Ungated,
+  disclosed: `merge`, `cherry-pick`, `rebase`, `am`, `pull`, `revert`, `git subtree push`, git aliases,
+  any env-assignment prefix, and script wrappers (`worktree.sh down --merge` merges and pushes inside a
+  script). Consent-class: wired only via
   `install-flat.sh --with-review-gate-guard`; an install without it has only this prose, which measured
   at roughly one violation in four commit-bearing sessions over two reviewed corpora (2026-08-10, 2026-08-15).
   In a session flagged by `/unattended on`, that `ask` arrives as a DENY carrying the same remedy (spawn a
   reviewer, retry the commit) rather than a halt nobody is present to clear - the gate is enforced either
   way, and no hard deny is ever converted (HOST card, unattended mode). Same conversion, independently
-  (2026-08-27): when the CALLER is a subagent (a delegated worker's own commit, not the Lead's), the ask
+  (2026-08-27): when the CALLER is a subagent (a delegated worker's own commit, or any push), the ask
   also arrives as a deny - a delegated agent has no standing to judge triviality or spawn a reviewer
   either, and there is no channel back to the Lead for a real `ask` to reach. Worded at the worker (stop,
   report it back) rather than at a human. See `guard_caller_agent`/`guard_ask_decision` in
@@ -283,28 +306,32 @@ gate (a hook, a CI job, a Stop-check):
 For this kit: LLM review stays advisory as an AUTOMATED gate (exit codes are the gate); `SC-5.2`'s pass is
 kept off question 1 by INDEPENDENCE, and `SC-1.6`'s ROUTINE carve-out is a disclosed residual overlap
 (unpacked below).
-`SC-6.2` **Fail-OPEN on a trust verdict is banned:** if the trust-class verdict OWNER (a reasoning-band Claude-strong
-tier) is unavailable mid-session, **STOP and tell the human** - never let a weaker/faster tier silently inherit
-a trust-class verdict.
-
-`SC-6.3` **Recovery ladder (the daily failed-worker case; log each move to `ATTEMPTS.md`):**
+`SC-6.3` **Recovery ladder (the daily failed-worker case; track each move as you go):**
 - **Accept** - return verifies clean -> done.
 - **Repair** - small, well-understood gap -> resume the SAME agent ONCE with a corrective note.
+  A send to a finished agent resumes it, so every `SendMessage` names its intent: `RESUME-OK` for a repair
+  or new work, `NOOP-IF-DONE` for a mid-flight note (reply NOOP and stop if already finished).
+  `simple-rules-guard` Rule F denies a send carrying neither.
 - **Restart fresh** - context contaminated / agent looping -> NEW agent on a clean brief, do not resume.
   (Count it: after a failed repair this restart IS the 3rd execution attempt - Stop + ask fires FIRST.)
 - **Re-shape to Advisor** - output reveals a reasoning task mislabeled mechanical (also the backstop for
   shape-misclassification) -> re-route as an Advisor ask, not another Worker attempt.
+- **Partial return** - a worker stopped under its definition's Stopping rule: (a) an unsettled decision ->
+  settle it and brief the remainder, not counted as an attempt; (b) a check it could not fix -> Repair or
+  Re-shape on that check, counted; a run the harness cut off -> re-dispatch the remainder narrower, not
+  counted; a stop citing anything else (size, effort, time) is a failed return -> Restart narrower, counted.
 - **Quarantine** - a partial WRITER failed -> an isolated-worktree writer's output stays unmerged (inspect,
   salvage by hand or discard); a signed-off LIVE-tree Worker that broke the tree gets reverted before any retry.
 - **Stop + ask** - count each EXECUTION attempt (the original + repair + restart = 3). BEFORE a 3rd attempt,
-  STOP and surface the attempt log; the human authorizes ONE of: the Boss gate (circuit-breaker; load the BOSS
+  STOP and surface the attempt history; the human authorizes ONE of: the Boss gate (circuit-breaker; load the BOSS
   card before spawning), a re-shape, or one final retry. This is the same threshold as the step-1 "3rd+
   attempt" tripwire (one counter, one action).
 
-`SC-6.4` **Then:** repeat the spawned agent's check-in (`name . tier . model . effort . def-v<N>`; model is DECLARED
-not introspected, def-v is disk-verifiable) as the FIRST line of its FINAL message - the opening check-in is
-stripped once the agent runs any tool (see Check-in-return gotcha). After editing an agent definition, compare
-the check-in's `def-v<N>` to disk before trusting behaviour-dependent results (staleness protocol: see MAINT-2).
+`SC-6.4` **Then:** repeat the agent's role/definition check-in (`name . tier . def-v<N>`) as the
+FIRST line of its FINAL message. Keep model/effort out of the greeting. Apply the identity-evidence
+contract in "The check-in line" below before reporting runtime identity; declarations are not proof.
+After editing a definition, compare its returned `def-v<N>` to disk before trusting behaviour-dependent
+results (staleness protocol: see MAINT-2). A matching stamp does not verify model or effort.
 
 *Everything below is COLD REFERENCE - the Spawn Contract's unpacked bodies (long form + evidence of the hot
 rules), the tier vocabulary, the capability-band dial, routing rationale (ROUTE card), cross-provider handoff,
@@ -318,7 +345,7 @@ headline measurement, this carries the mechanism and the evidence. Read on dispa
 - **The hunt counter, unpacked.** It is the hypothesis twin of SC-6.3's execution counter, which only
   fires on spawns: a solo Lead can loop through evidence-grounded reversals forever without tripping
   anything, because each one is individually exempt above. Their COUNT is not exempt. **The unit is the
-  HUNT** (one open question plus the theories about it, `see BOSS-2`): re-framing the question does not
+  HUNT** (one open question plus the theories about it): re-framing the question does not
   reset the count, only a primary-source finding that changes the GOAL does. On the 2nd, stop theorizing
   and route the QUESTION out to a second mind with a distilled brief (`see SC-4.1`) BEFORE the next claim
     - who that is follows the band, not this rule: interface-band, an Advisor (announce-only, `see SC-3.1`);
@@ -326,12 +353,13 @@ headline measurement, this carries the mechanism and the evidence. Read on dispa
   produced the falsified theories (`see SC-1.6`, `see BOSS-3`). An execution attempt that also falsifies a
   theory ticks BOTH counters and this one fires first: it is the cheaper move and it does not spend the
   human's gate. One dispatch resets the count once; a 2nd trip on the same hunt after a return is BOSS-1's
-  "keeps reversing its own conclusion" row - stop + ask (`see SC-6.3`). Log each falsified theory to
-  `ATTEMPTS.md` as it dies (`see BOSS-2` - `ruled out:` / `suspicion:` are exactly this ledger) so the
-  count is a FILE, not a memory, and the log IS the distilled brief. (Evidenced 2026-08-06: four falsified
+  "keeps reversing its own conclusion" row - stop + ask (`see SC-6.3`). **The count is tracked in the Lead's
+  own working notes as it goes** (a corpus-wide sweep found the count held this way in every real instance,
+  never via a separate ledger file - a persistent-file requirement here was aspirational, not observed), and
+  the same tracking IS the material the distilled brief draws from. (Evidenced 2026-08-06: four falsified
   theories and four user catches in one session, every escalation user-triggered, and the one Advisor
   dispatch resolved what solo theorizing could not. Same trap as the delegation skill's solo-hunt
-  check-stop, memory note: check-stop-delegate-the-hunt - that one hands the CHURN to a read-only agent,
+  check-stop (a hunt not cracked in ~2-3 probes) - that one hands the CHURN to a read-only agent,
   this one hands the QUESTION.)
 
 ### SC-1.6 - evidence
@@ -349,18 +377,40 @@ inside that taxonomy; a 3-agent corrective pass over dirs it never opened - 2 un
 returned three findings with no bucket in our vocabulary and a stronger validation of the ladder, stronger
 because it survived an adversarial argument instead of a friendly comparison.)
 
-### SC-4.2a / SC-4.2b - control calibration, unpacked
+### SC-4.2a / SC-4.2b / SC-4.2c - liveness vs recall, unpacked
 - `SC-4.2a` **"Discounted" means: re-verify its evidence-bearing claims against the primary source, and drop
   its unevidenced judgments.** NOT "disregard the return". Missing a control proves it did not read the source
   for THAT claim; it says nothing about a claim that cites file:line, and a control-failing reviewer may still
   have earned its evidenced findings. Throwing the whole return away is both wrong and unusable.
-- `SC-4.2b` **A control everyone catches has stopped measuring.** Scale the COUNT to the findings you expect
-  (not "at least one"); DISTRIBUTE position across the brief, never as its own flagged paragraph; VARY the
-  CLASS - a false claim about a readable file is one mode, a fabricated `file:line`, a real defect stated at the
-  wrong severity, and a correct claim asserted as already-fixed are others. Never reuse one control across
-  parallel reviewers if independence is the point. **Record the catch rate and read 100% as a failing
-  instrument**, not as a good pass: on this kit's own record every control ever planted was caught, which means
-  the difficulty was never calibrated.
+- `SC-4.2b` **A caught control proves liveness, not recall.** The classes planted so far - a false claim about
+  a readable file, a fabricated `file:line`, a real defect at the wrong severity, a correct claim asserted as
+  already-fixed - are each disproved by one read. A defect planted only in a materialised diff also mismatches
+  the real files read beside it (mechanism inferred, not measured). Evidence: on 2026-08-04 two read-only
+  review layers each caught their control and six real defects survived both, found only by execution. The
+  recorded misses were not one-read classes: a missing prohibition and a surface the docs never name
+  (2026-09-14), and two real defects in a directory the reviewer syntax-checked instead of read (2026-08-24).
+  Scaling the count or varying among one-read classes does not turn liveness into recall.
+- `SC-4.2c` **Recall, the method details.** A held-back real defect is free and realistic, but it was found
+  by the Lead, so it leans easy. Mutation seeding picks by list order (the first class not used in the
+  previous seeded review), never by taste; single hunk each; a seed counts only once the seeding Worker
+  shows one real input whose output differs between original and mutant (on 2026-10-10 two seeds in a row
+  were equivalent: the remaining conditions already covered the deleted check, and the seeder's own account
+  of the effect was wrong); recorded in chat with the copy's path before the spawn; diff via plain `git diff`, never a form that carries commit messages. A git worktree carries
+  only committed state, so seed uncommitted work in a `cp -a` copy instead. The list, weighted to omission
+  because that is where the misses were:
+  1. **Delete a check** - an early return, a validation, a deny branch, a `--` end-of-options.
+  2. **Loosen a boundary** - `<` to `<=`, drop one arm of a regex alternation or `case`, widen a glob.
+  3. **Drop a semantics flag** - `rg --text`, `grep -a`, a quoting pair, `set -u`.
+  4. **Swallow an error** - append `|| true`, discard a return code, send a check's stderr to `/dev/null`.
+  5. **Scope slip** - fix one call site and leave its sibling; key on the wrong event, variable or path.
+  6. **Drift a claim** (prose targets) - change behaviour and leave the line describing it, or widen a
+     claim's scope, or drop an "inferred".
+  One to three seeds is an alarm, not a rate: record seeded/caught with the finding count so a rate builds up
+  across reviews. **Capture-recapture** (readers find `a` and `b` verified defects, `m` shared): Chapman
+  `(a+1)(b+1)/(m+1) - 1`, which survives `m = 0`. It assumes independent captures; readers sharing a model,
+  brief or read-only access miss the same defects, inflating `m` and driving the estimate down (the 2026-08-04
+  pair would have estimated near zero). Compute it free on a dual-lab pass that already ran (XLAB-12), read it
+  as a lower bound, never as the sole recall check. Dedupe and verify before counting: synthesis, Lead-owned.
 
 ### SC-4.1b - evidence
 
@@ -407,8 +457,8 @@ the failure mode is specific: you propose a rule that already exists, or you rea
 whose restriction lives in the next clause. Before proposing or editing any rule here, read its whole
 section - and `see MAINT-2` for the `doctrine-v` / `card-v` stamp so a return can name the revision it
 applied. (2026-08-04: a session proposed four rules the kit already had, after reading this file by grep
-plus two slices. Stated ceiling: nothing enforces this at read time; it fires only for someone already
-applying SC-6.1a.)
+plus two slices. Stated ceiling, no-hook: a partial read leaves no tool call to gate, so this one fires
+only for someone already applying SC-6.1a.)
 (Hot line: lookup and review are complements, not substitutes - the lookup answers what a debate cannot, and a
 reviewer is what catches a partial lookup.)
 
@@ -424,12 +474,21 @@ question 1 warns about, a real residual overlap, not a false alarm. Narrowing th
 separate decision, not settled by this rule. (Sourced 2026-08-06, cross-checked against a real shipped
 gate that fails this checklist despite looking rigorous - don't copy the YAML, adopt the checklist.)
 
-*The exceptional-mechanism normative rules live in five single-owner **policy cards** under
-`cards/`, each loaded on dispatch from the hot Spawn Contract (never on an ordinary spawn):
+*The exceptional-mechanism normative rules live in six single-owner **policy cards** under
+`cards/`, each loaded on dispatch (never on an ordinary spawn): five from the hot Spawn Contract -
 **XLAB** (cross-provider Codex), **BOSS** (stuck circuit-breaker), **MAINT** (definitions / staleness / gc /
 project layer), **HOST** (model resolution + env probes), **ROUTE** (routing rationale - the five axes, the
-per-spawn model/effort levers, and the rule that stops a cheap Lead grinding a hard shape). The cold sections here carry rationale + `see <id>`
+per-spawn model/effort levers, and the rule that stops a cheap Lead grinding a hard shape) - plus **MEMORY**
+(deltas on the system prompt's own memory spec), a REFERENCE card rather than a dispatched one: consult it
+before writing durable memory, the same way any policy card is consulted, but nothing loads it
+automatically. The cold sections here carry rationale + `see <id>`
 pointers into those cards; the card is the rule's one owner.*
+
+`TIER-1` **The tiers and their tool surfaces.** Advisor and Boss are read-only; Reviewer is read-only
+on code and writes its one curated findings file; Worker, Sublead and Lead write. The grant, not the prose, is what
+enforces this - so a tier whose behaviour disagrees with this table is a mis-granted definition, not a
+lapse in judgement. If a Reviewer's return says no file was written (the host refused the Write), its full
+list is in that message: persist it yourself if the next step needs a file.
 
 | Tier | Who | Model | Effort | Role | Tools |
 |---|---|---|---|---|---|
@@ -438,6 +497,7 @@ pointers into those cards; the card is the rule's one owner.*
 | **Advisor** | `advisor` | opus | high | Deep reasoning on ONE bounded question OR a bounded design/plan; returns a recommendation (or plan) + confidence. Never edits. | read-only |
 | **Reviewer** | `reviewer` | opus | high | Curates several cheap first-pass audit drafts into ONE trustworthy list - cuts false positives, re-rates severity, dedups, ADDS what the cheap pass missed. Never edits code. | read-only + writes its one curated file |
 | **Boss** | `boss` | **different from the Lead** (opus for a sonnet Lead; fable if opus reasoning was already implicated) | xhigh | Rare, **always human-gated** circuit-breaker: delivers an independent VERDICT on a distilled brief when the Lead is stuck; the Lead still OWNS adopting it (the value is independence, not authority-transfer). Never gathers; bounces vague briefs. | read-only |
+| **Sublead** | `sublead` | opus | high | Lead for ONE independent slice: cuts it into child jobs, briefs and routes them, verifies every return, hands one verified result upward. GATED (task-spawn-guard Rule D, `[sublead-approved:]` tag). Never pushes, deploys or deletes. | read/edit/write/bash + Agent, SendMessage (canonical: sublead.md frontmatter) |
 
 - **Model is the main cost lever (doctrine, not prices).** Opus is only a **small multiple of sonnet**, so a
   single scoped opus call is cheap insurance; **fable is a large multiple - it is the tier to guard**, not
@@ -457,6 +517,8 @@ pointers into those cards; the card is the rule's one owner.*
   stays authoritative; the kit only configures and verifies the sub-agents.
 
 ## Lead capability-band - the per-session dial (choose up-front, hold for the session)
+`BAND-1` **The band is chosen up-front by work-class and held for the session.** A mid-session switch of
+the Lead's own model is not a correction move (see the correction ladder below).
 The Lead's model is not a fixed default; it is a per-session **capability BAND**, a human GUI dial set at
 session start by work-class. Written model-agnostic (ids drift):
 - **Interface-band Lead** (below the thinking ceiling; today Sonnet - the v4 default): reaches **DOWN**, buys
@@ -533,14 +595,31 @@ owner and the three authorities:
 ## Project extension + self-maintenance - the MAINT card
 Extending the tiers to a project (the 3 layers: global agents, the L2 `tier-project-brief`, L3 prefixed task
 agents) and the kit's own self-maintenance split (worker learnings vs Lead-solo `MEMORY.md` curation; contract
-changes via DEF-DELTA) have ONE owner: the **MAINT card** (`cards/MAINT.md`). It loads when wiring the project
-layer or editing a definition, not on an ordinary spawn.
+changes flagged rather than self-edited) have ONE owner: the **MAINT card** (`cards/MAINT.md`). It loads when
+wiring the project layer or editing a definition, not on an ordinary spawn.
 
 Rationale worth keeping in view (the rules live in the card, cited):
 - The project layer extends the tiers through a `skills:` hook rather than agent copies, so the brief stays
   single-source and a name collision cannot silently shadow a tier; the mechanics are MAINT-1.
-- Definition changes route through DEF-DELTA + the def-version staleness protocol instead of self-edits - that
-  is what stops a stale definition from silently running; the procedure is MAINT-3 and MAINT-2.
+- Definition changes route through a flagged-in-return proposal + the def-version staleness protocol instead
+  of self-edits - that is what stops a stale definition from silently running; the procedure is MAINT-3 and
+  MAINT-2.
+
+## Memory governance - the MEMORY card
+What the kit adds on top of Claude Code's own memory spec (per-file ceiling, no derivable state, no
+attributed quotes, and the honest scope of the write-time content lint) has ONE owner: the **MEMORY card**
+(`cards/MEMORY.md`). It is a REFERENCE card: consult it before writing a durable memory file or auditing
+one, the same way any policy card is consulted - nothing dispatches it automatically, unlike the five
+Spawn-Contract cards above. The system prompt's own spec governs everything the card is silent on, so this
+card states deltas only, never a restatement.
+
+Rationale worth keeping in view (the rules live in the card, cited):
+- The kit's memory doctrine used to sit beside the system prompt's spec with no cross-reference; the card
+  now starts from that spec and adds only what it lacks (MEMORY-1 to MEMORY-2, PR numbers narrowed and
+  branch names dropped after a corpus check found no false-positive-free shape for the latter).
+- The write-time content lint is advisory, consent-gated (`install-flat.sh --with-memory-content-lint`,
+  unwired by default), and NOT the independent review the operator's propagation rule asks for - the same
+  authoring Lead reads its own advisory, so it is a mechanical floor, not a second mind (MEMORY-4).
 
 ## Boss - the stuck circuit-breaker (rare, human-gated)
 The Boss mechanism has ONE owner: the **BOSS card** (`cards/BOSS.md`), loaded on dispatch from the recovery
@@ -550,10 +629,11 @@ never pages into it.
 Rationale worth keeping in view (the rules live in the card, cited):
 - The Boss's value is independence, not more strength: a different model on a clean framing sees what the
   looping Lead can't. It fires after Workers/Advisor, on what they produced (see BOSS-1 for the fire-it/don't test).
-- It runs on distilled context and never gathers - its fuel is the `ATTEMPTS.md` log captured at each
-  check-stop (see BOSS-2), and it bounces a brief that lacks the attempt log + hypothesis (see BOSS-3).
+- It runs on distilled context and never gathers - its fuel is the attempt history distilled into the
+  escalation brief at each check-stop (see SC-4.1, BOSS-3), and it bounces a brief that lacks the attempts +
+  hypothesis (see BOSS-3).
 - Every Boss spawn is gated and runs a model different from the Lead's for real independence (see BOSS-3);
-  the Lead still owns adopting the verdict (see SC-6.2).
+  the Lead still owns adopting the verdict (see SC-1.5).
 
 ## How per-agent model/effort resolves - the HOST card
 How a spawn's frontmatter `model:`/`effort:` actually resolves is GUI-specific (frontmatter-override behavior,
@@ -565,7 +645,7 @@ in `.claude/agent-tiers.local.md`; a spawn inherits those values.
 The tier table gives each tier a DEFAULT model/effort. The **scope matrix** (Spawn Contract step 2 ROUTE, top
 of skill) is the every-spawn decision. The rationale behind it - the five routing axes, the per-spawn model /
 effort override levers, the routing doctrine that keeps a cheap Lead from under-thinking a hard shape, and the
-band nuance on the verify tiers - has ONE owner: the **ROUTE card** (`cards/ROUTE.md`), see ROUTE-1 to ROUTE-5.
+band nuance on the verify tiers - has ONE owner: the **ROUTE card** (`cards/ROUTE.md`), see ROUTE-1, ROUTE-3 to ROUTE-5.
 
 ## Cross-provider handoff - Claude manages, Codex writes/reviews (per-host)
 The cross-provider machinery has ONE owner: the **XLAB card** (`cards/XLAB.md`). It loads on dispatch, not on
@@ -581,7 +661,7 @@ restated here):
 - Codex output is delegated + unverified, so it inherits the same isolation and review-pass rules as any
   delegated writer (see SC-5.1, SC-5.2) plus the cross-lab specifics (see XLAB-2, XLAB-3).
 - The trust split - generate liberally, but a Claude-strong tier holds the verdict, and provider disagreement
-  routes to the human - is the cross-lab face of the trust taxonomy (see XLAB-8, SC-6.2).
+  routes to the human - is the cross-lab face of the trust taxonomy (see XLAB-8, SC-1.5).
 - A Codex session resumes by explicit session-id, spend is classed by the actual codex invocation, and each
   send is gated for disclosure (see XLAB-4, XLAB-9, XLAB-10 and the hot SC-5.3 preflight).
 - Availability is per-host, consents are per-session and independent, and the model/effort x brief-specificity
@@ -594,13 +674,15 @@ consumer deltas. Why it earns a section: the brief IS the cost control - a tight
 clear the job (the Codex 2-D model/effort x brief-specificity rule, see XLAB-11, applies to Claude tiers
 equally). Three real consumers (Advisor asks, Boss briefs, Codex handoffs) now share ONE template,
 `${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/templates/escalation-brief.md`: goal . facts gathered (paths cited) .
-attempts with results (or point at `ATTEMPTS.md`) . the ONE question / acceptance criteria .
-constraints . out-of-scope. Consumer deltas: Advisor gets "the ONE question"; the Boss delta (attempt log +
+attempts with results . the ONE question / acceptance criteria .
+constraints . out-of-scope. Consumer deltas: Advisor gets "the ONE question"; the Boss delta (attempts +
 current hypothesis, bounce rule) is owned at BOSS-3; Codex gets acceptance criteria + touch-only scope.
 `codex-handoff-brief.md` is retained as a pointer to the shared template. The template is the FLOOR, not the
 thing that makes a cheap tier clear the job - for a review spawn, the MODE below carries most of the load.
 
 ### Review-mode delta - pick the mode by artifact MATURITY, not by stakes
+`REVMODE-1` **A review brief states its MODE, and the mode is chosen by artifact maturity, not stakes.**
+An adversarially-briefed reviewer cannot return empty; if empty must be possible, change the brief.
 - **Move-shaped change (text relocated, not rewritten): put the BEFORE-state in the brief.** A read-only
   Reviewer cannot run `git show HEAD~1`, so "nothing deleted" is only inferable from the after-state; attach
   `git show HEAD~1 -- <files>` (or the diff) into the brief text. Cheaper than granting Bash and keeps the tier
@@ -623,17 +705,36 @@ A review brief's mode decides what the reviewer can possibly return, so it is ch
   internal coherence - forbid fact-checking explicitly, or it silently becomes a worse adversarial pass - and
   asks the reviewer to **report its coverage** ("I enumerated N cross-references and checked all of them"),
   which is what distinguishes an exhaustive pass from a sampled one.
-Every mode above still carries a planted control (`SC-4.2`).
+Every mode above still carries a planted control (`SC-4.2`); a review also carries a recall seed when one is known, and always at top-stakes (`SC-4.2c`).
 
 ## The check-in line
-The check-in requirement + return-placement are the hot rule (see SC-6.4); this section owns which of its
-fields `name . tier . model . effort . def-v<N>` are DECLARED vs runtime-VERIFIABLE - miss that and the
-check-in becomes a rubber stamp:
-- **model = DECLARED** (restated from the brief - an agent CANNOT introspect its own live model). To verify the
-  REAL model, read the harness transcript where the host exposes it (per-host - see `.claude/agent-tiers.local.md`).
-- **effort:** Workers read the REAL effort from `$CLAUDE_EFFORT`; read-only agents report the declared value.
-- **def-v<N> = runtime-VERIFIABLE against disk** (compare the quoted stamp to the canonical file - the
-  staleness check, see MAINT-2).
+The check-in requirement and return placement are owned by SC-6.4. Identity reporting has one
+shared contract for every provider, tier and adapter:
+
+- **Requested (declared, unverified):** the native model selector or alias and requested effort,
+  taken from the actual spawn settings where accessible. A brief is a declaration only. Definition
+  defaults do not establish what a particular invocation requested.
+- **Resolved:** a harness or adapter configuration record tied to this invocation. Keep its
+  concrete model ID separate from the requested alias. Resolution is not backend observation.
+- **Observed:** model/effort from harness-owned runtime evidence tied to this agent and turn,
+  with the evidence source named. A provider response establishes only fields it actually reports.
+  For a translating gateway, a rewritten client model label is not independent upstream proof.
+- **Missing evidence:** label the corresponding field **unverified**. Read-only tiers do not gain
+  tools or permission to obtain evidence; the Lead obtains it through the active adapter. Never
+  promote a role name, greeting, brief, launch flag or frontmatter default into an observation.
+- **Effort:** a nonempty `$CLAUDE_EFFORT` tool result is a Claude harness observation for that
+  agent's current turn, not upstream confirmation and not model evidence. Other adapters use
+  their native runtime records. Keep requested, harness and upstream effort distinct if they differ.
+- **Mismatch:** report the discrepancy and stop relying on identity-dependent results until the
+  Lead resolves it from runtime evidence. Do not edit a return to match the requested selection.
+- **Definition version:** compare the returned stamp to the canonical file for staleness
+  (see MAINT-2). This is separate from identity verification.
+
+Example: `requested model=sonnet (declared); resolved model=gpt-6-sol (adapter record);
+observed model=gpt-6-sol, effort=medium (upstream response for this child request)`.
+Without the last record, observed identity remains unverified. The same distinction applies when
+`opus` resolves to a concrete Claude model ID. A broker reports its own and its engine's evidence
+separately. This contract defines reporting; it does not claim that an enforcement hook is installed.
 
 ## ⚠️ Check-in-return gotcha (portable technique)
 The Agent tool returns only the agent's **FINAL** message. An opening check-in line does NOT survive back

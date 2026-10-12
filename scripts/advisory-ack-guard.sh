@@ -4,7 +4,7 @@
 # own relevance judgment. Sibling of resume-inject.sh (the emitter) and review-gate-guard.sh (whose
 # transcript-reading conventions this reuses: structured jq extraction, never a raw grep).
 #
-# Why this exists (incident, not opinion): session e824d942 got resume-inject.sh's "project layer never
+# Why this exists (incident, not opinion): a session got resume-inject.sh's "project layer never
 # wired, ASK before running /agent-tiers-init" advisory at SessionStart, correctly. The Lead silently
 # judged it not relevant and dropped it from two replies, until asked directly three times. Root cause:
 # three of resume-inject.sh's four advisories require an act the harness already observes afterward (a
@@ -34,7 +34,7 @@
 # of what triggers the next check, and its ack/miss outcome is always genuinely re-derived, never assumed.
 #
 # Known ceilings, disclosed rather than silently absorbed:
-# - Only resume-inject.sh's advisory A uses this today (SC-6.2/SC-6.3/SC-6.1a, advisory B/C's disjunctive
+# - Only resume-inject.sh's advisory A uses this today (SC-6.3/SC-6.1a, advisory B/C's disjunctive
 #   branches all need a DIFFERENT compliance check - no natural token, or an OR/ordering claim
 #   text-presence can't express - not folded in, see the findings doc).
 # - Wired via install-flat.sh's HOOK_ROWS (id `advisory-ack-guard`, class `consent`, `Stop`). This
@@ -80,9 +80,6 @@ LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # 
 # not done here. The tag still makes this hook's lines greppable/filterable by session today.
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s advisory-ack-guard %s [sid=%s]\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" "${SESSION_ID:-}" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 command -v jq >/dev/null 2>&1 || exit 0   # fail open, silently - nothing to log to yet without jq
@@ -99,12 +96,28 @@ PENDING_FILE="$PENDING_DIR/$SESSION_ID"
 NAGGED_FILE="$NAGGED_DIR/$SESSION_ID"
 SEEN_FILE="$SEEN_DIR/$SESSION_ID"
 
-[ -f "$PENDING_FILE" ] || exit 0   # cheap path: nothing pending this session, no state touched at all
+[ -f "$PENDING_FILE" ] || exit 0   # cheap path: nothing pending this session, no state touched at all - placed
+# BEFORE the timeout-tracing block below, deliberately: this near-zero-overhead path is a tested contract
+# (advisory-ack-guard.selfcheck.sh case 6), and start/end breadcrumbs are only worth their own log write
+# once there is real (transcript-scanning) work at risk of the hook budget.
 
-# Opportunistic GC, same posture as session-prefs/review-gate-asked (7-day mtime).
-{ [ -d "$PENDING_DIR" ] && find "$PENDING_DIR" -type f -mtime +7 -delete; } 2>/dev/null || true
-{ [ -d "$NAGGED_DIR" ] && find "$NAGGED_DIR" -type f -mtime +7 -delete; } 2>/dev/null || true
-{ [ -d "$SEEN_DIR" ] && find "$SEEN_DIR" -type f -mtime +7 -delete; } 2>/dev/null || true
+# Timeout tracing, scoped to the expensive window only (the transcript scan further below) - a run
+# that has pending tokens but exits before ever reaching the scan (STILL_ACTIVE empty, no readable
+# transcript) is a normal completion, not traced, and logs nothing here either. A guard killed at its
+# hook budget cannot write its own breadcrumb, so the window brackets itself: `start` on entry, `end
+# done=1` on exit. A kill inside the window leaves `start` with either `done=0` (SIGTERM - probed
+# 2026-09-17: an untrapped SIGTERM still runs the EXIT trap, and `$?` reads 0 there, so the flag is
+# what distinguishes it) or no `end` at all (SIGKILL runs no trap).
+GUARD_TRACE_OPEN=0
+trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+
+# Opportunistic GC, same posture as session-prefs/review-gate-asked (mtime, default 7 days via
+# AGENT_TIERS_STATE_DAYS). Validated: non-digit, 0, or over 3650 silently falls back to 7.
+days="${AGENT_TIERS_STATE_DAYS:-7}"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
+[ "$days" -gt 0 ] 2>/dev/null && [ "$days" -le 3650 ] 2>/dev/null || days=7
+{ [ -d "$PENDING_DIR" ] && find "$PENDING_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
+{ [ -d "$NAGGED_DIR" ] && find "$NAGGED_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
+{ [ -d "$SEEN_DIR" ] && find "$SEEN_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
 
 NL='
 '
@@ -144,11 +157,13 @@ fi
 # Candidate lines pre-filtered with grep (transcripts run to many MB), then structurally re-validated with
 # jq so a tool_result/pasted-JSON line that merely CONTAINS the substring `"role":"assistant"` cannot pass
 # (same defense as review-gate-guard's subagent_type check).
+GUARD_TRACE_OPEN=1; note "start [pid=$$]"
 RECENT_TEXT="$(grep -a '"role"[[:space:]]*:[[:space:]]*"assistant"' "$TRANSCRIPT" 2>/dev/null | tail -n 60 | jq -R -s -r '
     split("\n") | map(select(length > 0)) | map(try fromjson catch empty) | map(select(.message.role? == "assistant"))
     | map((.message.content // [])[]? | select(.type == "text") | .text)
     | join("\n")
   ' 2>/dev/null)"
+GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"   # closes off the transcript scan above
 
 RESOLVED_ACK=""; RESOLVED_MISS=""; TO_BLOCK=""
 while IFS= read -r tok; do

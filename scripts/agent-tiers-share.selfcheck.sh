@@ -21,7 +21,7 @@ export AGENT_TIERS_SHARE_NO_CLIP=1
 # spawns, silently flipping "green share succeeds" and the ledger-verified assertion to test the
 # skip path instead and fail. Unset here so this selfcheck's result never depends on the calling
 # shell's env; the one dedicated skip-gate test below sets it back for that single invocation only.
-unset AGENT_TIERS_SHARE_SKIP_CI_GATE
+unset AGENT_TIERS_SHARE_SKIP_CI_GATE AGENT_TIERS_SHARE_REMOTE
 
 # Real (stubbed) CI gate exercise, not the skip var, for the bulk of this file (2026-08-24, opus
 # reviewer MEDIUM: the skip var used to cover EVERY test, so the gate's own push/dispatch/poll logic
@@ -69,6 +69,11 @@ share() { bash scripts/agent-tiers-share "$@" -o "$OUT" >/dev/null 2>&1; echo $?
 
 # missing --who
 [ "$(share --plain --review)" = 2 ] && ok 'missing --who exits 2' || bad 'missing --who exits 2'
+
+# --remote is validated up front, before any tag/push, never inferred
+[ "$(share --plain --review --who test --remote .)" = 2 ] && ok '--remote . refused' || bad '--remote . refused'
+[ "$(share --plain --review --who test --remote nope)" = 1 ] && ok '--remote nope (nonexistent) refused' || bad '--remote nope (nonexistent) refused'
+git tag | grep -q . && bad '--remote . / nonexistent must not tag' || ok '--remote . / nonexistent left no tag'
 
 # dirty tree aborts, no tag
 printf 'dirt\n' > dirt.txt

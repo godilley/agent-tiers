@@ -344,8 +344,54 @@ scope_set repo
 check3 deny "git commit -m x"                                    # ...and the repo file wins over it
 scope_off; rm -f "$T3/kit-config.md"
 check3 deny "git commit -m x"
+# BEHAVIOUR CHANGE regression (ship-guards wave, 2026-10-06, guard_local_scalar): a malformed LOCAL
+# line no longer falls through to a VALID kit-config.md - it resolves IN PLACE to the stricter value
+# (repo), even with a perfectly good `narrow` sitting in the second source.
+printf 'hygiene_scope: narrow extra\n' > "$WORK/.claude/agent-tiers.local.md"
+printf 'hygiene_scope: narrow\n' > "$T3/kit-config.md"
+check3 deny "git commit -m x"   # malformed local line wins (repo), never the kit's valid narrow
+scope_off; rm -f "$T3/kit-config.md"
 rm -rf "$T3"
 git checkout -q -- unrelated.txt 2>/dev/null; rm -f wanted.txt
 reset_repo
+
+# heredoc BODIES are stripped (guard_strip_heredocs), not stood-down (2026-10-12) - the default
+# harness commit form (`git commit -m "$(cat <<'EOF' ... EOF\n)"`) carries a heredoc on every single
+# commit, so the old stand-down meant that common form was never scanned at all.
+#
+# a heredoc BODY line starting "cd " used to look like a fresh `cd` segment to guard_resolve_cwd
+# (grep's `^` anchors per line, not per command); stripping the body removes that line before any
+# match runs, so the real `git add`/`git commit` after the heredoc closes is scanned normally.
+check allow 'cat > note.txt <<EOF
+cd /does/not/exist && echo hi
+EOF
+git add note.txt && git commit -m "add note"'
+git rm -q --cached note.txt 2>/dev/null || true; rm -f note.txt
+reset_repo
+
+# the default harness commit form: a heredoc'd message via $(cat <<'EOF' ... EOF). A staged glyph
+# must still deny through this form (this is the common commit the old stand-down let through
+# unscanned entirely).
+printf 'a line with an em\342\200\224dash\n' > f.txt; git add f.txt
+check deny 'git commit -m "$(cat <<'"'"'EOF'"'"'
+a clean message
+EOF
+)"'
+reset_repo
+
+# same heredoc'd-message form, clean staged file -> allow.
+printf 'a plain ascii line\n' > f.txt; git add f.txt
+check allow 'git commit -m "$(cat <<'"'"'EOF'"'"'
+a clean message
+EOF
+)"'
+reset_repo
+
+# a heredoc BODY line starting "git commit" must not be mistaken for the real command - the actual
+# command here is `cat > notes.md <<EOF`, which is not a commit at all, so this must allow.
+check allow 'cat > notes.md <<EOF
+git commit -m "should not match"
+EOF'
+rm -f notes.md
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

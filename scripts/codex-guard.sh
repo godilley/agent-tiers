@@ -52,6 +52,55 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 CMDSTR="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
+
+# Heredoc present: strip heredoc BODY lines before scanning, keep everything else (opener lines, and
+# any command before/after the heredoc on the whole multi-line string) verbatim. The earlier approach
+# ("scan only lines containing `<<`") was WRONG: it dropped lines before the opener and after the
+# terminator too, so a codex call on its OWN line after a closed heredoc (`cat > p.txt <<EOF` / body /
+# `EOF` / `codex exec - < p.txt`) was invisible to the scan and silently ALLOWED (found by execution,
+# 2026-10-12). Stripping only the BODY keeps the real false-positive fix this guard needs - a HEREDOC
+# BODY line that happens to start with `codex ...` (writing a doc/script that mentions it as example
+# text) must still ALLOW - while keeping every real command line, including one chained after the
+# heredoc closes, in view. `codex exec - <<'EOF' ... EOF` (the operator on the SAME line as the
+# invocation - `codex exec` takes its prompt on stdin, the single most natural way to invoke the exact
+# thing this guard bans) still DENIES: the opener line is never stripped.
+#
+# Inline copy of guard_strip_heredocs() from guard-cmdpos.sh (not sourced - this guard is deliberately
+# standalone/fail-CLOSED, see header). An UNTERMINATED heredoc is left entirely as-is (awk exits 1),
+# same ceiling as the shared helper: a body with no known end cannot be safely bounded, so SCAN falls
+# back to the full unmodified CMDSTR - still fail-CLOSED (a real codex line inside an unterminated body
+# still DENIES), just coarser (may also deny on a body line that merely mentions codex as text). If the
+# awk step fails for any other reason, same fallback applies.
+SCAN="$CMDSTR"
+case "$CMDSTR" in
+  *'<<'*)
+    STRIPPED="$(printf '%s\n' "$CMDSTR" | awk '
+      BEGIN { tag = ""; dash = 0 }
+      {
+        line = $0
+        if (tag == "") {
+          print line
+          if (match(line, /<<-?[ \t]*('"'"'[^'"'"']*'"'"'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)/)) {
+            seg = substr(line, RSTART, RLENGTH)
+            dash = (seg ~ /^<<-/) ? 1 : 0
+            rest = seg
+            sub(/^<<-?[ \t]*/, "", rest)
+            gsub(/^'"'"'|'"'"'$/, "", rest)
+            gsub(/^"|"$/, "", rest)
+            tag = rest
+          }
+        } else {
+          cand = line
+          if (dash) sub(/^\t+/, "", cand)
+          if (cand == tag) { tag = ""; dash = 0 }
+        }
+      }
+      END { if (tag != "") exit 1 }
+    ' 2>/dev/null)"
+    [ $? -eq 0 ] && SCAN="$STRIPPED"
+    ;;
+esac
+
 if [ -z "$CMDSTR" ]; then
   # Unparseable/empty payload: this guard's class is fail-CLOSED, so mirror the jq-less path rather
   # than silently allowing (cross-lab finding 7).
@@ -68,7 +117,7 @@ fi
 # Mentions inside strings/args (rg codex, echo codex, paths like codex-home-isolate.sh, and the
 # wrapper's own codex-run.sh) do not match; a QUOTED string containing '&& codex ' does false-positive
 # (known ceiling - split the command; the deny reason self-corrects).
-if printf '%s\n' "$CMDSTR" | grep -Eq '(^|[;&|({]|\$\(|`)[[:space:]]*((command|exec|nohup|sudo|time)[[:space:]]+)?codex([[:space:];&|)]|$)'; then
+if printf '%s\n' "$SCAN" | grep -Eq '(^|[;&|({]|\$\(|`)[[:space:]]*((command|exec|nohup|sudo|time)[[:space:]]+)?codex([[:space:];&|)]|$)'; then
   deny "$FIX"
 fi
 exit 0

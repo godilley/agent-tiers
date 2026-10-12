@@ -34,9 +34,6 @@ BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s authorship-record fail-open: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 INPUT="$(cat 2>/dev/null || true)"
@@ -96,8 +93,11 @@ printf '%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$AGENT" 
 if [ "$(wc -l < "$LEDGER" 2>/dev/null || echo 0)" -gt 500 ]; then
   tail -n 250 "$LEDGER" > "$LEDGER.tmp" 2>/dev/null && mv -f "$LEDGER.tmp" "$LEDGER" 2>/dev/null || true
 fi
-# Ledgers older than 14 days are not evidence of anything current.
-{ find "$DIR" -type f -mtime +14 -delete; } 2>/dev/null || true
+# Ledgers older than default 14 days (AGENT_TIERS_LEDGER_DAYS) are not evidence of anything current.
+# Validated: non-digit, 0, or over 3650 silently falls back to 14.
+days="${AGENT_TIERS_LEDGER_DAYS:-14}"; case "$days" in ''|*[!0-9]*) days=14 ;; esac
+[ "$days" -gt 0 ] 2>/dev/null && [ "$days" -le 3650 ] 2>/dev/null || days=14
+{ find "$DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
 
 [ "$FLAG" = FLAG ] || exit 0
 [ "$PRIOR" -eq 0 ] 2>/dev/null || exit 0                       # nudge ONCE per session, then stay silent

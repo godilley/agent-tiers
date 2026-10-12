@@ -21,9 +21,13 @@ Update it **as you work, not batched** - every checkpoint, before any `/compact`
 
 ## Auto-injection
 The kit ships a **SessionStart hook** (`scripts/resume-inject.sh`) that re-injects
-`$CLAUDE_PROJECT_DIR/RESUME_SESSION.md` on **compact / resume / clear** - not a fresh startup, where
-CLAUDE.md already loads and there's no working-state to restore (guarded - silent when the file is
-absent). It's wired ONCE, so you do NOT need per-project wiring; just keep the file current.
+`$CLAUDE_PROJECT_DIR/RESUME_SESSION.md` on **startup / compact / resume / clear** (guarded - silent
+when the file is absent). Every injected body is capped so the whole inject stays under the host's 10000-character inline limit
+(over that, the host saves it to a file and the model sees only a ~2000-byte preview), which leaves about
+5-8 KB for the handoff: past the cap it injects the
+head, cut at a whole line, plus one line naming the file to Read for the rest. A headless `claude -p`
+run started in the project directory reports as a startup too, so it also gets the body. It's wired
+ONCE, so you do NOT need per-project wiring; just keep the file current.
 - **Standalone CLI:** the plugin's own hook provides this.
 - **Plugin-ignoring GUI** (e.g. CodeMoss): `scripts/install-flat.sh` wires the same script into the
   **global `~/.claude/settings.json`** SessionStart hook, so it covers every project.

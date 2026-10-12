@@ -39,7 +39,9 @@
 # untracked files while the deny reason still claimed it had), and (4) the commit-segment TEXT
 # itself, which catches an inline `-m "message with a violation"` directly - the typed bytes are
 # already right there in the command string, no parsing needed (a message passed via `-F <file>` or
-# `-m "$VAR"`, or one entered interactively with no `-m`/`-F` at all, is NOT covered - see bypass set).
+# `-m "$VAR"`, or one entered interactively with no `-m`/`-F` at all, is NOT covered, and neither is a message
+# written as a heredoc body, `-m "$(cat <<'EOF' ... EOF)"`, since heredoc bodies are stripped before
+# any scan - see bypass set).
 #
 # ponytail: same glyph list as the global CLAUDE.md rule (em dash U+2014, en dash U+2013, NBSP
 # U+00A0, ZWSP U+200B, curly quotes U+2018/2019/201C/201D, ellipsis U+2026), matched as literal UTF-8
@@ -74,9 +76,6 @@ BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s hygiene-commit-guard %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 INPUT="$(cat 2>/dev/null || true)"
@@ -99,7 +98,20 @@ fi
 # would hit `set -u`'s unbound-variable error on first use below instead of a clean, breadcrumbed
 # fail-open - opus reviewer, 2026-08-16. Caught here, once, at the same place every other sourcing
 # failure is caught.
-[ -n "${CMDPOS_COMMIT_FRAG:-}" ] && command -v guard_unresolved_repo_flag >/dev/null 2>&1 && command -v guard_cwd_unresolved >/dev/null 2>&1 && command -v guard_commit_seg >/dev/null 2>&1 && command -v guard_git_add_segs >/dev/null 2>&1 && command -v guard_norm_add_paths >/dev/null 2>&1 || { note "fail-open: guard-cmdpos.sh sourced but CMDPOS_COMMIT_FRAG/guard_unresolved_repo_flag/guard_cwd_unresolved/guard_commit_seg/guard_git_add_segs/guard_norm_add_paths undefined (stale library?)"; exit 0; }
+[ -n "${CMDPOS_COMMIT_FRAG:-}" ] && command -v guard_unresolved_repo_flag >/dev/null 2>&1 && command -v guard_cwd_unresolved >/dev/null 2>&1 && command -v guard_commit_seg >/dev/null 2>&1 && command -v guard_git_add_segs >/dev/null 2>&1 && command -v guard_norm_add_paths >/dev/null 2>&1 && command -v guard_strip_heredocs >/dev/null 2>&1 && command -v guard_local_scalar >/dev/null 2>&1 || { note "fail-open: guard-cmdpos.sh sourced but CMDPOS_COMMIT_FRAG/guard_unresolved_repo_flag/guard_cwd_unresolved/guard_commit_seg/guard_git_add_segs/guard_norm_add_paths/guard_strip_heredocs/guard_local_scalar undefined (stale library?)"; exit 0; }
+
+# Heredoc bodies are STRIPPED (guard_strip_heredocs, guard-cmdpos.sh), not a stand-down. The old
+# stand-down (guard_has_heredoc, 2026-09-02) existed because a HEREDOC BODY line that happens to start
+# with `cd ...`/`git commit ...`/`git add ...` is mistaken for a real command at command position by
+# every CMDPOS_PREFIX match below (grep's `^` anchors per line, not per command) - but this guard IS a
+# policy boundary (it hard-denies a commit on a glyph), and the harness's own default commit form is
+# `git commit -m "$(cat <<'EOF' ... EOF\n)"` - a heredoc is present on EVERY such commit, so the old
+# stand-down meant the common case was never scanned at all. worktree-guard.sh, long-run-guard.sh and
+# git-add-stash-guard.sh migrated to guard_strip_heredocs on 2026-09-23 for the same reason: it removes
+# the body lines (so they cannot be mistaken for a real command) while leaving the real commands around
+# the heredoc, including the one on the opener line itself, visible to every match below.
+CMD="$(guard_strip_heredocs "$CMD")"
+
 SEGMENTS="$(guard_split_segments "$CMD")"
 COMMIT_SEG="$(guard_commit_seg "$SEGMENTS")"
 [ -n "$COMMIT_SEG" ] || exit 0
@@ -212,23 +224,23 @@ fi
 # Anything else - missing file, typo, empty value, two values, an unreadable config - resolves to
 # `repo`. A config read by a security guard fails toward the STRICTER branch or it is a bypass with a
 # friendly name.
-HSCOPE=""
-for hs_src in "${TOP:-/dev/null}/.claude/agent-tiers.local.md" "${BASE:-/dev/null}/kit-config.md"; do
-  case "$hs_src" in /.claude/*|/kit-config.md) continue ;; esac   # empty TOP/BASE must not read from /
-  [ -f "$hs_src" ] || continue
-  # More than one hygiene_scope line is ambiguous, and the realistic shape is an operator APPENDING a
-  # tightening line and believing they tightened it - so it resolves to repo, not to first-wins.
-  hs_n="$(grep -ac '^hygiene_scope:' "$hs_src" 2>/dev/null || echo 0)"
-  [ "${hs_n:-0}" -le 1 ] 2>/dev/null || { note "multiple hygiene_scope lines in $hs_src - ambiguous, using repo (strictest)"; HSCOPE=repo; HSCOPE_SRC="$hs_src"; break; }
-  hs_val="$(grep -aE '^hygiene_scope:[[:space:]]*[A-Za-z]+[[:space:]]*$' "$hs_src" 2>/dev/null | head -1 | sed -E 's/^hygiene_scope:[[:space:]]*//; s/[[:space:]]*$//')"
-  [ -n "$hs_val" ] || continue
-  HSCOPE="$hs_val"; HSCOPE_SRC="$hs_src"; break
-done
-case "${HSCOPE:-}" in
-  narrow) ;;
-  repo|'') HSCOPE=repo ;;
-  *) note "unrecognised hygiene_scope '${HSCOPE}' in ${HSCOPE_SRC:-?} - falling back to repo (strictest)"; HSCOPE=repo ;;
-esac
+# guard_local_scalar (guard-cmdpos.sh, ship-guards wave 2026-10-06): same two-file order/precedence
+# this resolver always used, now the ONE implementation review-gate-guard.sh's review_gate mode
+# shares too, instead of a second hand-rolled copy.
+#
+# BEHAVIOUR CHANGE (ship-guards wave, 2026-10-06): the pre-refactor inline resolver fell through to
+# the SECOND file (kit-config.md) when the FIRST file's hygiene_scope line was malformed (a typo, two
+# values on one line - its `hs_val` came back empty and the loop just `continue`d to the next source).
+# guard_local_scalar resolves from whichever file HAS the key FIRST and does not keep looking: a
+# malformed line in the repo's OWN override now resolves in place to the strict value (`repo`), even
+# when the kit's kit-config.md separately carries a valid `narrow`. One case widens: a value with a
+# trailing comment (`hygiene_scope: narrow  # note`) was rejected by the old token-only regex and fell
+# through (usually to `repo`); guard_local_scalar strips the comment, so it now reads as the `narrow`
+# the line plainly says.
+HS_OUT="$(guard_local_scalar "${TOP:-}" hygiene_scope "narrow repo" repo)"
+HSCOPE="$(printf '%s\n' "$HS_OUT" | sed -n 1p)"
+HS_REASON="$(printf '%s\n' "$HS_OUT" | sed -n 2p)"
+[ -n "$HS_REASON" ] && note "$HS_REASON"
 
 DIFF="$(git diff --cached -- "$@" 2>/dev/null)"; RC=$?
 [ "$RC" -eq 0 ] || { note "fail-open: git diff --cached failed (rc=$RC) - not a git repo / bare repo / other git error, scan skipped"; exit 0; }

@@ -12,12 +12,26 @@ description: >-
 ## Hard rules
 - **Never** parallel-write the same live tree (races) → worktrees. ⚠️ Built-in `isolation: "worktree"`
   derives from the *current* repo - if another agent is active there, hand-roll an off-project `/tmp`
-  repo instead.
+  repo instead. A worktree for a parallel interactive SESSION (not a sub-agent) is made with
+  `scripts/worktree.sh up <name>` and retired with `worktree.sh down <name> [--merge]`: it carries the
+  git-ignored context files (CLAUDE.md, agent-tiers.local.md, the project brief, agents), keeps the
+  symlinks out of `git status`, records the base, and refuses to discard unmerged commits.
 - **Never `git stash` in a parallel-worker brief.** Worktrees share one `.git`, so `refs/stash` is repo-wide -
   two workers stashing concurrently pop each other's changes (2026-08-18: the content swap across two worktrees
   and the shared ref path are observed, the concurrent-stash mechanism is inferred - one of the two workers
   confirmed stashing). Brief `git show HEAD -- <file>` or a file copy for the before/after need instead. Everything
   else workers normally run (`add`/`commit`/`diff`/`status`/`log`) IS worktree-scoped.
+- **A built-in worktree's base is the `worktree.baseRef` setting, never the brief.** `head` (recommended, user
+  settings) branches from the Lead's current HEAD commit; uncommitted Lead edits are not carried (inferred from
+  `git worktree add`, not probed), so commit first. Unset or `fresh` branches from the remote default branch,
+  and commits on the Lead's branch are missing (2026-10-06: two of four workers silently ran one commit short).
+  Where it is not `head`, brief "first run `git merge <session-branch>`" and check `git worktree list` after
+  spawning. `/agent-tiers:doctor` reports the effective value.
+- **Size a worker brief to finish in one pass**, ordered by dependency so each finished task leaves a passing
+  state. Do not predict cost; make a wrong guess cheap. Say in the brief whether the worker commits: in a `review_gate: push` repo it
+  may, in a `commit` repo it does not and the Lead commits after the review (agent-tiers SC-5.2). Stop conditions live in the worker definition's
+  Stopping rule; a writing agent that is not `worker` gets that paragraph pasted into its brief. A partial
+  return is handled by SC-6.3 (Partial return).
 - **Never** delegate synthesis/understanding - plan from agents' findings yourself.
 - **Always verify** output (re-run tests for code; spot-check files) - a summary ≠ truth.
 - **Self-contained prompts** - agents start blind: include paths, build/test commands, conventions.

@@ -26,6 +26,13 @@ CG='sh "$HOME/.claude/agent-tiers/scripts/codex-guard.sh"'
 GF='sh "$HOME/.claude/agent-tiers/scripts/grep-footgun-guard.sh"'
 
 install() { HOME="$T" sh "$I" "$@" >"$T/out" 2>&1 || { cat "$T/out"; fail "installer exited non-zero ($*)"; }; }
+# A stub notify-send, prefixed onto PATH ONLY for the one case that needs notify's probe to report
+# supported (case 2b) - this file's own assertions must not depend on whether THIS host happens to
+# have a real notify-send (it does here, but the CI runners this selfcheck also runs on may not,
+# which is exactly what made case 2b fail everywhere except this machine before this fix). Never
+# actually notifies anything: it is never invoked with any real payload, only probed for presence.
+NOTIFYSTUB="$T/notify-stub"; mkdir -p "$NOTIFYSTUB"
+printf '#!/usr/bin/env sh\nexit 0\n' > "$NOTIFYSTUB/notify-send"; chmod +x "$NOTIFYSTUB/notify-send"
 count() { # $1=event $2=cmd -> how many entries under that event carry that command
   jq --arg ev "$1" --arg c "$2" \
     '[(.hooks[$ev] // [])[] | (.hooks? // [])[] | select(.command == $c)] | length' "$S"
@@ -39,11 +46,37 @@ install
 [ "$(count SessionEnd 'sh "$HOME/.claude/agent-tiers/scripts/guard-summary.sh"')" = 1 ] \
   || fail "core row (guard-summary, SessionEnd) should auto-wire"
 [ "$(count PreToolUse "$CG")" = 0 ] || fail "consent row must NOT wire without --with-<id>"
+[ "$(count PreCompact 'sh "$HOME/.claude/agent-tiers/scripts/precompact-guard.sh"')" = 0 ] \
+  || fail "consent row (precompact-guard) must NOT wire without --with-<id>"
+[ "$(count Notification 'sh "$HOME/.claude/agent-tiers/scripts/notify.sh"')" = 0 ] \
+  || fail "consent row (notify) must NOT wire without --with-<id>"
 
 # --- 2. consent wiring + ledger stamp --------------------------------------------------------------
 install --with-codex-guard
 [ "$(count PreToolUse "$CG")" = 1 ] || fail "--with-codex-guard should wire the row"
 [ "$(jq -r '.["codex-guard"].event' "$L")" = PreToolUse ] || fail "ledger should record the event"
+
+# --- 2b. non-PreToolUse consent rows wire the same way (precompact-guard: PreCompact, notify: Notification).
+#         precompact-guard's install-time probe now refuses without authorship-record also wired/requested
+#         (see case 13) - request it alongside here so this wiring-shape test still succeeds. notify's
+#         probe is now host-only (notify-send on PATH, nothing terminal-related - see notify.sh's own
+#         header) - HOST-INDEPENDENT via $NOTIFYSTUB, not this test host's ambient notify-send, so the
+#         probe is exercised as genuinely SUPPORTED on any CI leg, not merely on a machine that happens
+#         to have notify-send installed (the bug this replaces: this case used to fail on any host
+#         without a real notify-send, CI included).
+PATH="$NOTIFYSTUB:$PATH" install --with-authorship-record --with-precompact-guard --with-notify
+[ "$(count PreCompact 'sh "$HOME/.claude/agent-tiers/scripts/precompact-guard.sh"')" = 1 ] \
+  || fail "--with-precompact-guard should wire the PreCompact row"
+[ "$(jq -r '.["precompact-guard"].event' "$L")" = PreCompact ] || fail "ledger should record precompact-guard's event"
+[ "$(count Notification 'sh "$HOME/.claude/agent-tiers/scripts/notify.sh"')" = 1 ] \
+  || fail "--with-notify should wire the Notification row"
+[ "$(jq -r '.["notify"].event' "$L")" = Notification ] || fail "ledger should record notify's event"
+# Unwire again immediately: every later install() call below re-runs EVERY wired row's own
+# selfcheck (the proof step), and notify.selfcheck.sh alone spends real wall-clock seconds on
+# delayed-click assertions - leaving these two wired would multiply that cost across every
+# remaining case in this file for no additional coverage (the wiring behaviour is already proven
+# above).
+install --without-authorship-record --without-precompact-guard --without-notify
 
 # --- 3. THE SILENT ONE: the same command present under a DIFFERENT event must not be mistaken for
 #        this row being wired. A file-wide count reports it green and wires nothing.
@@ -185,6 +218,72 @@ fi
 grep -q 'not in this kit copy' "$T/out" || fail "missing-requested-id error should name the real reason (got: $(head -c 300 "$T/out"))"
 [ "$(count PreToolUse 'sh "$HOME/.claude/agent-tiers/scripts/kit-leak-guard.sh"')" = 0 ] || fail "must not wire a row whose script is absent"
 HOME="$T" sh "$I" >"$T/out" 2>&1 || { cat "$T/out"; fail "unrequested missing row must still soft-skip (plain install should succeed)"; }
+
+# --- 12. memory-content-lint HOOK_ROWS row (2026-09): consent-gated, wires under PostToolUse with the
+#         Write|Edit|MultiEdit matcher (MultiEdit added per Lead decision: legacy per permissions.md, but
+#         still a live tool the CLI accepts - errors.md/permissions.md do not say it is refused) and not
+#         before --with- is asked for.
+MCL='sh "$HOME/.claude/agent-tiers/scripts/memory-content-lint.sh"'
+echo '{}' > "$S"; echo '{}' > "$L"
+install
+[ "$(count PostToolUse "$MCL")" = 0 ] || fail "memory-content-lint must NOT wire without --with-memory-content-lint"
+install --with-memory-content-lint
+[ "$(jq --arg c "$MCL" '[.hooks.PostToolUse[] | select(.matcher=="Write|Edit|MultiEdit") | .hooks[] | select(.command==$c)] | length' "$S")" = 1 ] \
+  || fail "--with-memory-content-lint should wire under PostToolUse with matcher Write|Edit|MultiEdit"
+[ "$(jq -r '.["memory-content-lint"].event' "$L")" = PostToolUse ] || fail "ledger should record memory-content-lint's event"
+
+# --- 13. Support probe: --with-notify on a host with no notify-send must be REFUSED (nonzero
+#         exit), writing nothing - regardless of TERM, since the probe is HOST-ONLY now (no
+#         terminal detection at all - see notify.sh's own header on why a per-session fact does
+#         not belong in an install-time probe). A minimal WHITELIST, not a full mirror of
+#         /usr/bin+/bin+/usr/local/bin (that walked every file in all three, ~10^4 forks, adding
+#         ~20s to this file's runtime for no coverage gain - same pattern already fixed in
+#         notify.selfcheck.sh's own BASE_TOOLS). The list is install-flat.sh's own documented
+#         preflight set (scripts/install-flat.sh:182: sed awk cksum date cut wc du tr grep head
+#         sort env ln cp mv rm mkdir mktemp cat ls basename dirname find) plus jq (used throughout,
+#         optional at runtime but present on this test host), sh (the probe loop execs `sh
+#         scripts/<id>.sh --probe` directly), chmod (settings-backup permission clamp) and readlink
+#         (the optional ~/bin/agent-tiers-share symlink step) - deliberately leaving notify-send
+#         OUT, the one binary this case exists to prove is absent.
+MIRROR="$T/mirror-no-notify-send"; mkdir -p "$MIRROR"
+for tool in sed awk cksum date cut wc du tr grep head sort env ln cp mv rm mkdir mktemp cat ls \
+            basename dirname find jq sh chmod readlink; do
+  p="$(command -v "$tool" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$MIRROR/$tool" 2>/dev/null
+done
+[ -e "$MIRROR/notify-send" ] && fail "fixture invalid: mirror PATH must not contain notify-send"
+echo '{}' > "$S"; echo '{}' > "$L"
+before_settings="$(cat "$S")"
+if HOME="$T" PATH="$MIRROR" sh "$I" --with-notify >"$T/out" 2>&1; then
+  fail "--with-notify on a host with no notify-send should be refused (installer exited 0)"
+fi
+grep -q 'refusing --with-notify' "$T/out" || fail "refusal should name the row (got: $(head -c 300 "$T/out"))"
+grep -q 'force-with-notify' "$T/out" || fail "refusal should name the --force-with-notify escape hatch (got: $(head -c 300 "$T/out"))"
+[ "$(cat "$S")" = "$before_settings" ] || fail "a refused probe must leave settings.json byte-identical"
+
+# --- 13b. The refusal holds even with a RECOGNISED OSC terminal env set - proves the probe reads
+#          none of TERM/TERM_PROGRAM/WT_SESSION/GHOSTTY_RESOURCES_DIR any more (an earlier version
+#          of this probe would have accepted this exact case, which the review flagged as the wrong
+#          snapshot: which terminal a FUTURE session runs in is not a host-install-time fact).
+echo '{}' > "$S"; echo '{}' > "$L"
+before_settings="$(cat "$S")"
+if HOME="$T" TERM=xterm-kitty PATH="$MIRROR" sh "$I" --with-notify >"$T/out" 2>&1; then
+  fail "--with-notify must be refused on TERM=xterm-kitty with no notify-send - the probe must not resurrect terminal detection"
+fi
+[ "$(cat "$S")" = "$before_settings" ] || fail "a refused probe must leave settings.json byte-identical"
+
+# --- 14. Support probe: --with-precompact-guard alone (no authorship-record wired or requested) is
+#         refused; requesting both together in one install succeeds.
+echo '{}' > "$S"; echo '{}' > "$L"
+before_settings="$(cat "$S")"
+if HOME="$T" sh "$I" --with-precompact-guard >"$T/out" 2>&1; then
+  fail "--with-precompact-guard without authorship-record should be refused"
+fi
+grep -q 'refusing --with-precompact-guard' "$T/out" || fail "refusal should name the row (got: $(head -c 300 "$T/out"))"
+[ "$(cat "$S")" = "$before_settings" ] || fail "a refused probe must leave settings.json byte-identical"
+HOME="$T" sh "$I" --with-authorship-record --with-precompact-guard >"$T/out" 2>&1 \
+  || { cat "$T/out"; fail "--with-authorship-record --with-precompact-guard together should succeed"; }
+[ "$(count PreCompact 'sh "$HOME/.claude/agent-tiers/scripts/precompact-guard.sh"')" = 1 ] \
+  || fail "precompact-guard should be wired when authorship-record is requested alongside it"
 
 cleanup
 echo "OK install-flat: seam wires, scopes, rewires and reports - and never claims a row it did not write (nor one it was asked for and could not)"

@@ -31,6 +31,13 @@ guard_at_command_position 'git commit -m x' 'git[[:space:]]+commit' || fail "cmd
 guard_at_command_position 'sudo git commit' 'git[[:space:]]+commit' || fail "cmdpos missed after sudo"
 guard_at_command_position 'echo "git commit"' 'git[[:space:]]+commit' && fail "cmdpos matched inside an argument"
 
+# 4b. guard_has_heredoc (2026-09-02): a command containing a heredoc redirect is detected; one without
+# is not - the callers that use this (grep-footgun-guard.sh, memory-write-gate.sh, simple-rules-guard.sh,
+# pgrep-footgun-guard.sh) stand down entirely on a true result, so a false positive here (missing a real
+# heredoc) would silently widen every one of their accepted ceilings.
+guard_has_heredoc "$(printf 'cat <<EOF\ngit commit -m x\nEOF')" || fail "guard_has_heredoc missed a real heredoc"
+guard_has_heredoc "git commit -m x" && fail "guard_has_heredoc false-positived on a plain command"
+
 # 5. guard_resolve_cwd: the cd-aware effective-cwd resolver (F-cwd-bypass, 2026-08-16). Own sandbox
 #    tree + a fake $HOME so the `~` cases (the literal incident reproducer) are host-independent.
 command -v guard_resolve_cwd >/dev/null 2>&1 || fail "guard_resolve_cwd undefined after source"
@@ -319,6 +326,31 @@ rm -f "$AGENT_TIERS_STATE_DIR/unattended.flagged"
 rm -f "$AGENT_TIERS_STATE_DIR/unattended.flagged"
 unset AGENT_TIERS_STATE_DIR
 
+# 9d. guard_marker_text (2026-09-14, guard-ask-deny rule): lifted from sc52a-write-disclosure-guard.sh's
+#     own `[bash-write:]` extraction so kit-leak-guard.sh's `[leak-exception:]` and vcs-commit-guard.sh's
+#     `[vcs-exception:]` share one implementation. Absent, present, multi-line-flattened, over-140-capped,
+#     and per-tag (one guard's tag never matches another's marker text).
+command -v guard_marker_text >/dev/null 2>&1 || fail "guard_marker_text undefined after source"
+[ -z "$(guard_marker_text "git commit -m x" bash-write)" ] || fail "guard_marker_text: absent tag must be empty"
+[ "$(guard_marker_text "git commit -m x [bash-write:bulk rename]" bash-write)" = "bulk rename" ] || fail "guard_marker_text: did not extract a present marker's text"
+[ -z "$(guard_marker_text "git commit -m x [leak-exception:not this tag]" bash-write)" ] || fail "guard_marker_text: a DIFFERENT tag's marker must not match"
+# A multi-line COMMAND (e.g. a heredoc) where TWO separate lines each carry their own [bash-write:]
+# fragment: sed prints once per MATCHING line (not once overall), so an unflattened result would carry
+# an embedded newline straight into guards.log - a second, unprefixed, model-controlled log line. tr
+# joins those into one space-separated line instead.
+ML="$(printf 'echo [bash-write:first]\necho [bash-write:second]')"
+[ "$(guard_marker_text "$ML" bash-write)" = "first second" ] || fail "guard_marker_text: two matching lines must be newline-flattened into one space-joined line, got: $(guard_marker_text "$ML" bash-write)"
+LONG_REASON="$(printf 'a%.0s' $(seq 1 200))"
+GOT="$(guard_marker_text "git commit -m x [bash-write:$LONG_REASON]" bash-write)"
+[ "${#GOT}" -eq 140 ] || fail "guard_marker_text: a >140-char reason must be capped at 140 chars, got length ${#GOT}"
+# 2026-09-14 (adversarial review, MEDIUM): the marker's mandated PLACEMENT is a trailing shell comment
+# (`# [tag:...]`), never a bare trailing word (git reads a bare word as a pathspec; on sed/tee it becomes
+# an extra file argument or a stray file) - confirm the helper finds it there exactly the same as a bare
+# marker, since it reads raw command text and does not care where `#` falls.
+[ "$(guard_marker_text 'git commit -m "test"  # [vcs-exception:RESUME_SESSION.md, kept on purpose]' vcs-exception)" = "RESUME_SESSION.md, kept on purpose" ] \
+  || fail "guard_marker_text: did not find a marker placed in a trailing shell comment"
+printf 'ok   guard_marker_text: absent/present/multi-line-flattened/140-capped/per-tag/trailing-comment-placement all hold\n'
+
 # 2026-08-23: the two parameters the force-push consumer added - verb (which word bounds the pre-verb
 # option span) and nth (stop at the Nth matching segment, not the first). Pinned here because the
 # shared seam owns its own regressions; before nth existed, every match after the first silently got
@@ -339,4 +371,146 @@ got="$(guard_resolve_cwd "$segs" "$PFRAG" "$V" push)"
 [ "$got" = "$V" ] || fail "nth default stopped somewhere other than the first match (got $got)"
 printf 'ok   [%s] nth default stops at the first match\n' "$got"
 
-echo "OK guard-cmdpos: splits on every separator with trailing newline, command-position anchors hold, guard_resolve_cwd resolves cd/paren/quote/chain/-C correctly and REPORTS an unresolvable target (T1.10) instead of falling back (message-embedded -C is not a bypass; a later literal 'commit' token does not get swallowed past the real verb), detection is structural (any option-shaped flag recognised, not an enumerated list), guard_unresolved_repo_flag/guard_repo_flag_values correctly bound to the pre-verb span (message text does not false-match), guard_commit_seg sees through sudo/nohup/path/paren/brace/if-then and stays silent on echo/grep/commit-tree/status, guard_ask_decision converts to deny on unattended OR a subagent caller (never silently on neither), guard_ask_prefix prefers subagent wording over unattended"
+# 2026-09-23 (guards-review fix pass): guard_strip_heredocs - the harness's own default commit
+# shape (git commit -m "$(cat <<'EOF' ... EOF)") must keep the opening line intact and drop the body.
+SQ="'"
+NL='
+'
+HD1="git commit -m \"\$(cat <<${SQ}EOF${SQ}${NL}hello world${NL}EOF${NL})\""
+EXP1="git commit -m \"\$(cat <<${SQ}EOF${SQ}${NL})\""
+GOT="$(guard_strip_heredocs "$HD1")"
+[ "$GOT" = "$EXP1" ] || fail "guard_strip_heredocs: default commit-message shape not stripped as expected: [$GOT]"
+printf 'ok   guard_strip_heredocs: default commit-message heredoc opener kept, body dropped\n'
+
+# nested $( ) around the heredoc - the strip is purely line-oriented, nesting depth does not matter.
+# Exact-output pinned, not just a negative grep (a negative-only assertion passes if the function
+# returned NOTHING at all, guards-review-2 point 11) - the opener line must still be there verbatim.
+HD2="echo \"\$(echo \"\$(cat <<${SQ}X${SQ}${NL}inner${NL}X${NL})\")\""
+EXP2="echo \"\$(echo \"\$(cat <<${SQ}X${SQ}${NL})\")\""
+GOT2="$(guard_strip_heredocs "$HD2")"
+[ "$GOT2" = "$EXP2" ] || fail "guard_strip_heredocs: nested \$( ) shape not stripped as expected: [$GOT2]"
+printf 'ok   guard_strip_heredocs: nested $( ) heredoc body stripped, opener line pinned exactly\n'
+
+# two heredocs in one command - both bodies stripped, the scan resumes after the first closes.
+# Exact-output pinned (same reason as HD2 above).
+HD3="cat <<${SQ}A${SQ}${NL}first${NL}A${NL}cat <<${SQ}B${SQ}${NL}second${NL}B"
+EXP3="cat <<${SQ}A${SQ}${NL}cat <<${SQ}B${SQ}"
+GOT3="$(guard_strip_heredocs "$HD3")"
+[ "$GOT3" = "$EXP3" ] || fail "guard_strip_heredocs: two-heredoc shape not stripped as expected: [$GOT3]"
+printf 'ok   guard_strip_heredocs: two heredocs in one command both stripped, output pinned exactly\n'
+
+# guard_split_segments_qsafe - the fix for guards-review-2's claim 5/finding: guard_split_segments
+# is quote-BLIND and slices a one-line commit message containing its own ';'/'&&' mid-string; the
+# qsafe variant must keep that whole thing as ONE segment.
+QS_CMD="git commit -m \"docs: WIP; git stash is shared\""
+BLIND_N="$(guard_split_segments "$QS_CMD" | wc -l | tr -d ' ')"
+[ "$BLIND_N" -eq 2 ] || fail "guard_split_segments: expected the quote-blind splitter to still slice this at 2 lines (baseline for the qsafe contrast), got $BLIND_N"
+SAFE_N="$(guard_split_segments_qsafe "$QS_CMD" | wc -l | tr -d ' ')"
+[ "$SAFE_N" -eq 1 ] || fail "guard_split_segments_qsafe: a ';' inside a quoted string must not split, got $SAFE_N lines"
+[ "$(guard_split_segments_qsafe "$QS_CMD")" = "$QS_CMD" ] || fail "guard_split_segments_qsafe: real segment text must stay unquoted-unchanged"
+printf 'ok   guard_split_segments_qsafe: quoted ; does not split, real text kept intact (contrast: quote-blind splitter gets it wrong)\n'
+# every OTHER separator still splits, same contract as guard_split_segments, just quote-aware.
+[ "$(guard_split_segments_qsafe 'a && b' | wc -l)" -eq 2 ] || fail "guard_split_segments_qsafe: unquoted && did not split"
+[ "$(guard_split_segments_qsafe 'a | b'  | wc -l)" -eq 2 ] || fail "guard_split_segments_qsafe: unquoted | did not split"
+[ "$(guard_split_segments_qsafe 'git commit -m x' | wc -l)" -eq 1 ] || fail "guard_split_segments_qsafe: single segment lost its trailing newline"
+printf 'ok   guard_split_segments_qsafe: unquoted separators still split, single segment keeps trailing newline\n'
+
+# unterminated heredoc - left entirely as-is (never a partial strip).
+HD4="cat <<${SQ}NEVER${SQ}${NL}still going"
+GOT4="$(guard_strip_heredocs "$HD4")"
+[ "$GOT4" = "$HD4" ] || fail "guard_strip_heredocs: unterminated heredoc was altered instead of left as-is"
+printf 'ok   guard_strip_heredocs: unterminated heredoc left as-is\n'
+
+# guard_strip_quotes - quote characters survive, content between them does not; unquoted text is untouched.
+GQ="$(guard_strip_quotes "git commit -m \"fix: a -> b | c <x@y>\" --author=${SQ}A <a@b>${SQ}")"
+printf '%s' "$GQ" | grep -aq -- '->' && fail "guard_strip_quotes: quoted content leaked through (->)"
+printf '%s' "$GQ" | grep -aq '<x@y>' && fail "guard_strip_quotes: quoted content leaked through (email)"
+[ "$GQ" = "git commit -m \"\" --author=${SQ}${SQ}" ] \
+  || fail "guard_strip_quotes: unquoted structure not preserved: [$GQ]"
+printf 'ok   guard_strip_quotes: quote chars kept, content blanked, unquoted text untouched\n'
+
+# --- ship-guards wave (2026-10-06, repaired 2026-10-06): main-top, guard_local_scalar, ship detector ---
+# guard_linked_worktree and guard_merge_seg were REMOVED after independent review (worktree carve-out
+# and merge arm dropped from the design) - guard_main_top stays: review_gate mode is still read from
+# the main worktree top even when the effective cwd is a linked worktree (e.g. a Lead working
+# directly inside one), so its own worktree-sandbox coverage stays too.
+command -v guard_main_top >/dev/null 2>&1 || fail "guard_main_top undefined after source"
+command -v guard_local_scalar >/dev/null 2>&1 || fail "guard_local_scalar undefined after source"
+command -v guard_ship_seg >/dev/null 2>&1 || fail "guard_ship_seg undefined after source"
+
+WT="${TMPBASE}/at-cmdpos-worktree.$$"
+rm -rf "$WT"; mkdir -p "$WT/main" || fail "cannot build worktree sandbox"
+( cd "$WT/main" && git init -q && git config user.email t@t && git config user.name t && printf x > f && git add f && git commit -qm i ) || fail "cannot init worktree-sandbox main repo"
+( cd "$WT/main" && git worktree add -q --detach "$WT/linked" HEAD ) || fail "cannot add linked worktree"
+trap 'rm -rf "$T" "$WT"' EXIT
+
+MAIN_R="$(cd "$WT/main" && pwd -P)"
+[ "$(guard_main_top "$WT/main")" = "$MAIN_R" ] || fail "guard_main_top wrong from the main checkout itself"
+[ "$(guard_main_top "$WT/linked")" = "$MAIN_R" ] || fail "guard_main_top did not resolve the main top from inside a linked worktree"
+printf 'ok   guard_main_top: resolves the main checkout from both the main checkout and a linked worktree\n'
+
+# guard_main_top must use CDPATH= on its own cd hops (same neutralization guard_cd_into already
+# applies) - a `cd` whose target matches an exported CDPATH entry writes the resolved path to STDOUT
+# (POSIX), which would otherwise corrupt the captured directory and desync this from the real repo.
+CDPATH_SAVE="${CDPATH:-}"; CDPATH=".:/tmp"; export CDPATH
+[ "$(guard_main_top "$WT/linked")" = "$MAIN_R" ] || fail "guard_main_top desynced under an exported CDPATH"
+CDPATH="$CDPATH_SAVE"; [ -n "$CDPATH_SAVE" ] && export CDPATH || unset CDPATH
+printf 'ok   guard_main_top: resolves correctly even under an exported CDPATH\n'
+
+# The case above passes vacuously: $d ("$WT/linked") is ABSOLUTE, so CDPATH is never consulted for
+# the `cd "$d"` hop - CDPATH only applies to a RELATIVE argument. The real exposure is the SECOND hop:
+# from the MAIN checkout (not a linked worktree), `git rev-parse --git-common-dir` prints a RELATIVE
+# ".git", so `cd "$cd_raw"` is `cd .git` - relative, and CDPATH-sensitive if the function's own
+# `CDPATH=` prefix on that cd were ever lost. Build a DECOY dir with its own .git subdirectory,
+# export CDPATH pointing at it, and confirm guard_main_top run on the MAIN checkout still resolves
+# to the REAL repo, not the decoy's.
+DECOY="${TMPBASE}/at-cmdpos-cdpath-decoy.$$"
+rm -rf "$DECOY"; mkdir -p "$DECOY/.git" || fail "cannot build CDPATH decoy dir"
+trap 'rm -rf "$T" "$WT" "$DECOY"' EXIT
+CDPATH_SAVE="${CDPATH:-}"; CDPATH="$DECOY"; export CDPATH
+[ "$(guard_main_top "$WT/main")" = "$MAIN_R" ] || fail "guard_main_top: a CDPATH decoy with its own .git hijacked the relative 'cd .git' hop from the main checkout"
+CDPATH="$CDPATH_SAVE"; [ -n "$CDPATH_SAVE" ] && export CDPATH || unset CDPATH
+printf 'ok   guard_main_top: a CDPATH decoy (its own .git dir) does not hijack the relative cd .git hop from the main checkout\n'
+
+# guard_local_scalar: typo, duplicate line, trailing comment, missing file - same resolution order as
+# the hygiene_scope resolver this generalises (local.md first, then BASE/kit-config.md), fails toward
+# the caller's own strict default on anything unparsable.
+GLSD="${TMPBASE}/at-cmdpos-scalar.$$"; rm -rf "$GLSD"; mkdir -p "$GLSD/top/.claude" "$GLSD/base" || fail "cannot build scalar sandbox"
+BASE_SAVE="${BASE:-}"; BASE="$GLSD/base"
+printf 'k: push\n' > "$GLSD/top/.claude/agent-tiers.local.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "push" ] || fail "guard_local_scalar missed a clean value"
+printf 'k: sideways\n' > "$GLSD/top/.claude/agent-tiers.local.md"
+OUT="$(guard_local_scalar "$GLSD/top" k "commit push" commit)"
+[ "$(printf '%s' "$OUT" | sed -n 1p)" = "commit" ] || fail "guard_local_scalar did not fall back on a typo'd value"
+[ -n "$(printf '%s' "$OUT" | sed -n 2p)" ] || fail "guard_local_scalar gave no breadcrumb reason on a typo'd value"
+printf 'k: push\nk: commit\n' > "$GLSD/top/.claude/agent-tiers.local.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "commit" ] || fail "guard_local_scalar: two lines should resolve to the strict default, not first-wins"
+printf 'k: push  # rolled out 2026-10\n' > "$GLSD/top/.claude/agent-tiers.local.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "push" ] || fail "guard_local_scalar did not strip a trailing comment"
+rm -f "$GLSD/top/.claude/agent-tiers.local.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "commit" ] || fail "guard_local_scalar: missing file should fall back to the strict default"
+printf 'k: push\n' > "$GLSD/base/kit-config.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "push" ] || fail "guard_local_scalar did not fall through to the second (kit-config) source when the first is missing"
+printf 'k: commit\n' > "$GLSD/top/.claude/agent-tiers.local.md"
+[ "$(guard_local_scalar "$GLSD/top" k "commit push" commit | sed -n 1p)" = "commit" ] || fail "guard_local_scalar: the repo-local file should win over kit-config"
+BASE="$BASE_SAVE"; rm -rf "$GLSD"
+printf 'ok   guard_local_scalar: typo/duplicate/missing-file/trailing-comment/precedence all resolve correctly\n'
+
+# ship detector: must fire at command position (incl. `-C`) and stay silent on an argument/quoted/
+# grep mention - the same false-positive trap guard_commit_seg's own 8b section already guards.
+[ -n "$(guard_ship_seg "$(guard_split_segments 'git -C /tmp/repo push')")" ] || fail "guard_ship_seg missed 'git -C x push'"
+[ -n "$(guard_ship_seg "$(guard_split_segments 'gh pr create')")" ] || fail "guard_ship_seg missed 'gh pr create'"
+[ -n "$(guard_ship_seg "$(guard_split_segments 'gh pr merge 1')")" ] || fail "guard_ship_seg missed 'gh pr merge'"
+[ -z "$(guard_ship_seg "$(guard_split_segments 'echo git push')")" ] || fail "guard_ship_seg false-matched 'echo git push'"
+[ -z "$(guard_ship_seg "$(guard_split_segments 'git log --grep push')")" ] || fail "guard_ship_seg false-matched 'git log --grep push'"
+[ -z "$(guard_ship_seg "$(guard_split_segments 'echo "run git push later"')")" ] || fail "guard_ship_seg false-matched a quoted mention"
+printf 'ok   guard_ship_seg: fires on git -C push / gh pr create / gh pr merge, silent on echo/log --grep/quoted mention\n'
+
+# GUARD_PUSH_FRAG: structural classification of WHICH ship alternative matched - a caller must not
+# substring-test the segment text for "push" (a gh PR title containing the word would misclassify).
+command -v guard_at_command_position >/dev/null 2>&1 || fail "guard_at_command_position undefined after source"
+guard_at_command_position "$(guard_ship_seg "$(guard_split_segments 'git -C /tmp/repo push')")" "$GUARD_PUSH_FRAG" || fail "GUARD_PUSH_FRAG missed a real git push segment"
+guard_at_command_position "$(guard_ship_seg "$(guard_split_segments "gh pr create --title \"let's push this\"")")" "$GUARD_PUSH_FRAG" && fail "GUARD_PUSH_FRAG false-matched a gh pr segment whose TITLE text contains the word push"
+printf "ok   GUARD_PUSH_FRAG: structurally tells a real git push from a gh pr segment merely mentioning push in its text\n"
+
+echo "OK guard-cmdpos: splits on every separator with trailing newline, command-position anchors hold, guard_resolve_cwd resolves cd/paren/quote/chain/-C correctly and REPORTS an unresolvable target (T1.10) instead of falling back (message-embedded -C is not a bypass; a later literal 'commit' token does not get swallowed past the real verb), detection is structural (any option-shaped flag recognised, not an enumerated list), guard_unresolved_repo_flag/guard_repo_flag_values correctly bound to the pre-verb span (message text does not false-match), guard_commit_seg sees through sudo/nohup/path/paren/brace/if-then and stays silent on echo/grep/commit-tree/status, guard_ask_decision converts to deny on unattended OR a subagent caller (never silently on neither), guard_ask_prefix prefers subagent wording over unattended, guard_strip_heredocs preserves the opener and drops the body (default commit shape, nested $( ), two heredocs, unterminated left as-is, exact output pinned), guard_strip_quotes blanks quoted content while keeping structure, guard_split_segments_qsafe keeps a quoted ; from splitting a segment while every unquoted separator still splits, guard_main_top resolves the main checkout from both the main checkout and a linked worktree (and under an exported CDPATH), guard_local_scalar generalises the hygiene_scope resolver (typo/duplicate/missing-file/trailing-comment/precedence), guard_ship_seg detects push/gh-pr at command position and stays silent on an argument or quoted mention, and GUARD_PUSH_FRAG structurally distinguishes a real push from a gh pr segment that merely mentions it"

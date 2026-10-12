@@ -33,21 +33,26 @@ git config user.name test
 printf 'baseline\n' > f.txt
 git add f.txt; git commit -q -m init
 
-ask() { # $1=cmd -> ask|allow
-  out="$(jq -n --arg x "$1" --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
-  if printf '%s' "$out" | grep -aq '"permissionDecision": *"ask"'; then echo ask; else echo allow; fi
+# decision(): raw guard output -> deny|ask|allow. 2026-09-14 (guard-ask-deny rule): a policy hit with
+# no `[vcs-exception:]` marker now DENIES (the fix is mechanical - untrack/unstage), so every fixture
+# below that used to assert `ask` now asserts `deny`; `ask` is reserved for the marker path (a genuine
+# human "this exception is deliberate" call).
+decision() {
+  if printf '%s' "$1" | grep -aq '"permissionDecision": *"deny"'; then echo deny
+  elif printf '%s' "$1" | grep -aq '"permissionDecision": *"ask"'; then echo ask
+  else echo allow; fi
 }
-denied() { # $1=cmd -> true if it EVER emits deny (must never happen)
+ask() { # $1=cmd -> deny|ask|allow (name kept for the smaller diff against the pre-2026-09-14 file)
   out="$(jq -n --arg x "$1" --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
-  printf '%s' "$out" | grep -aq '"permissionDecision": *"deny"'
+  decision "$out"
 }
 check() { want="$1"; cmd="$2"; got="$(ask "$cmd")"
   if [ "$got" = "$want" ]; then printf 'ok   [%s] %s\n' "$got" "$cmd"; else
     printf 'FAIL want=%s got=%s : %s\n' "$want" "$got" "$cmd"; fail=1; fi
 }
-ask_in() { # $1=cwd $2=cmd -> ask|allow
+ask_in() { # $1=cwd $2=cmd -> deny|ask|allow
   out="$(jq -n --arg x "$2" --arg c "$1" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
-  if printf '%s' "$out" | grep -aq '"permissionDecision": *"ask"'; then echo ask; else echo allow; fi
+  decision "$out"
 }
 check_in() { cwd="$1"; want="$2"; cmd="$3"; got="$(ask_in "$cwd" "$cmd")"
   if [ "$got" = "$want" ]; then printf 'ok   [%s] (cwd=%s) %s\n' "$got" "$(basename "$cwd")" "$cmd"; else
@@ -62,7 +67,7 @@ reset_repo() { git reset -q >/dev/null 2>&1 || true; git checkout -q -- . 2>/dev
 
 # --- fallback to kit-config.md vcs_defaults (no project override file yet) ---
 printf 'handoff\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-check ask 'git commit -m "test"'
+check deny 'git commit -m "test"'
 reset_repo
 
 printf 'clean file\n' > f.txt; git add f.txt
@@ -78,9 +83,9 @@ vcs_policy:
 ---
 EOF
 
-# 1. staged ignore-* file -> ask
+# 1. staged ignore-* file -> deny (no marker)
 printf 'handoff v2\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-check ask 'git commit -m "test"'
+check deny 'git commit -m "test"'
 reset_repo
 
 # 2+3 share ONE fixture on purpose: a TRACKED, dirty RESUME_SESSION.md, checked BOTH without and with
@@ -99,7 +104,7 @@ printf 'clean file 2\n' > f.txt; git add f.txt
 check allow 'git commit -m "unrelated change"'
 
 # 3. `-a`/`--all` DOES pick up the identical unstaged TRACKED change.
-check ask 'git commit -am "test"'
+check deny 'git commit -am "test"'
 
 # Hard-reset to the pre-fixture ref (not checkout+rm --cached: once a path is committed it stays part
 # of history, and undoing "tracked" by hand left a stale staged-deletion that leaked into later tests -
@@ -110,7 +115,7 @@ reset_repo
 
 # 4. `git add RESUME_SESSION.md && git commit` in ONE call - not staged yet at hook-time.
 printf 'handoff v3\n' > RESUME_SESSION.md
-check ask 'git add RESUME_SESSION.md && git commit -m "test"'
+check deny 'git add RESUME_SESSION.md && git commit -m "test"'
 reset_repo
 
 # 5. `git add . && git commit` (whole-tree) sweeps an untracked ignore-* file. Uses ATTEMPTS.md, not
@@ -119,7 +124,7 @@ reset_repo
 #    add .` structurally can't stage an already-gitignored file either), but it means that fixture can't
 #    exercise this code path on this host. ATTEMPTS.md has no such global exclude.
 printf 'scratch\n' > ATTEMPTS.md
-check ask 'git add . && git commit -m "test"'
+check deny 'git add . && git commit -m "test"'
 rm -f ATTEMPTS.md
 reset_repo
 
@@ -133,7 +138,7 @@ reset_repo
 PRE_TRACK_REF2="$(git rev-parse HEAD)"
 printf 'handoff tracked\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md; git commit -q -m "track it (fixture setup 2)"
 printf 'handoff tracked, modified again\n' > RESUME_SESSION.md
-check ask 'git add -u && git commit -m "test"'
+check deny 'git add -u && git commit -m "test"'
 git reset -q --hard "$PRE_TRACK_REF2"
 rm -f RESUME_SESSION.md
 reset_repo
@@ -146,9 +151,32 @@ check allow 'git add -- f.txt && git commit -m "test"'
 rm -f ATTEMPTS.md
 reset_repo
 
-# 7. placeholder path token (<prefix>) must be SKIPPED (not falsely matched) and breadcrumbed - proven
-#    with a SECOND real row alongside it, so this pins the skip itself rather than an incidentally-empty
-#    PAIRS list (an always-allow guard would pass an empty-PAIRS case identically).
+# 7. placeholder path token (<prefix>) must be SKIPPED (not falsely matched) - proven with a SECOND
+#    real row alongside it, so this pins the skip itself rather than an incidentally-empty PAIRS list
+#    (an always-allow guard would pass an empty-PAIRS case identically). An UNEXPECTED placeholder-
+#    shaped key still breadcrumbs (the rare, worth-seeing case); the known `task_agents` row (2026-09-02:
+#    it never stops firing, so it fires on EVERY commit in EVERY repo - pure noise) does not.
+rm -f "$T/kit/.state/guards.log" 2>/dev/null
+mkdir -p "$WORK/.claude/agents"
+printf 'agent def\n' > "$WORK/.claude/agents/foo-bar.md"
+cat > "$WORK/.claude/agent-tiers.local.md" <<'EOF'
+vcs_policy:
+  future_thing:            ignore-personal   # .claude/agents/<prefix>-*.md (placeholder, unexpected key)
+  attempts_log:           ignore-personal   # ATTEMPTS.md scratch
+---
+EOF
+git add .claude/agents/foo-bar.md
+check allow 'git commit -m "add task agent"'
+if grep -aq "skipping placeholder path token" "$T/kit/.state/guards.log" 2>/dev/null; then
+  printf 'ok   [breadcrumb] unexpected placeholder token skip breadcrumbed\n'
+else
+  printf 'FAIL unexpected placeholder token skip was not breadcrumbed\n'; fail=1
+fi
+git rm -rq --cached .claude/agents 2>/dev/null || true
+rm -rf "$WORK/.claude/agents"
+
+# 7i. the KNOWN task_agents placeholder specifically does NOT breadcrumb (noise fix, 2026-09-02) -
+#     same shape, real key this time. (Labelled 7i, not 7b - 7b through 7h already taken below.)
 rm -f "$T/kit/.state/guards.log" 2>/dev/null
 mkdir -p "$WORK/.claude/agents"
 printf 'agent def\n' > "$WORK/.claude/agents/foo-bar.md"
@@ -161,9 +189,9 @@ EOF
 git add .claude/agents/foo-bar.md
 check allow 'git commit -m "add task agent"'
 if grep -aq "skipping placeholder path token" "$T/kit/.state/guards.log" 2>/dev/null; then
-  printf 'ok   [breadcrumb] placeholder token skip breadcrumbed\n'
+  printf 'FAIL known task_agents placeholder skip was breadcrumbed (should be silent - noise fix)\n'; fail=1
 else
-  printf 'FAIL placeholder token skip was not breadcrumbed\n'; fail=1
+  printf 'ok   [silent] known task_agents placeholder skip is not breadcrumbed\n'
 fi
 git rm -rq --cached .claude/agents 2>/dev/null || true
 rm -rf "$WORK/.claude/agents"
@@ -197,7 +225,7 @@ reset_repo
 
 # 7c. a QUOTED `git add` token still matches (quote bytes stripped before comparison).
 printf 'handoff v6\n' > RESUME_SESSION.md
-check ask 'git add "RESUME_SESSION.md" && git commit -m "test"'
+check deny 'git add "RESUME_SESSION.md" && git commit -m "test"'
 reset_repo
 
 # 7d. a token typed from a SUBDIRECTORY resolves relative to THAT subdir, not the repo root: `git add
@@ -215,20 +243,20 @@ reset_repo
 OTHER="$(mktemp -d)"
 (cd "$OTHER" && git init -q && git config user.email t@t && git config user.name t && printf x > f && git add f && git commit -qm init)
 printf 'handoff v7\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-check_in "$OTHER" ask "cd $WORK && git commit -m \"test\""
+check_in "$OTHER" deny "cd $WORK && git commit -m \"test\""
 reset_repo
 
 # 7f. `git -C <path> commit` used to bypass this guard OUTRIGHT (COMMIT_SEG never matched it at all) -
 #     CMDPOS_COMMIT_FRAG follow-up, 2026-08-16.
 printf 'handoff v8\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-check_in "$OTHER" ask "git -C $WORK commit -m \"test\""
+check_in "$OTHER" deny "git -C $WORK commit -m \"test\""
 reset_repo
 
 # 7g. Wrapper shapes (Tier 1 review T1.2, 2026-08-16): sudo / paren used to bypass this guard OUTRIGHT.
 #     Payload-level pin (the -C precedent above): commit-half fires through the wrapper.
 printf 'handoff v9\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-check ask "sudo git commit -m \"test\""
-check_in "$OTHER" ask "( cd $WORK && git commit -m \"test\" )"
+check deny "sudo git commit -m \"test\""
+check_in "$OTHER" deny "( cd $WORK && git commit -m \"test\" )"
 reset_repo
 
 # 7g. `--git-dir=`/`--work-tree=` mean this guard cannot know which repo's vcs_policy applies - it
@@ -237,8 +265,9 @@ reset_repo
 #     (not just a log-string check): WORK has the real violation staged (RESUME_SESSION.md, ignore-
 #     personal); the payload cwd is OTHER, which is given a DIFFERENT staged ignore-personal file of
 #     its own. A guard that failed to decline and fell through to scan the payload cwd anyway (the
-#     pre-fix behaviour, breadcrumb-then-proceed) would find OTHER's violation and `ask` - only a
-#     genuine decline produces `allow` here, regardless of either repo's content.
+#     pre-fix behaviour, breadcrumb-then-proceed) would find OTHER's violation and flag it (`deny`
+#     since 2026-09-14, `ask` before that) - only a genuine decline produces `allow` here, regardless of
+#     either repo's content.
 rm -f "$T/kit/.state/guards.log" 2>/dev/null
 printf 'handoff v9\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
 mkdir -p "$OTHER/.claude"
@@ -248,26 +277,46 @@ vcs_policy:
 EOF
 (cd "$OTHER" && printf 'other repo handoff\n' > RESUME_SESSION.md && git add -f RESUME_SESSION.md .claude/agent-tiers.local.md)
 OUT="$(jq -n --arg x "git --git-dir=$WORK/.git commit -m \"test\"" --arg c "$OTHER" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
-printf '%s' "$OUT" | grep -aq '"permissionDecision": *"ask"' && fail "did not decline - fell through and scanned the payload cwd (OTHER), found its violation"
+printf '%s' "$OUT" | grep -aqE '"permissionDecision": *"(ask|deny)"' && fail "did not decline - fell through and scanned the payload cwd (OTHER), found its violation"
 grep -aq "declined: unresolved repo-selecting flag" "$T/kit/.state/guards.log" || fail "decline was not logged"
 
 # 7h. T1.10 (2026-08-16): an UNRESOLVABLE `cd`/`-C` target (`mkdir X && cd X && git commit` - X does
 #     not exist at PreToolUse time) takes the SAME decline as 7g, never the old "fall back to the
-#     payload cwd" (which scanned OTHER here and would find ITS violation -> ask). Same real falsifier
-#     as 7g: only a genuine decline yields allow. Plus the resolvable control: `cd $WORK` still scans WORK.
+#     payload cwd" (which scanned OTHER here and would find ITS violation and flag it). Same real
+#     falsifier as 7g: only a genuine decline yields allow. Plus the resolvable control: `cd $WORK`
+#     still scans WORK.
 FRESH="$OTHER/fresh-$$"
 OUT="$(jq -n --arg x "mkdir $FRESH && cd $FRESH && git commit -m \"test\"" --arg c "$OTHER" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
-printf '%s' "$OUT" | grep -aq '"permissionDecision": *"ask"' && fail "T1.10: did not decline on an unresolvable cd - fell back to the payload cwd (OTHER) and asked on its violation"
+printf '%s' "$OUT" | grep -aqE '"permissionDecision": *"(ask|deny)"' && fail "T1.10: did not decline on an unresolvable cd - fell back to the payload cwd (OTHER) and flagged its violation"
 grep -aq "declined: unresolvable cd/-C target" "$T/kit/.state/guards.log" || fail "T1.10 decline was not logged"
 printf 'ok   [declined] T1.10: mkdir X && cd X && git commit -> not scanned as the payload cwd\n'
-check_in "$OTHER" ask "cd $WORK && git commit -m \"test\""   # control: resolvable cd still scans WORK (its violation -> ask)
+check_in "$OTHER" deny "cd $WORK && git commit -m \"test\""   # control: resolvable cd still scans WORK (its violation -> deny, no marker)
 (cd "$OTHER" && git reset -q RESUME_SESSION.md .claude/agent-tiers.local.md 2>/dev/null; rm -rf .claude RESUME_SESSION.md)
 rm -rf "$OTHER"
 reset_repo
 
-# 8. never emits deny, for any of the above shapes.
+# 8. `[vcs-exception:]` marker (2026-09-14, guard-ask-deny rule; PLACEMENT corrected same day,
+#    adversarial review, MEDIUM): the ONLY path back to `ask` - a genuine human decision this guard
+#    cannot make on its own ("this exception really is deliberate"). The marker MUST be a trailing shell
+#    COMMENT (`# [vcs-exception:...]`), never a bare trailing word (git reads it as a pathspec and either
+#    fails the commit or commits only that path) and never inside `-m` (writes the flagged path/reason
+#    straight into commit history). Own tag: a DIFFERENT guard's exception marker ([leak-exception:...],
+#    kit-leak-guard.sh's own) must NOT clear this gate.
 printf 'handoff v5\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
-denied 'git commit -m "test"' && fail "guard must never emit deny (ask only)"
+check ask 'git commit -m "test"  # [vcs-exception:RESUME_SESSION.md handoff kept on purpose this once]'
+out="$(jq -n --arg x 'git commit -m "test"  # [vcs-exception:RESUME_SESSION.md handoff kept on purpose this once]' --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
+printf '%s' "$out" | grep -aq 'vcs-exception:RESUME_SESSION.md handoff kept on purpose' \
+  || fail "ask reason must echo the marker text back"
+check deny 'git commit -m "test"  # [leak-exception:wrong tag, not this guards own]'   # wrong guard's tag: still deny
+# no-marker deny reason must itself say where the marker goes
+out="$(jq -n --arg x 'git commit -m "test"' --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
+printf '%s' "$out" | grep -aiq 'trailing shell comment\|as a comment' || fail "no-marker deny reason must say the marker goes in a trailing shell comment"
+
+# 8b. Real-world proof (not just the hook decision): the SAME command, with the marker as a trailing
+#     comment, actually COMMITS cleanly - git ignores everything after `#`, so the marker never becomes
+#     a pathspec and never touches the commit message.
+git commit -q -m "test"  # [vcs-exception:RESUME_SESSION.md handoff kept on purpose this once]
+[ "$(git log -1 --format=%s)" = "test" ] || fail "the marker-as-trailing-comment form did not commit cleanly with the exact -m message"
 reset_repo
 
 # 9. no .cwd in payload -> fail-open breadcrumb, no crash, no output.
@@ -297,14 +346,14 @@ dec() { # $1=session_id $2=cmd -> deny|ask|allow
 }
 printf 'notes\n' > RESUME_SESSION.md
 : > "$T/kit/.state/unattended.s-unatt"
-[ "$(dec s-unatt 'git add RESUME_SESSION.md && git commit -m x')" = deny ] \
+[ "$(dec s-unatt 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]')" = deny ] \
   && printf 'ok   [deny] unattended session converts the policy ask\n' \
   || { printf 'FAIL unattended session did not convert the policy ask\n'; fail=1; }
-[ "$(dec s-other 'git add RESUME_SESSION.md && git commit -m x')" = ask ] \
+[ "$(dec s-other 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]')" = ask ] \
   && printf 'ok   [ask]  a session without the flag still asks\n' \
   || { printf 'FAIL an unflagged session stopped asking\n'; fail=1; }
 # the deny carries the SAME remedy the ask carried - the requirement is unchanged, only its shape
-out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x' --arg c "$WORK" --arg s s-unatt '{session_id: $s, cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-unatt '{session_id: $s, cwd: $c, tool_input: {command: $x}}' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$out" | grep -aq 'git restore --staged\|git rm --cached' \
   && printf 'ok   the converted deny keeps its machine-actionable remedy\n' \
   || { printf 'FAIL the converted deny lost its remedy text\n'; fail=1; }
@@ -323,13 +372,13 @@ dec_agent() { # $1=session_id $2=cmd $3=agent_type -> deny|ask|allow
   else echo allow; fi
 }
 printf 'notes\n' > RESUME_SESSION.md
-[ "$(dec_agent s-sub 'git add RESUME_SESSION.md && git commit -m x' worker)" = deny ] \
+[ "$(dec_agent s-sub 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' worker)" = deny ] \
   && printf 'ok   [deny] a subagent caller converts the policy ask\n' \
   || { printf 'FAIL a subagent caller did not convert the policy ask\n'; fail=1; }
-[ "$(dec s-sub2 'git add RESUME_SESSION.md && git commit -m x')" = ask ] \
+[ "$(dec s-sub2 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]')" = ask ] \
   && printf 'ok   [ask]  a Lead-originated call (no agent_type) is unaffected\n' \
   || { printf 'FAIL a Lead-originated call was wrongly converted\n'; fail=1; }
-out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$out" | grep -aq 'git restore --staged\|git rm --cached' \
   && printf 'ok   the subagent-converted deny keeps its machine-actionable remedy\n' \
   || { printf 'FAIL the subagent-converted deny lost its remedy text\n'; fail=1; }
@@ -346,7 +395,7 @@ grep -aq 'vcs-commit-guard deny: RESUME_SESSION.md' "$T/kit/.state/guards.log" \
 # unattended marker set, so it passed either way) - flag s-sub3 unattended TOO and confirm subagent
 # wording still wins, not the unattended text.
 : > "$T/kit/.state/unattended.s-sub3"
-out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$out" | grep -aq 'DELEGATED AGENT' \
   && printf 'ok   subagent prefix still wins when the SAME session is also flagged unattended\n' \
   || { printf 'FAIL subagent+unattended: subagent prefix should still win\n'; fail=1; }

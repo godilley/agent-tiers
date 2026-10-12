@@ -7,6 +7,8 @@ GUARD="$DIR/dangerous-actions-blocker.sh"
 # decision/breadcrumb lines go to a SANDBOX log, never the real kit's .state/guards.log (opus reviewer, Wave D:
 # in-place selfchecks had filled the live record with fixture noise)
 SBLOG="$(mktemp -d)/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
+# A value inherited from the calling shell must never leak into cases that assume the knob is unset.
+unset AGENT_TIERS_PROTECTED_BRANCHES
 fail=0
 
 # 0. Host regex probe (T1.1, 2026-08-16) - BEFORE the jq skip, so a jq-less host cannot skip it: every
@@ -113,7 +115,7 @@ FPW2="$(mktemp -d)"
   && git commit -q --allow-empty -m init)
 check_bash_cwd allow "$FPW2" 'git push -f'                        # no refspec, but current branch is NOT main/master
 
-# W1-1 (dan-9 cold review, 2026-08-23): the no-refspec leg used its OWN anchored regex
+# 2026-08-23 (external cold review): the no-refspec leg used its OWN anchored regex
 # (^[[:space:]]*git push ...), so every wrapper CMDPOS_PREFIX already handles - sudo, nohup, an
 # absolute path, a subshell open - fell straight through it while the outer command-position match
 # fired. Same class the round-3 review fixed everywhere else in this file.
@@ -166,6 +168,50 @@ check_bash_cwd deny  "$FPW2" "git push -f origin HEAD:master"
 check_bash_cwd deny "$FPW" 'git push --force-with-lease'
 check_bash_cwd deny "$FPW2" "cd $FPW/.. && cd $FPW && git push -f"
 check_bash_cwd deny "$FPW2" "cd $(dirname "$FPW") && git -C $(basename "$FPW") push -f"
+# Dynamic protected names: remote default branch + AGENT_TIERS_PROTECTED_BRANCHES.
+# Checked out on develop, with origin/HEAD also pointing at develop, so both the explicit-ref leg
+# and the no-refspec/current-branch leg get exercised against the SAME resolved name.
+DEVW="$(mktemp -d)"
+(cd "$DEVW" && git init -q && git symbolic-ref HEAD refs/heads/develop && git config user.email t@t.local && git config user.name t \
+  && git commit -q --allow-empty -m init && git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop)
+check_bash_cwd deny "$DEVW" 'git push --force origin develop'   # explicit ref naming the remote default
+check_bash_cwd deny "$DEVW" 'git push -f'                        # no refspec, current branch IS the remote default
+rm -rf "$DEVW"
+
+AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd deny "$FPW2" 'git push --force origin release'
+AGENT_TIERS_PROTECTED_BRANCHES=unrelated-name check_bash_cwd deny "$FPW2" 'git push --force origin master'   # env never REMOVES main/master
+AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd allow "$FPW2" 'git push -f origin feature/foo'          # no regression on an unrelated feature branch
+AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd deny "$FPW2" 'git push origin +release'                 # "+ref" shorthand, no --force/-f flag at all, env-protected name
+# a no-refspec force-push whose CURRENT branch (not the remote default) is only protected via env
+RELW="$(mktemp -d)"
+(cd "$RELW" && git init -q && git symbolic-ref HEAD refs/heads/release && git config user.email t@t.local && git config user.name t \
+  && git commit -q --allow-empty -m init)
+AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd deny "$RELW" 'git push -f'
+rm -rf "$RELW"
+# a glob metachar in the env value must not expand against the hook's cwd (noglob regression): a
+# "release/*" value run from a cwd that actually HAS a matching release/ dir+file must still treat
+# it as one literal (rejected) string, not glob-expand into real filenames mid-loop.
+GLOBDIR="$(mktemp -d)"
+(cd "$GLOBDIR" && git init -q && git symbolic-ref HEAD refs/heads/feature/foo && git config user.email t@t.local && git config user.name t \
+  && git commit -q --allow-empty -m init && mkdir -p release && echo x > release/afile.txt)
+AGENT_TIERS_PROTECTED_BRANCHES='release/*' check_bash_cwd allow "$GLOBDIR" 'git push -f origin feature/foo'
+rm -rf "$GLOBDIR"
+# regex metachar in env is rejected outright, not injected into the pattern - from a FIXED empty
+# cwd (no repo, no files) so the result cannot depend on anything else living in that directory.
+EMPTYCWD="$(mktemp -d)"
+AGENT_TIERS_PROTECTED_BRANCHES='.*' check_bash_cwd allow "$EMPTYCWD" 'git push -f origin feature/foo'
+rm -rf "$EMPTYCWD"
+
+# Regression: a remote default branch name containing an ERE metachar (git itself allows ( ) + { | in
+# a branch name) must be REJECTED rather than escaped - an invalid ERE makes grep exit 2, which the
+# caller reads as no-match, silently dropping main/master protection too (found in review).
+XPAREN="$(mktemp -d)"
+(cd "$XPAREN" && git init -q && git config user.email t@t.local && git config user.name t && git commit -q --allow-empty -m init \
+  && git update-ref 'refs/remotes/origin/x(' HEAD && git symbolic-ref refs/remotes/origin/HEAD 'refs/remotes/origin/x(')
+check_bash_cwd deny "$XPAREN" 'git push --force origin master'   # origin default name has a bad char - main/master still denied
+AGENT_TIERS_PROTECTED_BRANCHES='x(' check_bash_cwd deny "$XPAREN" 'git push --force origin master'   # same bad char via env - still denied
+rm -rf "$XPAREN"
+
 rm -rf "$FPW" "$FPW2" "$MAINDIR" "$MASTERDIR"
 
 # should DENY (Write/Edit)

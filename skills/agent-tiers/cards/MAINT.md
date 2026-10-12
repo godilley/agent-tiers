@@ -1,5 +1,5 @@
 # MAINT card - definition updates, staleness, gc, project-layer maintenance
-*card-v10 c=4275117116-16238 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v15 c=391926116-18523 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the kit-maintenance machinery.** Load this card when adding / updating / removing a tier
 > artifact, editing an agent definition, running doctor/gc, or wiring the project layer - dispatched from the
@@ -8,7 +8,8 @@
 
 **Contents:** MAINT-1 project extension (3 layers) . MAINT-2 def-version staleness . MAINT-3 self-maintenance
 split . MAINT-4 doctor + gc . MAINT-5 add/update/remove/promote . MAINT-6 band-dial falsifier trial (closed) .
-MAINT-7 numbers in doctrine . MAINT-8 measurement integrity . MAINT-9 guard-seam rule.
+MAINT-7 numbers in doctrine . MAINT-8 measurement integrity . MAINT-9 guard-seam rule . MAINT-10 the kit ships
+the layered system, never the personal layer.
 
 ## MAINT-1 Project extension - the 3 layers (global tiers + project brief)
 Tiers ship global and generic; a project extends them without duplication via one skill. There is no native
@@ -69,11 +70,14 @@ history is untracked.
   maintains itself: concise `notes-<topic>.md`. `MEMORY.md` curation is a Lead-triggered SOLO task - never let
   parallel workers OR a second concurrent Lead curate it at once (write races): `MEMORY.md` curation assumes a
   single writer.
-- **Contract changes** (procedure steps, frontmatter, brief content) -> an agent never edits its own
-  definition. It returns one line - `DEF-DELTA(<agent-name>): <proposed change + why>` - and the Lead applies
-  it, gated (AskUserQuestion). This also sidesteps the slow watcher: a self-edit wouldn't apply promptly
+- **Contract changes** (procedure steps, frontmatter, brief content) -> `agent-selfdef-guard` denies a
+  sub-agent writing its own definition file (the Lead is always allowed; another tier's definition is out
+  of its scope). It flags the wanted change (what + why) in its own return text, and the Lead applies it,
+  gated (AskUserQuestion). This also sidesteps the slow watcher: a self-edit wouldn't apply promptly
   anyway. The Lead edits the real kit path (agents are symlinks; refuse-through-symlink -> edit the canonical
-  `~/.claude/agent-tiers/...` file).
+  `~/.claude/agent-tiers/...` file). (A reserved `DEF-DELTA(...)` return tag existed for this; cut - a
+  corpus-wide sweep found zero agents ever used it across ~788 sampled spawns, so plain prose in the
+  return carries the same information with no unused ceremony.)
 
 ## MAINT-4 Detect + curate - `doctor` (read-only) + `gc` (gated fixer)
 `/agent-tiers:doctor` step 4d measures artifacts vs thresholds and emits `gc suggested: <areas>`.
@@ -87,7 +91,9 @@ lines - brief >4KB - agent `MEMORY.md` >150 lines - docs/plans >500KB.
 The SessionStart hook also throttles re-injection: it injects the full `RESUME_SESSION.md` only when the
 content changed or the last full inject was >10 min ago (a `clear` always gets full - context was wiped);
 otherwise it emits a one-line "unchanged, not re-injecting" pointer. This stops the same 60-line handoff being
-re-pasted on every rapid resume (measured: ~7-13x per session before the throttle). State (content hash +
+re-pasted on every rapid resume (measured: ~7-13x per session before the throttle). A startup inject records
+no throttle state, so a `/compact` soon after still gets the handoff again, and every injected body is capped
+to keep the whole inject under the host's 10000-character inline limit (see the session-handoff skill). State (content hash +
 timestamp + **session id**) lives in `~/.claude/agent-tiers/.state/<slug>.resume`. The session id is
 load-bearing: while the state was project-keyed only (until 2026-08-04) two sessions on ONE repo inside the
 window collided and the second was told "already injected" while silently receiving **no handoff at all**.
@@ -101,8 +107,8 @@ detect-then-gated-fix.
 ## MAINT-5 Change management - add / update / remove / promote
 - **ADD** a project skill/agent/brief-fact only on a 2nd real consumer (universal-seams rule); one speculative
   use -> keep it inline in the Lead's prompt.
-- **UPDATE** via DEF-DELTA (agent-proposed) or Lead-observed need -> gated apply -> def-version bump ->
-  PENDING-REFRESH (MAINT-2). Tiny brief edits (typo/command) = show the diff, no formal gate.
+- **UPDATE** via an agent-flagged change (see MAINT-3) or Lead-observed need -> gated apply -> def-version
+  bump -> PENDING-REFRESH (MAINT-2). Tiny brief edits (typo/command) = show the diff, no formal gate.
 - **REMOVE** only via `gc` with evidence (unused across sessions, superseded, proven stale). Never silent.
 - **PROMOTE** project->global when the same pattern hits a 2nd project: generalise into a kit template / global
   agent (the superset), demote project copies to brief-fills. A fact passing *"true in a different repo?"* ->
@@ -193,4 +199,23 @@ review, 2026-08-24): `advisory-ack-guard.sh` joined `guards.log`'s family after 
 the same two commands today returns 11 scripts and 10 sharing the cap, not the 10/9 pasted above. That is
 not a bug in this card, it is MAINT-9's own thesis firing again on its own worked example - the fix is to
 re-run it, same as any other pasted number, not to trust either count.
+
+## MAINT-10 The kit ships the layered system, never the personal layer
+Content that carries personal or machine-specific context (who the user is, which plugins this machine runs,
+a repo's own commands, a personal writing voice) lives in a LOCAL layer the user owns: the untracked
+`.state/` dir, their own `~/.claude/CLAUDE.md` or skills, or a per-project file. The kit ships the mechanism
+that reads that layer plus a template for it, and nothing else. A kit feature that needs personal content
+therefore ships as generic script or doctrine + `templates/<layer>` + a documented local path, and it
+degrades to silence, or to one line pointing at the template, when the local layer is absent.
+- **Already in this shape:** the project brief (MAINT-1: the kit ships `templates/tier-project-brief.SKILL.md`,
+  each repo fills its own); `.state/manifest-extra` (the SessionStart manifest reads machine-local extra
+  paths); the layer registry (`templates/LAYERS.md` ships, the filled copy lives at `.state/LAYERS.md`, read
+  by `scripts/context-map.sh`).
+- **Test before adding text to a kit file:** would a stranger installing the kit want this exact text, or
+  only a slot for their own? A slot means template + local layer. This is the constructive side of the
+  portability review dimension: that check catches personal text after it reaches a kit file, this rule says
+  where it should have gone instead.
+- **Why:** the kit is shared and published. A personal fact in a shipped file is a leak (a personal skill name
+  reached a live kit hook once, 2026-08-16), and a machine fact in a shipped file is wrong on every other
+  machine.
 

@@ -1,5 +1,5 @@
 # ROUTE card - how a spawn's model, effort and provider get chosen
-*card-v1 c=1262656917-8806 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v3 c=1144909071-8342 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the routing RATIONALE.** The every-spawn decision itself is the scope matrix in Spawn
 > Contract step 2 ROUTE (hot, top of skill) - this card is the model behind it: the five axes, the per-spawn
@@ -30,25 +30,19 @@ best." The scope matrix in Spawn Contract step 2 ROUTE (top of skill) is these a
 artifact.** Provider defaults before axis 3 pulls cross-lab: *implement code* -> the per-session write-engine
 pref (Codex if opted, else a Claude worker); *reason / decide / verdict* -> **Claude** (the trust anchor).
 
-**What the three reasoning-capable tiers are actually for (2026-08-30, haiku's role is ROUTE-2):** sonnet is not sharp enough to own a hard decision
+**What the three reasoning-capable tiers are actually for (2026-08-30; haiku's role is the scope matrix's
+own row, Spawn Contract step 2 ROUTE):** sonnet is not sharp enough to own a hard decision
 alone - that is WHY it routes reasoning out rather than grinding it (see ROUTE-4), not a limitation to work
 around. Fable is too expensive to spend on anything but thinking - a fable-tier agent doing mechanical volume
 is a routing mistake, not a luxury (the top-of-band cost qualifier under Lead capability-band is the same
 point from the other side). Opus is the middle: capable of both, cheapest at neither - the default reasoning
 tier for one bounded ask.
 
-## ROUTE-2 Scope matrix - instantiated in Spawn Contract step 2 ROUTE
-The task-shape -> tier/model/effort table is the every-spawn decision, so it sits in the Spawn Contract above. The
-notes that belong with it: haiku is for fully-scripted procedures with mechanical output (weaker summaries -
-verify, and keep judgment-bearing work at sonnet or above); the codex row is the cross-engine lever (see
-"Cross-provider handoff"), inapplicable on a host with no second engine (clever code then takes the
-opus-worker row).
-
 ## ROUTE-3 Per-spawn override - the Lead's runtime lever
 - **Model:** override per spawn with the **Agent-tool `model` param** (`sonnet|opus|haiku|fable`). Beats the
   frontmatter default; the main lever - proven for the Boss (forces model-independence) and the v4
-  opus-worker (clever code without Codex). When overriding, STATE the spawned model in the brief so the
-  agent's check-in can report it truthfully (agents cannot introspect their live model).
+  opus-worker (clever code without Codex). Record the requested override in the spawn record as declared,
+  then verify identity using the shared contract at SC-6.4; brief text is not runtime proof.
 - **Deviating from the matrix default needs approval first (2026-08-30).** Using an already-documented
   default (Boss's different model, the opus-worker row for clever code without Codex) is routine, not a
   deviation - no gate. Picking a model the scope matrix does NOT already name for that shape is a deviation:

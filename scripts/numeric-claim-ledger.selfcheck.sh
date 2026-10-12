@@ -7,6 +7,7 @@
 # outside the state dir, (e) an unparseable payload fails open silently. Runs inside a throwaway kit
 # copy so the real .state is never touched. Exits non-zero on first failure.
 set -u
+unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS
 SRC="$(dirname "$0")/numeric-claim-ledger.sh"
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 

@@ -32,8 +32,9 @@ tracked history, and graduates recurring patterns from project-local to global.
 - **Curate:** `/agent-tiers:doctor` reports lifecycle thresholds (memory/RESUME/brief/plans sizes, stale
   facts); `/agent-tiers:gc` is the gated fixer (retire/merge/archive/dedup - never auto-deletes, never
   touches your personal `CLAUDE.md`). The SessionStart hook nudges you with a one-line advisory when a
-  threshold is breached - on a compact/resume/clear session that already has a `RESUME_SESSION.md`, the
-  advisory's two ceilings (a fresh-startup session, or a project with no handoff file, gets no line).
+  threshold is breached, on any session start. The `MEMORY.md` check fires in every project; the
+  RESUME/brief/plans checks need a `RESUME_SESSION.md` (a project with no handoff file gets no line
+  for them).
 - **VCS policy:** `kit-config.md` holds your global defaults (commit / ignore-shared / ignore-personal per
   artifact class) if present, else kit defaults apply; `init` offers a per-project override and records it
   in `.claude/agent-tiers.local.md`.
@@ -59,3 +60,26 @@ CLAUDE_CONFIG_DIR=~/.claude-work sh ~/.claude/agent-tiers/scripts/install-flat.s
 The whole flattened view (skills, agents, commands AND `settings.json`) lands in that profile, with
 absolute symlinks back to the shared kit and its own integrations ledger. Do NOT copy the kit into each
 profile; the tools resolve it from their own location, not from the config dir.
+
+## Per-install settings (environment)
+
+Hooks read these from their environment, so set them in the `env` block of the Claude Code
+`settings.json` the kit is installed into (one per profile). `AGENT_TIERS_SHARE_REMOTE` is the
+exception: `agent-tiers-share` runs from your own terminal, so export it there. Unset means the
+default; the one default that is new is the `XDG_RUNTIME_DIR` fallback for `PEER_GUARD_SOCK_DIR`, used
+only when `/run/user/<uid>/cc-socks` does not exist.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AGENT_TIERS_PROTECTED_BRANCHES` | empty | Extra branch names (space-separated, no patterns) that a force-push may never target. A name also matches as the last path part of a ref, so `release` protects `feature/release` too. `main` and `master` are always protected, and so is origin's default branch as recorded locally (`git remote set-head origin -a` records it; `git clone` does it for you). This list only adds to them. |
+| `AGENT_TIERS_NOTIFY_TERMINAL` | `alacritty` | Process name (`/proc/<pid>/comm`, at most 15 characters) of the terminal whose window a notification click focuses. |
+| `AGENT_TIERS_NOTIFY_FOCUS_CMD` | `i3-msg "[id=%s] focus"` | Command run on a notification click, the first `%s` is replaced by the X11 window id and the result runs through `sh -c`. Its first word must be the command. Empty = no click action. |
+| `AGENT_TIERS_BADGE_GLYPHS` | empty | `nerd` adds Nerd Font icons to the operator-tag badges (a warning triangle, a check). Without a Nerd Font those render as empty boxes, so the default is plain text and colour. |
+| `PEER_GUARD_SOCK_DIR` | `/run/user/<uid>/cc-socks` if it exists, else `$XDG_RUNTIME_DIR/cc-socks` when that is set, else `/run/user/<uid>/cc-socks` | Where Claude Code keeps its per-session sockets. The macOS location is not verified; set this there. |
+| `AGENT_TIERS_STATE_DAYS` | `7` | Age in days after which per-session marker files are deleted. |
+| `AGENT_TIERS_LEDGER_DAYS` | `14` | Age in days after which authorship and numeric-claim ledger files are deleted. |
+| `AGENT_TIERS_SHARE_REMOTE` | `origin` | Remote that `agent-tiers-share` pushes the branch and tag to (same as its `--remote` flag). |
+| `AGENT_TIERS_PEER_IDLE_SECS` | `3600` | A SendMessage to another session idle longer than this is denied unless the message carries `WAKE-OK:<why>`, since waking it re-reads its whole context with a cold prompt cache. 1 to 604800, else the default. |
+| `AGENT_TIERS_GUARDS_LOG` | `.state/guards.log` in the kit | Where guard decisions are logged. |
+
+A day count that is not a whole number from 1 to 3650 falls back to the default.

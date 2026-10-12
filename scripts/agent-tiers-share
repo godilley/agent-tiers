@@ -16,6 +16,7 @@
 # wrapper, written to the out dir + clipboard.
 #
 # Usage: agent-tiers-share --who NAME [--review] [--safe|--plain] [-o OUTDIR] [--tag TAG] [--macos]
+#                           [--remote NAME]
 #   --who NAME        recipient name for the tag + ledger (required unless --tag)
 #   --tag TAG         re-send an EXISTING share tag (skips preflight + tagging; no new ledger row
 #                     is wrong to want here, so a re-send row IS still appended)
@@ -23,8 +24,19 @@
 #   --safe / --plain  skip the interactive question (force safety wrapper on/off)
 #   --macos           also run the macos-latest CI legs before tagging (10x minutes multiplier -
 #                     default is linux-only; opt in for a bundle that's actually going out the door)
+#   --remote NAME     push/tag this remote instead of origin (or set AGENT_TIERS_SHARE_REMOTE) - a kit
+#                     repo can also carry a public mirror remote, and a share must never push there,
+#                     so the remote is never inferred (not from branch.<b>.remote, which is the FETCH
+#                     upstream and can legitimately point somewhere other than where you push)
 #   -o OUTDIR         output dir (default ~/agent-tiers-dist)
 set -euo pipefail
+# Pin the locale for every bracket range/class this script does (the --who validation below, and the
+# tag-name parse-back near the end) - [:lower:]/[:digit:] are themselves locale-defined (a UTF-8 locale
+# matches e/u/Cyrillic lowercase too), so without this an accented --who could pass validation and then
+# fail the tag-parse-back's plain a-z0-9- range, silently recording WHO=unknown in the ledger (opus
+# reviewer, 2026-09-02, LOW). Same idiom this kit already uses elsewhere for the identical reason
+# (leak-scan.sh, publish-public's LC_ALL=C sort -u).
+export LC_ALL=C
 
 # Resolve the kit from THIS script's location: the kit is shared across profiles, so deriving it from
 # CLAUDE_CONFIG_DIR breaks under a second Claude account (that dir holds the flattened view, not the kit).
@@ -48,6 +60,7 @@ MODE=install
 WHO=""
 TAG=""
 RUN_MACOS=0
+REMOTE="${AGENT_TIERS_SHARE_REMOTE:-origin}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,6 +70,7 @@ while [ $# -gt 0 ]; do
     --macos) RUN_MACOS=1 ;;
     --who)   shift; WHO="${1:?--who needs a name}" ;;
     --tag)   shift; TAG="${1:?--tag needs a tag}" ;;
+    --remote) shift; REMOTE="${1:?--remote needs a name}" ;;
     -o)      shift; OUT_DIR="${1:?-o needs a dir}" ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -66,6 +80,12 @@ done
 command -v git >/dev/null || { echo "git not found - the kit is shared from its git repo." >&2; exit 1; }
 git -C "$KIT_DIR" rev-parse --git-dir >/dev/null 2>&1 || {
   echo "No git repo at $KIT_DIR (resolved from \"$0\") - the kit must be a repo to share (Wave B)." >&2; exit 1; }
+
+# The remote is never inferred (see the --remote usage note above) - validate it explicitly, before
+# any tag or push, instead of discovering a typo or a stray "." mid-preflight.
+[ "$REMOTE" != "." ] || { echo "--remote . is not a remote name (did you mean the default 'origin'?)." >&2; exit 2; }
+git -C "$KIT_DIR" remote get-url "$REMOTE" >/dev/null 2>&1 || {
+  echo "--remote $REMOTE does not exist in this kit's git config - not tagging or pushing." >&2; exit 1; }
 
 # Prompt templates are required kit files: fail HERE, before any state-changing step (tag, archive,
 # ledger row, push) - loading them only at prompt time left a renamed template producing a pushed
@@ -84,7 +104,9 @@ CI_GATE_NOTE=""; CI_GATE_STATUS="n/a"   # set below only on a fresh tag; "n/a" c
                   # where the gate never runs. Both must exist before either branch under `set -u`.
 if [ -z "$TAG" ]; then
   [ -n "$WHO" ] || { echo "--who NAME is required (tag becomes share/<who>-<n>)." >&2; exit 2; }
-  case "$WHO" in *[!a-z0-9-]*) echo "--who must be lowercase [a-z0-9-] (tag-safe)." >&2; exit 2 ;; esac
+  # POSIX character classes, not a-z0-9- ranges: a bracket RANGE collates locale-dependently (the same
+  # class of bug the 2026-08-31 macOS CI run found in notes-sync's glob) - [:lower:]/[:digit:] don't.
+  case "$WHO" in *[![:lower:][:digit:]-]*) echo "--who must be lowercase [a-z0-9-] (tag-safe)." >&2; exit 2 ;; esac
 
   # --- preflight: only a PROVEN-green kit gets tagged --------------------------------------------
   if [ -n "$(git -C "$KIT_DIR" status --porcelain)" ]; then
@@ -162,18 +184,15 @@ if [ -z "$TAG" ]; then
   else
   command -v gh >/dev/null 2>&1 || { echo "preflight: gh CLI not found - cannot verify CI status before tagging. Install gh and re-run. Not tagging." >&2; exit 1; }
   gh auth status >/dev/null 2>&1 || { echo "preflight: gh is not authenticated - cannot verify CI status before tagging. Run 'gh auth login' and re-run. Not tagging." >&2; exit 1; }
-  # TODO: REPO_SLUG comes from gh's resolved base repo but the push below is hard-coded to origin;
-  # derive both from the same remote (opus reviewer 2026-08-24, LOW - only diverges with a fork remote,
-  # not the case on this single-remote kit today, but would silently poll a repo that never gets the SHA).
-  REPO_SLUG="$(cd "$KIT_DIR" && gh repo view --json nameWithOwner -q .nameWithOwner 2>&1)" || { echo "preflight: could not resolve the kit's GitHub repo via gh - not tagging. $REPO_SLUG" >&2; exit 1; }
   BRANCH="$(git -C "$KIT_DIR" branch --show-current)"
   [ -n "$BRANCH" ] || { echo "preflight: detached HEAD - share from a real branch so CI can run against it. Not tagging." >&2; exit 1; }
+  REPO_SLUG="$(gh repo view "$(git -C "$KIT_DIR" remote get-url "$REMOTE")" --json nameWithOwner -q .nameWithOwner 2>&1)" || { echo "preflight: could not resolve the kit's GitHub repo via gh for remote $REMOTE - not tagging. $REPO_SLUG" >&2; exit 1; }
   # TODO: this is the first irreversible remote action in preflight - a real `git push` with no prompt
   # (opus reviewer 2026-08-24, LOW). Consistent with the script's existing pattern of unprompted local
-  # `git tag`/`git commit`, and this pushes your own branch to your own private repo either way, but
-  # flagged since it's the first NETWORK-visible one.
-  echo "preflight: pushing $BRANCH to origin so CI can see HEAD" >&2
-  git -C "$KIT_DIR" push origin "$BRANCH" || { echo "preflight: git push failed - not tagging." >&2; exit 1; }
+  # `git tag`/`git commit`, and this pushes your own branch to the chosen remote ($REMOTE) either way,
+  # but flagged since it's the first NETWORK-visible one.
+  echo "preflight: pushing $BRANCH to $REMOTE so CI can see HEAD" >&2
+  git -C "$KIT_DIR" push "$REMOTE" "$BRANCH" || { echo "preflight: git push failed - not tagging." >&2; exit 1; }
   SHA="$(git -C "$KIT_DIR" rev-parse HEAD)"
   # Dispatch explicitly (2026-08-24) - selfcheck.yml no longer has a push trigger, so nothing creates
   # a run on its own; without this the poll below would just wait out its full budget on an empty list.
@@ -271,13 +290,13 @@ BRANCH="$(git -C "$KIT_DIR" branch --show-current)"
 if [ -z "$BRANCH" ]; then
   # detached HEAD: the branch can't be pushed, but the tag can - still worth doing.
   echo "WARNING: detached HEAD - could not push the branch (the ledger commit is stranded on it)." >&2
-  if git -C "$KIT_DIR" push origin "$TAG" >&2; then
+  if git -C "$KIT_DIR" push "$REMOTE" "$TAG" >&2; then
     PUSH_STATUS="FAILED (detached HEAD, tag pushed, ledger commit still local)"
   else
     PUSH_STATUS="FAILED (detached HEAD, tag push also failed)"
   fi
-elif ! git -C "$KIT_DIR" push origin "$BRANCH" "$TAG" >&2; then
-  echo "WARNING: push of $BRANCH + $TAG to origin failed - the tag and ledger commit are LOCAL ONLY. Push manually." >&2
+elif ! git -C "$KIT_DIR" push "$REMOTE" "$BRANCH" "$TAG" >&2; then
+  echo "WARNING: push of $BRANCH + $TAG to $REMOTE failed - the tag and ledger commit are LOCAL ONLY. Push manually." >&2
   PUSH_STATUS="FAILED (see above)"
 fi
 

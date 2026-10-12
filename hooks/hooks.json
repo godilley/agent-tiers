@@ -1,5 +1,5 @@
 {
-  "description": "agent-tiers - re-inject the project's RESUME_SESSION.md handoff and isolate CODEX_HOME per session on a fresh/compacted/resumed session (both guarded: silent when nothing applies); at SessionEnd, one stderr line summarising this session's guard blocks from .state/guards.log.",
+  "description": "agent-tiers - on a fresh/compacted/resumed session: re-inject the project's RESUME_SESSION.md handoff, isolate CODEX_HOME per session, and print an advisory when the project's outstanding-work ledger has fired triggers or unproven DONE lines (all guarded: silent when nothing applies); at SessionEnd, one stderr line summarising this session's guard blocks from .state/guards.log.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,7 +7,7 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/resume-inject.sh\"",
-            "timeout": 10
+            "timeout": 60
           }
         ]
       },
@@ -16,6 +16,15 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-home-isolate.sh\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/ledger-check.sh\"",
             "timeout": 10
           }
         ]

@@ -1,5 +1,5 @@
 # XLAB card - cross-provider (Codex) handoff
-*card-v6 c=2855912847-25600 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v8 c=1578298095-25940 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the cross-provider machinery.** Load this card before authorizing or executing any
 > pass that invokes a non-Claude provider (dispatched from the Spawn Contract: `SC-3.1` spend, `SC-3.2`
@@ -8,10 +8,10 @@
 > pointer so the rule keeps one owner.
 
 Claude manages, Codex generates. Codex is a GENERATE source only; every trust-class VERDICT stays with a
-reasoning-band Claude-strong tier (`see SC-6.2`, and XLAB-8 below).
+reasoning-band Claude-strong tier (`see SC-1.5`, and XLAB-8 below).
 
 **Contents:** XLAB-1 agent structure . XLAB-2 write-path isolation . XLAB-3 unverified output . XLAB-4 resume
-by session-id . XLAB-5 never fire codex from the Lead . XLAB-6 availability + circuit-breaker . XLAB-7 two
+by session-id . XLAB-5 never fire codex from the Lead . XLAB-6 per-host availability (disclosed gap) . XLAB-7 two
 consents . XLAB-8 generate vs verdict . XLAB-9 spend rung . XLAB-10 disclosure guardrail . XLAB-11
 model/effort ladder . XLAB-12 review path . XLAB-13 concurrency . XLAB-14 measure the blast radius.
 
@@ -47,9 +47,9 @@ separate resource: `codex exec` is one-shot and a fresh call is a NEW cold Codex
 resumable only by its explicit session-id (captured from the `thread.started` event), which the wrapper binds
 to the task/worktree - a re-invocation with cold-start cost, not warm continuation, and not coupled to
 `SendMessage`. So expect no warm stateful resume from a cross-provider agent; state carries only as far as the
-wrapper re-threads it, and only by session-id. `codex exec resume --last` is banned: it picks the newest
-session for the cwd, so any parallel Codex call resumes the WRONG conversation (context / disclosure
-cross-contamination). No id -> start fresh with a full brief. Bind `task-id + codex-session-id + worktree +
+wrapper re-threads it, and only by session-id. A resume by `--last` is denied by `simple-rules-guard`, in both the
+`codex exec resume` and top-level `codex resume` forms: it picks the newest session for the cwd, so any
+parallel Codex call resumes the WRONG conversation (context / disclosure cross-contamination). No id -> start fresh with a full brief. Bind `task-id + codex-session-id + worktree +
 disclosure-set` so a resume is unambiguous.
 
 ## XLAB-5 Never fire `codex exec` from the Lead. At all.
@@ -83,13 +83,15 @@ bounded wait). Do NOT foreground the `codex exec` either - the Bash tool kills i
 exec` review completed on disk but lost its completion record across a session boundary - the salvage was
 reading the `-o` file by hand.)
 
-## XLAB-6 Per-host availability + session circuit-breaker
+## XLAB-6 Per-host availability - disclosed gap, no breaker built
 Codex is reachable wherever the `codex` CLI is on PATH and authed (probe via
 `"${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/scripts/codex-run.sh" login status` - the wrapper passes probes through and
 keeps the codex-guard hook quiet; bare `codex login status` is denied where the guard is wired); the desktop app is
-not required. Availability is point-in-time per host - record it in `.claude/agent-tiers.local.md` (a probe at
-SessionStart). On a host with no authed codex the routing never reaches for it. A failed Codex turn
-trips a session circuit-breaker: suppress Codex for the rest of that session.
+not required. Availability is point-in-time per host. On a host with no authed codex the routing never
+reaches for it. **Disclosed, not built:** no persistent availability record and no automatic circuit-breaker
+exist anywhere in the kit today - a repeated Codex failure is handled by ordinary judgment (stop reaching
+for it this session), not an automatic suppression. If a retry storm is ever observed, the fix is an
+exit-code check in `codex-run.sh`, not restored prose here.
 
 ## XLAB-7 Two independent per-session consents (do not conflate)
 1. **Write-engine preference** - "who writes code this session?" Codex is beta/flaky, so opt-IN; default Claude
@@ -103,7 +105,7 @@ trips a session circuit-breaker: suppress Codex for the rest of that session.
 Any provider may GENERATE code / findings / critiques - cheap, liberal, cross-lab (author lab A -> reviewer lab
 B catches same-lab blind spots; frame it as a measured benefit routed by risk/cost/yield, not a universal
 "near-free"). Who owns the VERDICT on a trust-class artifact is defined by the Trust taxonomy (`see SC-2.2`;
-fail-closed if that owner is unavailable, `see SC-6.2`). This card owns only the cross-provider additions:
+if that owner is unavailable, escalate rather than proceed silently, `see SC-1.5`). This card owns only the cross-provider additions:
 Codex is never the sole pre-ship security/architecture reviewer, and provider disagreement is surfaced to the
 human, never auto-arbitrated between providers:
 - On a **trust-class** artifact, a **material conflict** (disagreement over trust classification, ship /
@@ -123,7 +125,7 @@ codex INVOCATION, not the wrapper:
 - State foreground/background per call so one invocation cannot fall into two classes. **Fail-closed on
   transition:** a rung-2 plugin-broker call that ends up cold-starting or backgrounding has changed mechanism -
   abort and re-gate at rung 3. **Degrade exception:** the Claude-strong verdict tier unavailable mid-session ->
-  STOP, tell the human (`see SC-6.2`); never let the fast-shallow lab silently inherit a trust-class verdict.
+  STOP, tell the human (`see SC-1.5`); never let the fast-shallow lab silently inherit a trust-class verdict.
 
 ## XLAB-10 Data-disclosure guardrail
 A cross-provider call discloses repo content to the other lab; the categorical per-send gate is the hot egress
@@ -253,7 +255,7 @@ sessions are mutually blind, so coordination has to be structural.
   hardening the v4/v7 draft AND the v5/v8 first-fix both missed (each dogfood-caught): (1) **LITERAL printed
   paths**, never a cross-call `$var` (empty in a new shell -> `grep pattern ""` hangs) - B1; (2) an **exit
   sentinel** (`echo "CODEX_EXIT=$?" >> STREAM` as the launch's last action) + **bounded cap + total deadline**
-  so a crash/kill returns `BLOCKED` + trips the XLAB-6 breaker instead of hanging - B2; (3) **break on the
+  so a crash/kill returns `BLOCKED` instead of hanging (no breaker fires - see XLAB-6, none exists yet) - B2; (3) **break on the
   sentinel ONLY** - `turn.completed` fires pre-teardown, so breaking on it races the `-o` flush and spuriously
   BLOCKs ~3-20% of SUCCESSFUL runs; (4) the poll bash needs an explicit **`timeout: 540000`** (the 2-min Bash
   DEFAULT, not the 10-min max, else the deadline collapses to ~6 min); (5) on BLOCKED, **reap the orphan** with

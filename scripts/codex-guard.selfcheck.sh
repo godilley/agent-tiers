@@ -38,6 +38,46 @@ run() { # $1 = the Bash command string; echo DENY or ALLOW
 [ "$(run 'sudocodex exec')" = ALLOW ] || fail "sudocodex is not sudo+codex"
 [ "$(run 'mytime codex-run.sh')" = ALLOW ] || fail "a codex-* path behind another word should ALLOW"
 
+# heredoc body false positive (2026-09-02): a heredoc BODY line starting with "codex " looks like a
+# fresh command at line-start to a plain `grep`, which anchors `^` per line, not per command - this
+# must still ALLOW. (Updated 2026-10-12: the old comment here said "the line-filter only scans lines
+# that carry `<<`" - that filter is gone, replaced by stripping heredoc BODIES, so the reasoning is now
+# "the body is stripped before the scan ever sees it", same expected answer.)
+[ "$(run 'cat > notes.md <<EOF
+codex is banned in this kit, see XLAB-5
+EOF')" = ALLOW ] || fail "codex mentioned in a heredoc body should ALLOW (body-strip fix)"
+
+# heredoc-as-stdin false NEGATIVE (2026-09-02, opus reviewer HIGH): `codex exec` takes its prompt on
+# stdin, so this is the single most natural way to invoke the exact thing this guard bans - the
+# heredoc operator lives on the SAME line as the invocation, so the opener line (kept verbatim by the
+# body-strip) must still catch it. A naive "stand down entirely on any heredoc" carve-out (the first
+# cut of this fix) missed this.
+[ "$(run 'codex exec - <<'"'"'EOF'"'"'
+do the thing
+EOF')" = DENY ] || fail "codex exec with a heredoc-supplied stdin prompt should DENY"
+
+# codex-guard HIGH (found by execution, 2026-10-12): a codex call on a line AFTER a closed heredoc was
+# invisible to the old "only << lines" filter and silently ALLOWED. Must DENY now that only the body is
+# stripped.
+[ "$(run 'cat > p.txt <<EOF
+hi
+EOF
+codex exec - < p.txt')" = DENY ] || fail "codex after a closed heredoc should DENY"
+
+# codex as the first line, BEFORE a heredoc opens later in the same command - also must DENY. The old
+# filter kept only lines carrying `<<`, so it allowed this shape too (the codex line has none);
+# pinned down alongside the "after" case above.
+[ "$(run 'codex exec -
+cat > p.txt <<EOF
+hi
+EOF')" = DENY ] || fail "codex before a later heredoc should DENY"
+
+# unterminated heredoc containing a codex line in its (never-closed) body: the strip helper leaves the
+# whole command AS-IS (same ceiling as guard_strip_heredocs in guard-cmdpos.sh), so this still DENIES -
+# fail-CLOSED, not a silent ALLOW just because the body was never bounded.
+[ "$(run 'cat > p.txt <<EOF
+codex exec -' )" = DENY ] || fail "unterminated heredoc containing a codex line should DENY (fail-closed)"
+
 # Malformed (non-JSON) payloads: fail CLOSED when codex is mentioned, open otherwise.
 raw() { out="$(printf '%s' "$1" | sh "$GUARD" 2>/dev/null || true)"; if printf '%s' "$out" | grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"'; then echo DENY; else echo ALLOW; fi; }
 [ "$(raw 'not json but mentions codex here')" = DENY  ] || fail "unparseable payload mentioning codex should DENY (fail-closed)"

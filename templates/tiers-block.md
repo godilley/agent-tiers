@@ -30,9 +30,10 @@ Deep reasoning is bought per call from a thinking tier, not ground out in the Le
   (fable) delegate by TOKEN VOLUME, not difficulty. Full dial doctrine -> the `agent-tiers` skill.
 - This environment's per-agent model/effort resolution + scope matrix live in
   `.claude/agent-tiers.local.md` (run `/agent-tiers:init` to (re)probe, `/agent-tiers:doctor` for drift).
-- Every spawned agent's check-in states `name . tier . model . effort . def-v<N>` (model is DECLARED from
-  the brief, def-v is disk-verifiable - the staleness check; repeated as the FIRST line of its FINAL
-  return - the opening line is stripped once it runs tools).
+- Every spawned agent repeats `name . tier . def-v<N>` as the first line of its final
+  return. Keep model/effort separate under agent-tiers' identity-evidence contract (SC-6.4):
+  requested settings are declared; runtime claims cite harness evidence; missing fields
+  remain unverified. Definition stamps check staleness, not model identity.
 
 ## Building - universal seams over bespoke ⭐ (from the `agent-tiers` plugin)
 

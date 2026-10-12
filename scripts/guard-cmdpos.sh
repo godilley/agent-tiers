@@ -40,6 +40,127 @@
 
 CMDPOS_PREFIX='(^|\$\(|`)[[:space:]]*((if|until|while|do|else|then|!)[[:space:]]+)?((sudo|command|env|time|nohup|bash|sh|timeout[[:space:]]+[0-9]+[a-zA-Z]?)[[:space:]]+)*([^[:space:]=]*/)?'
 
+# guard_has_heredoc <cmd> -> exit 0 if the raw command text contains ANY literal `<<` substring - a
+# heredoc redirect (`<<`/`<<-`), but also a herestring (`<<<`), a merge-conflict marker (`<<<<<<<`), a
+# left-shift operator inside a quoted code snippet, or `<<` appearing in ordinary text (a commit
+# message reading "renders as <<foo>>"). Plain substring test, deliberately not narrower - correctly
+# excluding `<<<` from a coarse "stand down" carve-out needs distinguishing it from `<<`, which this
+# does not attempt (opus reviewer, 2026-09-02, MEDIUM: an earlier version of this comment claimed `<<<`
+# was excluded - false, and exactly the "reassuring comment where the ceiling should be" failure this
+# file already corrects itself for elsewhere). Every caller below stands its WHOLE command down on a
+# true result, so any of the above shapes is now unscanned by that guard - accepted, each caller's own
+# comment says so. Plain grep's `^` anchors on the START OF EVERY LINE, not the start of the command, so a
+# HEREDOC BODY line that happens to start with a guarded verb (`codex ...`, `cd ...`, `git commit ...`)
+# is mistaken for a real command at command position by every CMDPOS_PREFIX match in this file -
+# distinct from the "wrapped in a quoted string" ceiling already disclosed above (that's single-line
+# quoting; this is grep's per-line anchor over multi-line input). grep-footgun-guard.sh and
+# pgrep-footgun-guard.sh each independently invented the same one-line carve-out ("stand down on ANY
+# heredoc anywhere in the command" - coarse, not per-line masking) before this existed as a shared
+# function; extracted here once a 3rd consumer needed it (hygiene-commit-guard.sh - 2026-09-02;
+# codex-guard.sh never called this - it keeps its own inline heredoc handling, see its own header).
+# NOT wired into guard_split_segments/guard_at_command_position themselves and
+# NOT applied to every consumer of this library: dangerous-actions-blocker.sh, vcs-commit-guard.sh,
+# kit-leak-guard.sh, review-gate-guard.sh and maint2-arrival-guard.sh all source this file too but do
+# NOT call this - standing THEM down on any heredoc would flip a current false-POSITIVE nuisance
+# (heredoc body text mistaken for a dangerous/scanned command) into a false-NEGATIVE gap (a real
+# dangerous command, commit, or policy-relevant add chained AFTER a heredoc closes, in the same Bash
+# call, would go unscanned) - unacceptable for the guards that are an actual security/leak/policy
+# boundary. Callers that DO use this are anti-accident nudges or a style/habit check where erring
+# toward fewer false positives is the safer trade; each caller's own comment names this ceiling.
+guard_has_heredoc() {
+  case "$1" in *'<<'*) return 0 ;; esac
+  return 1
+}
+
+# guard_strip_heredocs <cmd> -> stdout: <cmd> with every heredoc BODY removed (the `<<TAG`/`<<-TAG`
+# opener line is kept verbatim, including any command text before or after the marker on that same
+# line; only the body lines through - and including - the terminator line are dropped). Exists so a
+# caller can SEE the real command structure around a heredoc (a `git commit -m "$(cat <<'EOF' ...`
+# shape is the default harness commit message form) instead of standing the whole guard down
+# on guard_has_heredoc, which is the right trade for a style nudge but wrong for a POLICY-boundary
+# guard (worktree-guard.sh, long-run-guard.sh, git-add-stash-guard.sh all adopted this on
+# 2026-09-23 after a review found their heredoc bail let a hooked commit with no timeout, or a
+# `git add -A` chained before a heredoc'd commit, through unseen). guard_has_heredoc's remaining callers
+# (grep-footgun-guard.sh, pgrep-footgun-guard.sh, memory-write-gate.sh, simple-rules-guard.sh,
+# sc52a-write-disclosure-guard.sh) are UNCHANGED; hygiene-commit-guard.sh moved to this helper on 2026-10-12. Stand-down is still the right trade for a style/habit nudge
+# where a false deny costs more than an unscanned heredoc-adjacent command; this helper is offered
+# for any of them to adopt later, not force-migrated here.
+#
+# Line-oriented, single heredoc opener recognised per source line (a bare TAG, or a TAG in matching
+# single/double quotes, right after `<<`/`<<-`) - two heredocs later in the SAME multi-line command
+# are both found in sequence (the scan resumes looking for a new opener once a body closes); two
+# heredocs opened on the ONE line (`diff <(cat <<A) <(cat <<B)`) only recognises the first - ponytail
+# ceiling, a real parser would be needed for that shape and it is not the incident this exists for.
+# `<<-`'s own leading-tab stripping is honoured when matching the terminator line, same as the shell.
+# An UNTERMINATED heredoc (no line ever equals the tag) is left ENTIRELY AS-IS - the whole original
+# <cmd> is returned unchanged, not a partial strip - since a body with no known end cannot be safely
+# bounded, and a caller silently mis-scanning past where the real command resumes is worse than the
+# false-negative wide-open heredoc guard_has_heredoc callers already accept.
+guard_strip_heredocs() {
+  cmd="${1:-}"
+  case "$cmd" in *'<<'*) : ;; *) printf '%s' "$cmd"; return 0 ;; esac
+  out="$(printf '%s\n' "$cmd" | awk '
+    BEGIN { tag = ""; dash = 0 }
+    {
+      line = $0
+      if (tag == "") {
+        print line
+        if (match(line, /<<-?[ \t]*('"'"'[^'"'"']*'"'"'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)/)) {
+          seg = substr(line, RSTART, RLENGTH)
+          dash = (seg ~ /^<<-/) ? 1 : 0
+          rest = seg
+          sub(/^<<-?[ \t]*/, "", rest)
+          gsub(/^'"'"'|'"'"'$/, "", rest)
+          gsub(/^"|"$/, "", rest)
+          tag = rest
+        }
+      } else {
+        cand = line
+        if (dash) sub(/^\t+/, "", cand)
+        if (cand == tag) { tag = ""; dash = 0 }
+      }
+    }
+    END { if (tag != "") exit 1 }
+  ')"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then printf '%s' "$out"; else printf '%s' "$cmd"; fi
+}
+
+# guard_strip_quotes <str> -> stdout: <str> with the CONTENT of every single- or double-quoted
+# region replaced by nothing (`"a | b"` -> `""`, `'x -> y'` -> `''`) so a scan for a bare shell
+# metacharacter (`|`, `>`, a bare `.`) elsewhere in a guard does not trip on quoted TEXT - a commit
+# message, a `-m "rename a -> b"`, an email address in `--author="A <a@b.c>"`. The quote CHARACTERS
+# themselves are kept (so `"..."`/`'...'` still reads as one quoted token, not vanish entirely) and
+# nesting the other quote style inside is preserved as opaque content, matching real shell quoting
+# (a `'` has no special meaning inside `"..."` and vice versa). No backslash-escape awareness inside
+# double quotes (`"a \" b"` ends the quoted region at the escaped `"`, same ceiling every guard in
+# this kit already accepts for quote handling elsewhere - a real parser would be needed to do
+# better) - ponytail, disclosed rather than silently wrong. Callers that need the ACTUAL content of
+# a quoted argument (git-add-stash-guard.sh's own path/subcommand tokens) do their own narrow
+# per-token unquote instead of this blanket strip - this function is for guards that only need to
+# know a metacharacter is NOT really there, never for guards that need the value that was there.
+guard_strip_quotes() {
+  printf '%s' "${1:-}" | awk '
+    BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
+    {
+      s = $0; n = length(s); state = 0; out = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (state == 0) {
+          out = out c
+          if (c == SQ) state = 1
+          else if (c == DQ) state = 2
+        } else if (state == 1) {
+          if (c == SQ) { out = out c; state = 0 }
+        } else {
+          if (c == DQ) { out = out c; state = 0 }
+        }
+      }
+      printf "%s", out
+    }
+  '
+}
+
 # CMDPOS_GITOPTS / CMDPOS_COMMIT_FRAG: the "this segment IS a git commit" fragment shared by all four
 # commit-time guards (review-gate-guard.sh, kit-leak-guard.sh [kit-local, not bundled],
 # vcs-commit-guard.sh, hygiene-commit-guard.sh). Every guard finds its commit segment through
@@ -256,6 +377,24 @@ guard_ask_prefix() {
   fi
 }
 
+# guard_marker_text <cmd> <tag> -> stdout: the text inside a `[<tag>:<reason>]` marker anywhere in
+# <cmd>, newline-flattened (`tr` to a space, same as maint2-arrival-guard.sh's own marker reads - a
+# multi-line REASON would otherwise write a second, unprefixed, model-controlled line into guards.log)
+# and capped at 140 chars; empty when the tag is absent. Lifted 2026-09-14 from
+# sc52a-write-disclosure-guard.sh's own `[bash-write:]` extraction (its first consumer) so kit-leak-
+# guard.sh's `[leak-exception:]` and vcs-commit-guard.sh's `[vcs-exception:]` don't each hand-roll the
+# same sed/tr/cut pipeline. Per-tag by construction (the sed pattern is built from $2), so one guard's
+# marker can never satisfy another's check - callers never need to guard against that themselves.
+guard_marker_text() {
+  cmd="${1:-}"; tag="${2:-}"
+  [ -n "$tag" ] || return 0
+  case "$cmd" in
+    *"[$tag:"*)
+      printf '%s' "$cmd" | sed -n "s/.*\[$tag:\([^]]*\)\].*/\1/p" | tr '\n' ' ' | cut -c1-140
+      ;;
+  esac
+}
+
 # guard_split_segments <cmd> -> stdout, one pipeline segment per line (splits on && || | ; &), ALWAYS
 # with a trailing newline - a `while IFS= read -r seg; do ... done` fed straight from this function's
 # stdout silently skips the LAST segment if the output doesn't end in \n (POSIX `read` returns
@@ -273,6 +412,60 @@ guard_split_segments() {
   # (cold-review F3, 2026-08-10). POSIX awk gsub handles the newline on both. Leftmost-longest
   # alternation makes `&&` win over `&` at the same position, matching the old sequential sed.
   printf '%s\n' "$1" | awk '{ gsub(/&&|\|\||\||;|&/, "\n"); print }'
+}
+
+# guard_split_segments_qsafe <cmd> -> stdout, same CONTRACT as guard_split_segments (one segment per
+# line, ALWAYS trailing \n, segment text kept RAW/unquoted-unchanged) but QUOTE-AWARE: a &&/||/|/;/&
+# INSIDE a single- or double-quoted region is never treated as a boundary. guard_split_segments is
+# quote-BLIND (it gsubs the delimiter characters wherever they appear), so a one-line commit message
+# containing its own `;` or `&&` (`git commit -m "docs: WIP; git stash is shared"`) gets sliced mid-
+# string, and the fragment after the accidental split (` git stash is shared"`) can then match a
+# verb-detection regex AT COMMAND POSITION even though it was never a real second command - worktree-
+# guard.sh and git-add-stash-guard.sh both hit this (guards-review-2, 2026-09-23, claim 5/finding).
+# This is the fix: split on the SAME delimiter set, but only when the scanning position is outside
+# both quote kinds (the quote characters themselves are matched by scanning character-by-character,
+# same state machine as guard_strip_quotes - state 0/1/2 for none/single/double). Unlike
+# guard_strip_quotes, this does NOT blank quoted content - the point here is correct SEGMENT
+# BOUNDARIES with the real text intact, so a caller's existing per-segment value extraction (a path,
+# a subcommand) keeps reading real argument values, not blanked ones. A literal newline already
+# embedded in the command (surviving heredoc-stripping puts the resumed command text on its own
+# line) is not specially handled and does not need to be: at quote-state 0 it falls through to "copy
+# the character unchanged" like any other non-delimiter byte, which for a newline IS already the
+# segment-boundary shape this function's own output needs, and at quote-state 1/2 the same fallthrough
+# correctly keeps a real multi-line quoted string content-preserved inside one segment, matching bash's
+# own quoting rules (a newline has no special meaning inside `"..."`/`'...'`). Same "no backslash-
+# escape awareness inside double quotes" ceiling guard_strip_quotes already discloses - not solved
+# twice. A caller that needs to know a metacharacter is ABSENT (not the real value) still calls
+# guard_strip_quotes on the INDIVIDUAL matched segment, same as before; this function only fixes
+# where the boundaries land.
+guard_split_segments_qsafe() {
+  printf '%s' "${1:-}" | awk '
+    BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
+    {
+      s = $0; n = length(s); state = 0; out = ""; i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (state == 0) {
+          c2 = substr(s, i, 2)
+          if (c2 == "&&" || c2 == "||") { out = out "\n"; i += 2; continue }
+          if (c == "|" || c == ";" || c == "&") { out = out "\n"; i += 1; continue }
+          out = out c
+          if (c == SQ) state = 1
+          else if (c == DQ) state = 2
+          i += 1
+        } else if (state == 1) {
+          out = out c
+          if (c == SQ) state = 0
+          i += 1
+        } else {
+          out = out c
+          if (c == DQ) state = 0
+          i += 1
+        }
+      }
+      printf "%s\n", out
+    }
+  '
 }
 
 # guard_segs_at_cmdpos <segments> <target_ere> -> stdout: EVERY segment (original text, unstripped -
@@ -528,4 +721,90 @@ guard_hop() {
 # string-compare the sentinel themselves.
 guard_cwd_unresolved() {
   case "$1" in /*) return 1 ;; *) return 0 ;; esac
+}
+
+# --- ship-guards wave (2026-10-06, repaired 2026-10-06): a generic local-config scalar and the push/
+# PR detector review-gate-guard.sh needs for its publish arm. guard_linked_worktree and the
+# merge/cherry-pick detector (GUARD_MERGE_FRAG/guard_merge_seg) from the first pass were REMOVED after
+# independent review - the worktree carve-out and the merge arm are not part of the shipped design.
+
+# guard_main_top <dir> -> stdout: the MAIN worktree's top-level directory - the parent of the resolved
+# `git rev-parse --git-common-dir` (that dir is always <main-top>/.git, main checkout or linked
+# worktree alike), never the toplevel of <dir> itself, which for a linked worktree is the worktree's
+# OWN directory, not the main checkout that holds the git-ignored `.claude/agent-tiers.local.md` a
+# linked worktree has no copy of (the reason this function exists at all - review-gate-guard.sh's
+# mode config has to be read from the main checkout even when the effective cwd is a worktree, e.g. a
+# Lead working directly inside one). `CDPATH= cd` on both hops - same neutralization guard_cd_into
+# already applies, and for the same reason: a `cd` whose target matches an exported CDPATH entry
+# writes the resolved path to STDOUT (POSIX), which would otherwise corrupt the captured directory.
+# ponytail ceiling: a bare repo's common-dir is not literally named ".git" under a work tree - taking
+# dirname of it would land one level too shallow; not chased further (bare-repo dotfiles layouts are
+# already a disclosed ceiling elsewhere in this file, see GUARD_UNRESOLVED_REPO_REASON).
+guard_main_top() {
+  d="${1:-}"; [ -n "$d" ] || return 1
+  cd_raw="$(CDPATH= cd "$d" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$cd_raw" ] || return 1
+  cd_r="$(CDPATH= cd "$d" 2>/dev/null && CDPATH= cd "$cd_raw" 2>/dev/null && pwd -P)" || return 1
+  dirname "$cd_r"
+}
+
+# guard_local_scalar <top> <key> <allowed-values-space-separated> <strict-default> -> stdout:
+#   line 1: the resolved value (always one of <allowed-values>, since missing/typo/empty/duplicate
+#           all fall back to <strict-default>)
+#   line 2: present ONLY when resolution fell back for a reason worth a breadcrumb ("<source>:
+#           <why>") - absent on a clean resolve, so a caller can test for a second line rather than
+#           parse the reason text to decide whether to log it.
+# Generalises hygiene-commit-guard.sh's own pre-refactor `hygiene_scope` resolver (same two-file
+# order and precedence: <top>/.claude/agent-tiers.local.md, then $BASE/kit-config.md; same "empty
+# path must not read from /" guard) to any `key: value` line, since review_gate needed a second,
+# differently-keyed scalar and a second hand-rolled copy is exactly the seam this library exists to
+# prevent (guard-cmdpos.sh's own header, round 3 of the kit's doctrine). A found key line resolves
+# from THAT file - this does not keep searching the second file on a malformed value in the first
+# (a typo in the repo's own override should not let the kit-wide default quietly win instead); only
+# a MISSING file or an ABSENT key moves on to the next source. A trailing `# comment` on the value
+# line is stripped before matching, so `review_gate: push  # rolled out 2026-10` parses to `push`.
+guard_local_scalar() {
+  gls_top="${1:-}" gls_key="${2:-}" gls_allowed="${3:-}" gls_strict="${4:-}"
+  gls_val="" gls_reason="" gls_src=""
+  for gls_src in "${gls_top:-/dev/null}/.claude/agent-tiers.local.md" "${BASE:-/dev/null}/kit-config.md"; do
+    case "$gls_src" in /.claude/*|/kit-config.md) continue ;; esac   # empty top/BASE must not read from /
+    [ -f "$gls_src" ] || continue
+    gls_n="$(grep -ac "^${gls_key}:" "$gls_src" 2>/dev/null || echo 0)"
+    if [ "${gls_n:-0}" -gt 1 ] 2>/dev/null; then
+      gls_reason="$gls_src: multiple ${gls_key} lines - ambiguous, using $gls_strict"
+      gls_val="$gls_strict"
+      break
+    fi
+    [ "${gls_n:-0}" -eq 1 ] 2>/dev/null || continue
+    gls_raw="$(grep -aE "^${gls_key}:" "$gls_src" 2>/dev/null | head -1 | sed -E "s/^${gls_key}:[[:space:]]*//; s/[[:space:]]*#.*\$//; s/[[:space:]]*\$//")"
+    [ -n "$gls_raw" ] || { gls_reason="$gls_src: empty ${gls_key} value - using $gls_strict"; gls_val="$gls_strict"; break; }
+    gls_val="$gls_raw"
+    case " $gls_allowed " in
+      *" $gls_val "*) ;;
+      *) gls_reason="$gls_src: unrecognised ${gls_key} '${gls_val}' - using $gls_strict"; gls_val="$gls_strict" ;;
+    esac
+    break
+  done
+  [ -n "$gls_val" ] || gls_val="$gls_strict"
+  printf '%s\n' "$gls_val"
+  [ -n "$gls_reason" ] && printf '%s\n' "$gls_reason"
+  return 0
+}
+
+# GUARD_PUSH_FRAG / GUARD_SHIP_FRAG / guard_ship_seg: `git push`, `gh pr create`, or `gh pr merge` at
+# command position - the publish arm of the ship-guards table. GUARD_PUSH_FRAG is exposed separately
+# (not just inlined into GUARD_SHIP_FRAG) so a caller that already has a matched ship segment can tell
+# STRUCTURALLY which alternative it was (`guard_at_command_position "$seg" "$GUARD_PUSH_FRAG"`), rather
+# than a substring test on the segment text (`case $seg in *push*)`) - a substring test would misread
+# a `gh pr create --title "let's push this"` segment as a git push because the TITLE happens to
+# contain the word (review-gate-guard.sh's own ACT_WORD classification needs this, repair wave
+# 2026-10-06). One combined ERE for detection (one grep pass via guard_segs_at_cmdpos, not three),
+# matching the flat-cost contract guard_segs_at_cmdpos's own header already requires of every caller.
+# ponytail ceiling: `gh` has no CMDPOS_GITOPTS-shaped option span modeled here (no `gh -C`/`gh -c`
+# equivalent exists to fold), so a global `gh` flag before `pr` is not recognised - disclosed, not a
+# measured incident; `gh pr create`/`gh pr merge` are typed bare in practice.
+GUARD_PUSH_FRAG="git[[:space:]]+(${CMDPOS_GITOPTS})*push([[:space:]]|\$)"
+GUARD_SHIP_FRAG="(${GUARD_PUSH_FRAG}|gh[[:space:]]+pr[[:space:]]+(create|merge)([[:space:]]|\$))"
+guard_ship_seg() {
+  guard_segs_at_cmdpos "$1" "$GUARD_SHIP_FRAG" | head -1
 }

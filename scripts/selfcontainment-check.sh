@@ -61,7 +61,7 @@ note() { printf '%s\n' "$1" >&2; fail=1; }
 
 # --- exemption list (Rule 1) -------------------------------------------------------------------
 # Scripts that are entry points in their own right, never referenced BY id/name from another script.
-EXEMPT_IDS='install-flat probe-env lint-doctrine notes-sync selfcontainment-check agent-tiers-share'
+EXEMPT_IDS='install-flat probe-env lint-doctrine notes-sync selfcontainment-check agent-tiers-share review-gate-mode'
 
 # --- HOOK_ROWS ids, parsed the same way install-flat.sh does ------------------------------------
 [ -f scripts/install-flat.sh ] || { echo "selfcontainment-check: scripts/install-flat.sh missing - cannot derive HOOK_ROWS" >&2; exit 2; }
@@ -118,14 +118,33 @@ done
 # internals (BASE/SEGMENTS/CMDPOS_*/GUARD_* - set by the SOURCING guard's own convention or by the
 # library itself, not real environment variables; a per-file "was this assigned here" check can't see
 # across a `. guard-cmdpos.sh` source boundary).
+#
+# Four more classes, all added 2026-09-17 after this check had been exiting non-zero on them long
+# enough that nothing was reading its result - a lint that always fails gates nothing:
+#   - KIT_PROBE_WITH/WITHOUT/SETTINGS: install-flat.sh sets all three when it runs a wiring script
+#     with `--probe`. Same cross-file blindness as the library internals above, one process boundary
+#     instead of one source boundary.
+#   - CONTENT_RULES_NAMES_FILE: a documented kit override seam, read only with a `${VAR:-default}`.
+#   - WT_SESSION, GHOSTTY_RESOURCES_DIR: set by the terminal emulator (Windows Terminal, Ghostty) for
+#     terminal-capability detection - the same class as TERM_PROGRAM above, which was already here.
+#   - NOTIFY_SELFCHECK_START_PID: a documented test seam in notify.sh's ancestor walk, consulted only
+#     when no explicit argument is given and always with a `$$` fallback. It is production code
+#     carrying a test-only override, which is worth knowing about; the safe default is what makes it
+#     acceptable rather than a backdoor.
 ALLOW_ENV='HOME PATH PWD OLDPWD SHELL USER LOGNAME TMPDIR IFS LANG LC_ALL TERM CDPATH BASH_VERSION
 CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR CLAUDE_PROJECT_DIR CLAUDE_CODE_EXECPATH CLAUDE_EFFORT
 CLAUDE_CODE_SESSION_ID CLAUDE_CODE_EFFORT_LEVEL CLAUDE_CODE_ENTRYPOINT CLAUDE_AGENT_SDK_VERSION
-CLAUDE_ENV_FILE ANTHROPIC_MODEL TERM_PROGRAM
+CLAUDE_ENV_FILE ANTHROPIC_MODEL TERM_PROGRAM XDG_RUNTIME_DIR
+AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS AGENT_TIERS_NOTIFY_TERMINAL AGENT_TIERS_NOTIFY_FOCUS_CMD
+AGENT_TIERS_PROTECTED_BRANCHES AGENT_TIERS_SHARE_REMOTE AGENT_TIERS_PEER_IDLE_SECS
 AGENT_TIERS_GUARDS_LOG AGENT_TIERS_STATE_DIR AGENT_TIERS_LEDGER AGENT_TIERS_SHARE_NO_CLIP
-AGENT_TIERS_SHARE_SKIP_CI_GATE
+AGENT_TIERS_SHARE_SKIP_CI_GATE CONTENT_RULES_NAMES_FILE
+AGENT_TIERS_FRAMING_LOG AGENT_TIERS_LOG_ROTATE_BYTES
+KIT_PROBE_WITH KIT_PROBE_WITHOUT KIT_PROBE_SETTINGS NOTIFY_SELFCHECK_START_PID
+WT_SESSION GHOSTTY_RESOURCES_DIR
 CODEX_HOME CODEX_RUN_BIN
-BASE SEGMENTS CMDPOS_COMMIT_FRAG CMDPOS_GITOPTS CMDPOS_PREFIX GUARD_UNATTENDED_PREFIX GUARD_UNRESOLVED_REPO_REASON'
+BASE SEGMENTS CMDPOS_COMMIT_FRAG CMDPOS_GITOPTS CMDPOS_PREFIX GUARD_UNATTENDED_PREFIX GUARD_UNRESOLVED_REPO_REASON
+GUARD_PUSH_FRAG GUARD_SHIP_FRAG PPID AGENT_TIERS_KIT_ROOT PEER_GUARD_SOCK_DIR PEER_GUARD_STATE_DIR PEER_GUARD_SELF_PID'
 is_allowed_env() { printf '%s\n' "$ALLOW_ENV" | tr -s '[:space:]' '\n' | grep -qx "$1"; }
 # "assigned in THIS file" - a var read but never assigned in the same script must come from the
 # environment (or a sourced library, covered by the allowlist above).

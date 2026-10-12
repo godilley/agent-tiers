@@ -16,7 +16,7 @@ description: >-
 | **Global** `~/.claude/CLAUDE.md` | portable defaults: about-you, machine/env, technique/workflow | every session, every project | short |
 | **Project** `CLAUDE.md` | local: what-it-is, architecture, build/run/test, conventions, gotchas, delegation surface, overrides | every turn **and into every project sub-agent** | **SHORT - it's a per-turn tax** |
 | **Skills** `.claude/skills/<x>/SKILL.md` | on-demand deep-dives, ONE subsystem each | only when the skill's `description` matches | as deep as needed |
-| **`RESUME_SESSION.md`** | transient top-of-context handoff: HEAD/version, deployed-vs-unverified, a ▶ NEXT pointer | re-injected after `/compact`·resume·clear by the SessionStart hook | a pointer, not a 2nd doc |
+| **`RESUME_SESSION.md`** | transient top-of-context handoff: HEAD/version, deployed-vs-unverified, a ▶ NEXT pointer | re-injected at startup, `/compact`, resume and clear by the SessionStart hook (capped to fit the host's 10000-character hook limit, about 5-8 KB of handoff) | a pointer, not a 2nd doc |
 | **Auto-memory** | durable cross-cutting facts (always-loaded index + per-fact files) | the index, always | concise; deep-dives → their own files |
 
 ## Placement test
@@ -30,16 +30,13 @@ every project sub-agent. Past a point a long core (a) wastes context + cost and 
 rule-following** - the model skims a wall of text and misses the rules that count. **Keep the core short;
 push depth into on-demand skills.** A 1000-line CLAUDE.md is a smell, not thoroughness.
 
-## Maturity annotations (dated confidence tags)
-Any fact added or updated in memory files, kit skill docs, or RESUME_SESSION gets a trailing inline tag:
-`*[YYYY-MM-DD]* 🌱|🌿|🌳|🌲` - 🌱 Seedling (new, unverified) · 🌿 Growing (validated 2-3x) · 🌳 Mature
-(proven across projects) · 🌲 Evergreen (foundational, rarely re-checked).
-- **Rewrite in place, never append.** An update REPLACES the existing entry's tag/date - one canonical
-  home per fact, matching the anti-bloat rule above. This is NOT a changelog; a growing pile of dated
-  annotations under one heading is the same bloat this skill exists to prevent.
-- **These emoji are a functional exception** to the global "no decorative emoji" rule (a scanning aid,
-  not decoration) - noted here and at the memory index header so neither reads as self-contradictory.
-- Applies going forward only. Retagging existing content is a separate, deliberate pass, not automatic.
+## Retired: the manual maturity tag
+The dated confidence tag (`*[YYYY-MM-DD]* 🌱|🌿|🌳|🌲`) this section used to require is **retired**
+(2026-09): a corpus check found 0 of 16 memory-carrying projects had ever applied it outside one
+index header, so the manual annotation never happened in practice. See `cards/MEMORY.md` for what governs
+memory content now. Age and re-verification are no longer hand-tagged; `/agent-tiers-gc` derives age from
+file mtime and writes its own `verified: YYYY-MM-DD` frontmatter field when it re-checks a fact against the
+repo (see `commands/gc.md`) - tool-written, not something a Lead is asked to remember to add.
 
 ## Refactor an existing setup - audit → present → confirm → apply
 For a project (or a new kit user) whose setup is **huge / absent / mis-split**:

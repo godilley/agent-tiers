@@ -41,6 +41,7 @@ or which Claude Code GUI / editor-addon is in use ([why a probe](docs/after-inst
 | Tier | Job |
 |---|---|
 | **Lead** | The agent you talk to. Routes work rather than doing all of it. |
+| **Sublead** | Leads one independent slice of a big task over its own workers. Opus, gated per spawn. |
 | **Worker** | Cheap and fast. Handles mechanical, fully-specified jobs. |
 | **Advisor** | One hard think, bought per call, when a decision needs real reasoning. |
 | **Reviewer** | Checks the diff - whoever wrote it is the worst person to review it. |
@@ -49,9 +50,11 @@ or which Claude Code GUI / editor-addon is in use ([why a probe](docs/after-inst
 Two things this buys. **Cost:** a Sonnet call costs a fraction of an Opus or Fable one (public
 per-token pricing - that ratio is the whole mechanism), and the kit makes the cheap Lead the
 default without giving up the strong models: they stay on tap, bought per call (an Opus advisor,
-a cross-lab review) or per session when the work deserves a cleverer Lead. What that looks like
-in practice, for one data point: two out of three of the author's own August sessions start on a
-Sonnet lead (lead-model count, the kit's own dev repo excluded). **Safety:** the rules that must not depend on an agent remembering them are wired as
+a cross-lab review) or per session when the work deserves a cleverer Lead. What is actually
+demonstrated here is that the cheap default holds, not a measured saving: two out of three of the
+author's own August sessions start on a Sonnet lead (a lead-model count, the kit's own dev repo
+excluded). The kit keeps no spend record, so it cannot show a before/after bill; what it can show
+is which tier ran, per spawn, via the check-in line. **Safety:** the rules that must not depend on an agent remembering them are wired as
 **hooks** your CLI runs before a tool call - force-pushes, secrets, credential edits can be
 hard-stopped, not remembered-about (each guard opt-in, one flag). Nothing here needs a server or a
 subscription: files in `~/.claude` and POSIX shell.
@@ -95,11 +98,29 @@ only says "no" invites the model to try a variant; these close that door explici
 > Recursive GNU grep without -a/--text silently skips files it deems binary (NUL/invalid bytes;
 > plain CJK is fine) - documented CLAUDE.md footgun. Re-run with 'rg' (preferred) or add '-a' to grep.
 
-**A spawn's check-in line** - every tier opens by quoting its tier, live model, and definition
-version, so a stale agent definition is visible the moment it speaks:
+**The lost-exit-code strand** (`long-run-guard`) denies a long check/build/commit that is piped,
+backgrounded, under-timed, or polled in a while/until+sleep loop:
 
-> Hi, I'm worker - Worker tier, running sonnet at medium reasoning, def-v4. Task: create and
-> verify a slugify shell script.
+> deny: piping or redirecting a long check/build/commit's own output discards its exit code. run
+> it foreground, no pipe, timeout: 900000 on the tool call, and read the exit code directly.
+
+**The blanket git add / shared stash** (`git-add-stash-guard`) denies `git add -A`/`--all`/`.`/`:/`/
+bare `-u`, and every `git stash` subcommand but `list`/`show` - a stash is one ref shared by every
+worktree of the repo, so one session's stash can take another's uncommitted work.
+
+**The hand-rolled worktree recipe** (`worktree-guard`) denies a `git worktree add` without
+`--detach`, or any `git worktree remove`, with the same pattern in the message: use
+`scripts/worktree.sh up <name>`/`down <name>` instead, or add `--detach` for a throwaway review
+target.
+
+**A spawn's check-in line** identifies its role and definition version, so a stale
+definition is visible. It does not certify the model or effort:
+
+> Hi, I'm worker - Worker tier, def-v8. Task: create and verify a slugify shell script.
+
+Model/effort evidence is separate: requested settings are declared; adapter resolution and
+runtime observations name their sources. Missing runtime evidence is labelled unverified.
+The shared contract lives in agent-tiers, "The check-in line" (SC-6.4).
 
 **Doctrine firing mid-session** - rules carry stable ids (`SC-*`), and hooks quote them at the
 moment they apply, in the agent's own transcript. This one fired at the session that was building
@@ -128,9 +149,9 @@ as inert data and reports, installing nothing.
 
 | What | Ships |
 |---|---|
-| **Agents** | Lead / Worker / Advisor / Reviewer / Boss, plus optional Codex handoff |
-| **Skills** | tier vocab, delegation, session handoff, context-file layout, doc lifecycle |
-| **Commands** | `init`, `doctor`, `gc`, `hygiene`, `resume`, `notes`, `unattended` |
+| **Agents** | Lead / Sublead / Worker / Advisor / Reviewer / Boss, plus optional Codex handoff |
+| **Skills** | tier vocab, delegation, session handoff, context-file layout, doc lifecycle, plan waves |
+| **Commands** | `init`, `doctor`, `gc`, `hygiene`, `resume`, `notes`, `unattended`, `context-map` |
 | **Config** | a VCS-policy config file |
 | **Hooks** | core SessionStart/SessionEnd rows, plus consent-wired PreToolUse guards |
 | **Templates + scripts** | env probe, flat install, doctrine lint, notes sync, kit share, selfchecks |
@@ -146,13 +167,15 @@ install - staleness stamps, gated curation, VCS policy, the private-notes seam -
   on code, curates noisy first-pass audit drafts into one trustworthy list - a gated escalation), `boss`
   (read-only, human-gated circuit-breaker for a stuck Lead - runs a model DIFFERENT from the Lead's for
   real independence (opus under a sonnet Lead; fable if opus was already implicated); decides, never
-  explores), and a
+  explores), `sublead` (opus, gated by a `[sublead-approved:]` tag: leads one independent slice of a
+  plan over its own children, never pushes), and a
   generic `worker` (cheap/fast, mechanical, follows the brief, never decides). Optional cross-lab
   `codex-read` / `codex-write` (OpenAI Codex handoff - read/generate-only and write paths) ship too.
 - **Skills** - `agent-tiers` (tier vocab + the check-in technique & return gotcha), `gating-workflow`,
   `delegation` (+ the build->prove->propagate rollout rule), `session-handoff`, `context-file-layout` (CLAUDE.md +
   context-file structure + a refactor playbook), `doc-lifecycle` (how a private notes-dir doc reaches a
-  clean terminal state).
+  clean terminal state), `plan-wave` (run a plan's ready rows as parallel `sublead` agents, one
+  worktree each, forks relayed to the human, merged in wave order).
 - **Commands:** `init` (set up a project), `doctor` (health + lifecycle report), `gc` (gated curator /
   optimiser), `hygiene` (backfix em/en dashes + invisible chars in a project's files), `resume` (refresh
   the handoff, steerable like `/compact <steer>`), `notes` (private-notes seam), `unattended`
@@ -181,7 +204,7 @@ different claims).
 | `dangerous-actions-blocker` | consent, `--with-<id>` | Hard-denies force-push to main/master, `DROP`/`TRUNCATE DATABASE`, `dd`/`mkfs`, publishes, secret shapes on a command line |
 | `security-gate` | consent, `--with-<id>` | Scans content being written - every file type - for secrets and injection-prone patterns |
 | `grep-footgun-guard` | consent, `--with-<id>` | Blocks recursive raw `grep`, which silently skips NUL-byte files |
-| `review-gate-guard` | consent, `--with-<id>` | Asks at `git commit` when no reviewer/advisor spawn exists this session |
+| `review-gate-guard` | consent, `--with-<id>` | Asks at the repo's ship point (commit and push by default; push only when `review_gate: push`) when no reviewer/advisor spawn exists this session |
 | `codex-guard` | consent, `--with-<id>` | Denies bare `codex`; routes through the `codex-run.sh` wrapper and its secrets scan |
 
 PreToolUse guards are security policy - they run before every matching tool call, so never probe-wired.
@@ -255,6 +278,8 @@ project. Detect a plugin-ignoring host: `CLAUDE_CODE_EXECPATH` contains `.codemo
 
 Running a second Claude account? One kit serves every profile via `CLAUDE_CONFIG_DIR` - see
 [docs/after-install.md](docs/after-install.md#second-claude-account-claude_config_dir).
+Protected branches, notification focus and state retention are per-install environment settings:
+[docs/after-install.md](docs/after-install.md#per-install-settings-environment).
 
 > [!WARNING]
 > Edit ONLY the canonical files under `~/.claude/agent-tiers/`. Skills + agents are
@@ -297,7 +322,7 @@ native agent `extends`, so the seam is the `skills:` hook):
 
 An unprefixed L3 name would replace the global tier of the same name, which is why the prefix rule is
 hard. Self-maintenance is split: the `worker` keeps its own **learnings** in `memory: local`;
-**contract** changes are never self-edited - an agent returns a `DEF-DELTA(<name>): ...` line and the
+**contract** changes are never self-edited - an agent flags the proposed change in its return and the
 Lead applies it, gated.
 
 ## Uninstall / removal<a href="#top"><img align="right" src="docs/assets/nav-up.svg" alt=""></a>

@@ -10,15 +10,15 @@
 # vcs_policy feature in the first place was a Lead nudging a commit of RESUME_SESSION.md DESPITE the
 # policy existing. This closes the loop at the one point that's actually observable: the commit itself.
 #
-# `ask` normally, deliberately not a raw `deny`: a policy-ignored file is sometimes committed on purpose
-# (a team may choose `commit` for a given key, or a one-off exception is a real decision, not an error) -
-# unlike the output-hygiene guard's glyph rule, there is no case where the ignore-* disposition is
-# unconditionally wrong to override. `permissionDecisionReason` on `ask` is shown to the USER (not just
-# fed back to the model as `deny`'s is), so this is a human-visible checkpoint, not a self-correcting
-# nudge. (2026-08-27: `ask` still converts to `deny` when nobody is present to make that judgement -
-# an unattended session, or a subagent caller that cannot decide "deliberate exception" on its own
-# authority - see guard_ask_decision/guard_ask_prefix in guard-cmdpos.sh. Both are conversions of a real
-# finding, never a raw infrastructure response.)
+# `deny` on the first attempt (2026-09-14, guard-ask-deny rule): the fix is usually mechanical
+# ($REMEDY, computed below) - untrack or unstage the ignore-* path. `ask` is reserved for the genuine
+# human decision this guard cannot make on its own: "this exception really is deliberate" - gated
+# behind an explicit `[vcs-exception:<path and why>]` marker on the command (guard_marker_text,
+# guard-cmdpos.sh). `permissionDecisionReason` on `ask` is shown to the USER (not just fed back to the
+# model as `deny`'s is), so the marker path is still a human-visible checkpoint, not a self-correcting
+# nudge. `ask` still converts to `deny` when nobody is present to make that judgement - an unattended
+# session, or a subagent caller that cannot decide "deliberate exception" on its own authority (see
+# guard_ask_decision/guard_ask_prefix in guard-cmdpos.sh).
 #
 # Scope of "what this commit touches" - narrower than hygiene-commit-guard.sh's repo-wide unstaged-diff
 # union ON PURPOSE (advisor-reviewed 2026-08-07, docs/_local/2026-08-07-parser-crosscheck-vcs-guard-
@@ -73,17 +73,14 @@
 # behavior difference to migrate.
 #
 # Fail-open on any tooling gap (no jq, no git, cwd missing/unreadable, `git diff`/`git status` failing,
-# no vcs_policy source found or unparsable) - breadcrumbed like every other guard in this kit. Never
-# emits `deny`. Self-check: vcs-commit-guard.selfcheck.sh.
+# no vcs_policy source found or unparsable) - breadcrumbed like every other guard in this kit.
+# Self-check: vcs-commit-guard.selfcheck.sh.
 set -u
 
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s vcs-commit-guard %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 INPUT="$(cat 2>/dev/null || true)"
@@ -102,7 +99,7 @@ fi
 # would hit `set -u`'s unbound-variable error on first use below instead of a clean, breadcrumbed
 # fail-open - opus reviewer, 2026-08-16. Caught here, once, at the same place every other sourcing
 # failure is caught.
-[ -n "${CMDPOS_COMMIT_FRAG:-}" ] && command -v guard_unresolved_repo_flag >/dev/null 2>&1 && command -v guard_cwd_unresolved >/dev/null 2>&1 && command -v guard_ask_decision >/dev/null 2>&1 && command -v guard_ask_prefix >/dev/null 2>&1 && command -v guard_caller_agent >/dev/null 2>&1 && command -v guard_commit_seg >/dev/null 2>&1 && command -v guard_git_add_segs >/dev/null 2>&1 && command -v guard_norm_add_paths >/dev/null 2>&1 || { note "fail-open: guard-cmdpos.sh sourced but CMDPOS_COMMIT_FRAG/guard_unresolved_repo_flag/guard_cwd_unresolved/guard_ask_prefix/guard_caller_agent/guard_commit_seg/guard_git_add_segs/guard_norm_add_paths undefined (stale library?)"; exit 0; }
+[ -n "${CMDPOS_COMMIT_FRAG:-}" ] && command -v guard_unresolved_repo_flag >/dev/null 2>&1 && command -v guard_cwd_unresolved >/dev/null 2>&1 && command -v guard_ask_decision >/dev/null 2>&1 && command -v guard_ask_prefix >/dev/null 2>&1 && command -v guard_caller_agent >/dev/null 2>&1 && command -v guard_commit_seg >/dev/null 2>&1 && command -v guard_git_add_segs >/dev/null 2>&1 && command -v guard_norm_add_paths >/dev/null 2>&1 && command -v guard_marker_text >/dev/null 2>&1 || { note "fail-open: guard-cmdpos.sh sourced but CMDPOS_COMMIT_FRAG/guard_unresolved_repo_flag/guard_cwd_unresolved/guard_ask_prefix/guard_caller_agent/guard_commit_seg/guard_git_add_segs/guard_norm_add_paths/guard_marker_text undefined (stale library?)"; exit 0; }
 SEGMENTS="$(guard_split_segments "$CMD")"
 COMMIT_SEG="$(guard_commit_seg "$SEGMENTS")"
 [ -n "$COMMIT_SEG" ] || exit 0
@@ -166,7 +163,16 @@ PAIRS="$(awk -v key="$VCS_KEY" '
 
 SKIPPED="$(printf '%s\n' "$PAIRS" | grep -a '[<>]')"
 PAIRS="$(printf '%s\n' "$PAIRS" | grep -av '[<>]')"
-[ -n "$SKIPPED" ] && note "skipping placeholder path token(s) (contains < or >, not a real path): $(printf '%s' "$SKIPPED" | tr '\n' ';' | cut -c1-160)"
+# task_agents's placeholder shape (kit-config.md's own header, above) is documented and permanent - it
+# will never stop firing, so breadcrumbing it every single commit is pure noise (measured: it dominates
+# guards.log) that drowns out the rare case where an UNEXPECTED row contains < or > (a real typo/config
+# error worth seeing). Still filtered out of PAIRS either way above - only the LOGGING is conditional.
+# Pinned to the KEY AND the exact known PATH, not the key alone (opus reviewer, 2026-09-02, LOW): a
+# project's own .claude/agent-tiers.local.md (read before kit-config.md - VCS_SRC above) could name an
+# unrelated broken row `task_agents:` with a DIFFERENT placeholder path and have it silently swallowed
+# too if this matched on the key alone.
+SKIPPED_UNEXPECTED="$(printf '%s\n' "$SKIPPED" | grep -av '^task_agents	\.claude/agents/<prefix>-\*\.md	')"
+[ -n "$SKIPPED_UNEXPECTED" ] && note "skipping placeholder path token(s) (contains < or >, not a real path): $(printf '%s' "$SKIPPED_UNEXPECTED" | tr '\n' ';' | cut -c1-160)"
 [ -n "$PAIRS" ] || exit 0
 
 # --- what this commit would touch ---
@@ -276,18 +282,30 @@ else
   REMEDY="unstage it (git restore --staged -- '$HIT_PATH') and add it to .git/info/exclude so it stops recurring"
 fi
 
+# 2026-09-14 (guard-ask-deny rule): MIXED, same shape as kit-leak-guard.sh's WARN arm - the fix is
+# usually mechanical ($REMEDY above), so the first attempt denies with it. Proceeding-anyway is a real
+# human call (only the operator can say "this exception is deliberate"), gated behind an explicit
+# `[vcs-exception:<path and why>]` marker - own tag, so kit-leak-guard.sh's `[leak-exception:...]`
+# never clears this gate. No marker means deny for everyone; a marker still converts ask->deny for an
+# unattended session or a subagent caller, same as every other guard (guard_ask_decision).
 AGENT_TYPE="$(guard_caller_agent "$INPUT")"
-DEC="$(guard_ask_decision "$(sid)" "$AGENT_TYPE")"
-REASON="This commit looks like it would include '$HIT_PATH', which vcs_policy marks '$HIT_KEY: $HIT_DISP' (source: $VCS_SRC). If that's unintentional: $REMEDY."
-# The subagent-converted deny must not end by telling the very actor it just told to stop to "proceed"
-# instead (opus reviewer, 2026-08-27, MEDIUM) - a worker cannot judge "deliberate exception" either.
-if [ -n "$AGENT_TYPE" ]; then
-  REASON="$REASON You cannot judge whether this is a deliberate exception - leave it as-is, stop, and report this back to the Lead."
-else
-  REASON="$REASON If it's a deliberate exception, proceed."
+EXC="$(guard_marker_text "$CMD" vcs-exception)"
+if [ -n "$EXC" ]; then
+  DEC="$(guard_ask_decision "$(sid)" "$AGENT_TYPE")"
+  REASON="This commit looks like it would include '$HIT_PATH', which vcs_policy marks '$HIT_KEY: $HIT_DISP' (source: $VCS_SRC). Marked as a deliberate exception: [vcs-exception:$EXC]. If it's not: $REMEDY."
+  # The subagent-converted deny must not end by telling the very actor it just told to stop to "proceed"
+  # instead (opus reviewer, 2026-08-27, MEDIUM) - a worker cannot judge "deliberate exception" either.
+  if [ -n "$AGENT_TYPE" ]; then
+    REASON="$REASON You cannot judge whether this is a deliberate exception - leave it as-is, stop, and report this back to the Lead."
+  fi
+  REASON="$(guard_ask_prefix "$(sid)" "$AGENT_TYPE")${REASON}"
+  note "$DEC: $HIT_PATH ($HIT_KEY: $HIT_DISP), [vcs-exception:] marker present [sid=$(sid) agent=${AGENT_TYPE:-lead}]"
+  jq -n --arg r "$REASON" --arg d "$DEC" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+  exit 0
 fi
-REASON="$(guard_ask_prefix "$(sid)" "$AGENT_TYPE")${REASON}"
-note "$DEC: $HIT_PATH ($HIT_KEY: $HIT_DISP) [sid=$(sid) agent=${AGENT_TYPE:-lead}]"
-jq -n --arg r "$REASON" --arg d "$DEC" \
-  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: $d, permissionDecisionReason: $r}}'
+note "deny: $HIT_PATH ($HIT_KEY: $HIT_DISP), no [vcs-exception:] marker [sid=$(sid) agent=${AGENT_TYPE:-lead}]"
+REASON="This commit looks like it would include '$HIT_PATH', which vcs_policy marks '$HIT_KEY: $HIT_DISP' (source: $VCS_SRC). $REMEDY; if this is a deliberate exception, append a trailing shell comment naming the path and why - \`# [vcs-exception:<path and why>]\` - and retry. Never inside \`-m\` and never a bare trailing word (git reads it as a pathspec, or (with \`-m\`) commits it into history)."
+jq -n --arg r "$REASON" \
+  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 exit 0

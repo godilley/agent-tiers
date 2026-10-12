@@ -1,0 +1,89 @@
+#!/bin/sh
+# Pre-commit gate: for every staged script that has a sibling `.selfcheck.py`/`.selfcheck.sh` (or is
+# itself one), run that selfcheck once and block the commit if any fails or prints a SKIP line.
+#
+# CAVEATS:
+#   - Runs the WORKING TREE copy of each selfcheck and script, not the staged/index content. A
+#     partially staged file (edited further after `git add`) is checked in its current unstaged form,
+#     not what will actually be committed.
+#   - `git commit --no-verify` bypasses this hook entirely.
+#
+# Enable once per clone: git config core.hooksPath .githooks
+
+set -u
+
+selfcheck_for() {
+    # $1 = a staged path. Prints the sibling selfcheck path if one exists, or the path itself if it
+    # already IS a selfcheck.
+    path=$1
+    case "$path" in
+        *.selfcheck.py|*.selfcheck.sh)
+            printf '%s\n' "$path"
+            return
+            ;;
+    esac
+    case "$path" in
+        *.py) sc="${path%.py}.selfcheck.py" ;;
+        *.sh) sc="${path%.sh}.selfcheck.sh" ;;
+        *) return 0 ;;
+    esac
+    if [ -f "$sc" ]; then
+        printf '%s\n' "$sc"
+    fi
+    return 0
+}
+
+to_run=$(
+    git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n' | while IFS= read -r f; do
+        selfcheck_for "$f"
+    done | sort -u
+)
+
+# Doctrine commits also get the drift lint itself, not only the staged scripts' selfchecks. Until now
+# lint-doctrine.sh had no arrival event on this repo: the CI leg that runs it is gated to public or
+# dispatched runs, so on a commit to private master it ran when someone remembered to run it. Check 9
+# exists to catch doctrine claiming enforcement nothing provides, and a lint nobody runs is that same
+# failure one level up. Placed before the early exit below, since a doctrine-only commit stages no script.
+ROOT=$(git rev-parse --show-toplevel)
+if git diff --cached --name-only --diff-filter=ACMR \
+   | grep -qE '^(skills/agent-tiers/.*\.md|agents/.*\.md)$'; then
+    if ! lint_out=$(bash "$ROOT/scripts/lint-doctrine.sh" 2>&1); then
+        echo "pre-commit: lint-doctrine.sh reported findings, commit blocked:" >&2
+        printf '%s\n' "$lint_out" | grep -a '^FAIL' >&2
+        echo "(run scripts/lint-doctrine.sh for the detail)" >&2
+        exit 1
+    fi
+fi
+
+[ -z "$to_run" ] && exit 0
+
+failed_log=$(mktemp)
+trap 'rm -f "$failed_log"' EXIT
+
+# Git exports absolute GIT_DIR and GIT_INDEX_FILE to a hook run from a linked worktree (probed
+# 2026-09-23, git 2.55). Every selfcheck below builds a throwaway repo with git init, and with those
+# two inherited every git command inside it would act on THIS repo instead. Clear them once here.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
+
+echo "$to_run" | while IFS= read -r sc; do
+    [ -z "$sc" ] && continue
+    case "$sc" in
+        *.py) out=$(python3 "$sc" 2>&1); rc=$? ;;
+        *.sh) out=$(sh "$sc" 2>&1); rc=$? ;;
+        *) continue ;;
+    esac
+    if [ "$rc" -ne 0 ] || printf '%s\n' "$out" | grep -q '^SKIP'; then
+        {
+            printf 'FAILED %s\n' "$sc"
+            printf '%s\n' "$out" | sed 's/^/  /'
+        } >> "$failed_log"
+    fi
+done
+
+if [ -s "$failed_log" ]; then
+    echo "pre-commit: selfcheck(s) failed, commit blocked:" >&2
+    cat "$failed_log" >&2
+    echo "(fix the above, or 'git commit --no-verify' to bypass)" >&2
+    exit 1
+fi
+exit 0

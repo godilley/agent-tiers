@@ -1,12 +1,20 @@
 ---
 description: Probe the local environment and self-configure the agent-tier system for THIS project (records model/effort resolution, scaffolds the project brief skill + optional task agents, CLAUDE.md tier block, and the resume handoff).
-argument-hint: "[--reprobe] (re-run the env probe even if a record already exists)"
+argument-hint: "[--reprobe] (re-run the env probe even if a record already exists) [--scaffold-only] (skip the host probe, steps 1-5)"
 allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Task
 ---
 
 You are the **Lead**. Set up the agent-tier kit for the current project. Work through these steps,
 checkpointing with the user where noted. Do NOT pin the Lead's own model/effort anywhere - those are
 GUI-owned; you only configure and verify the SUB-agents.
+
+**Probe skip.** Run `printf '%s\n' "${CLAUDE_CODE_ENTRYPOINT:-}"` first. If it prints `cli` (the interactive
+native CLI, a proven host - see the HOST card, HOST-1) or the argument `--scaffold-only` was given, and
+`--reprobe` was not, SKIP steps 1-5: record nothing about the host and never write `probed_at:`. If
+`.claude/agent-tiers.local.md` does not exist, create it from the template and DELETE its `probed_at:` line
+(the SessionStart hook reads any `probed_at:` line as probed, even `"{{PROBED_AT}}"` or an empty value, and
+would then never flag a non-native host), then continue at step 5b. `sdk-cli` or any other value runs the full probe (third-party GUI hosts report
+`sdk-cli` too).
 
 ## 1. Bash-readable probe
 Run the probe and read its output:
@@ -18,30 +26,28 @@ Note: `anthropic_model` (the inherited default), `effort_env` (if non-empty it P
 
 ## 2. Sub-agent EFFORT resolution (auto)
 Spawn the `worker` agent ONCE with this exact trivial brief (no project work):
-> "Run `printf '%s\n' \"$CLAUDE_EFFORT\"` and return only that value on your check-in line. Do nothing else."
+> "Run `printf '%s\n' \"$CLAUDE_EFFORT\"` and report the tool result as harness effort separately from your role/definition check-in. If empty, report unverified. Do nothing else."
 
-Compare the returned effort to the worker's frontmatter `effort: medium`:
+Compare the sourced, nonempty tool result to the worker's frontmatter `effort: medium` (an empty/missing result remains unverified):
 - If they MATCH and differ from `lead_effort` → frontmatter effort is honored and sub-agents dial down
   independently of the Lead. Record `frontmatter_effort_real: <value>`.
 - If the worker's effort equals `effort_env` instead → the env PINS effort; frontmatter can't lower it.
 
-## 3. Sub-agent MODEL resolution (guided - cannot be auto-probed)
-A sub-agent cannot reliably introspect its own live model; its check-in text is just declared. The only
-ground truth is the GUI's agent/model panel. So ASK the user (AskUserQuestion), referencing the worker
-spawn from step 2:
-> "In your Claude Code GUI's agent/model panel, what model did the `worker` spawn just run as?"
-Options should include the worker's frontmatter model (`sonnet`) and the inherited `anthropic_model`
-from step 1, plus Other.
-- Worker ran as `sonnet` → frontmatter `model:` OVERRIDES the inherited env. Record
-  `frontmatter_model_overrides: true`.
-- Worker ran as the inherited model → frontmatter is ignored here; record `false` and WARN the user the
-  cheap-Worker lever doesn't work in this GUI (they may need to set the model another way).
+## 3. Sub-agent MODEL resolution (runtime evidence)
+Apply the shared identity-evidence contract (SC-6.4) to the worker invocation from step 2.
+Record its requested selector/alias and the inherited default separately. Inspect the native
+harness record for that same child/turn; name its source. If the adapter translates aliases,
+record the concrete resolved model and any upstream observation separately. A greeting,
+brief, launch flag or rewritten panel label does not verify the backend model.
 
-**Known-host shortcut:** if the probe reported `host_guess=codemoss`, this resolution is already verified
-(see the probe's `known_resolution=` line): `model:` OVERRIDES the inherited env, frontmatter `effort:` is
-honored, `CLAUDE_CODE_EFFORT_LEVEL` is exported empty (no pin), `~/.claude/settings.json` effort is ignored,
-and `advisor` is RO-enforced. Make `sonnet` the **(Recommended)** first option so the user confirms in one
-tap instead of hunting the panel - only fall through to the full panel check if they report otherwise.
+If only the GUI panel is accessible, ask the user for the value displayed for that worker.
+Record it as **panel-reported**, with runtime/upstream identity **unverified** unless the host
+exposes evidence establishing what that label represents. Do not label the panel "ground truth".
+- Record `frontmatter_model_overrides: true` or `false` only when evidence distinguishes the
+  worker selection from inheritance. If both resolve to the same model, this probe cannot decide.
+- Otherwise record `frontmatter_model_overrides: null` and explain the missing evidence; do not
+  guess or record a verified-looking boolean. Host-name shortcuts are historical expectations,
+  not observations of this invocation.
 
 ## 4. Tool enforcement (derivable)
 Confirm `advisor` ships `tools: Read, Grep, Glob` only - record `advisor_readonly_enforced: true`
@@ -50,8 +56,9 @@ Write` (read-only on code; writes only its one curated file).
 
 ## 5. Record findings to BOTH places
 **(a)** Write `.claude/agent-tiers.local.md` from `${CLAUDE_PLUGIN_ROOT}/templates/agent-tiers.local.md`,
-filling the frontmatter with the resolved values + `host`, `probed_at`.
-**(b)** Write the same facts to always-loaded auto-memory so the Lead knows them every session without
+filling the frontmatter with supported findings + `host`, `probed_at`. Preserve requested,
+resolved and observed distinctions in the evidence section; missing evidence stays unverified.
+**(b)** Preserve the same evidence sources and unverified fields when writing findings to always-loaded auto-memory so the Lead knows them every session without
 re-probing: locate this project's memory dir (the path used by your harness's auto-memory; commonly
 `~/.claude/projects/<slug>/memory/`), write/update `agent_tier_env_behavior.md`, and add a one-line
 pointer to that project's `MEMORY.md` index. If you can't find a memory dir, say so and rely on (a).
@@ -64,7 +71,7 @@ ABSENT (plugin-path installs do not ship it - only the flat installer creates it
 defaults (every class `ignore-personal`, `agent_memory_project: commit`), say so in the table, and suggest
 creating it via `install-flat.sh` or by copying the template block from that script. Build the resolved
 disposition table for the artifacts this project will have - `agent_tiers_local`, `project_brief`,
-`task_agents`, `agent_memory_local`, `resume_session`, `attempts_log`, `private_notes` (and
+`task_agents`, `agent_memory_local`, `resume_session`, `private_notes` (and
 `agent_memory_project` ONLY if the project opts into `memory: project`). Present the table, then
 **AskUserQuestion** with a **"(Recommended) accept kit defaults"** first option, plus the chance to
 override any line. Apply each disposition:
@@ -96,6 +103,18 @@ in step 6d).
   silently REPLACES a same-named global agent), hooking `tier-project-brief`. Scaffold one and prove it
   before adding more (build → prove → propagate). ⚠️ A newly-created agent file only becomes spawnable
   after the watcher registers it - seconds on the standalone CLI, but can be minutes on some GUIs.
+  - **A domain-specific procedure has its own starting template**, still following build → prove →
+    propagate: **QA** (modes `red` / `run` / `fix-tests`, evidence-table contract) from
+    `${CLAUDE_PLUGIN_ROOT}/templates/task-agent.qa.md`, filling `{{PREFIX}}`, `{{PROJECT}}`, written to
+    `.claude/agents/<prefix>-qa.md`. This one needs a real test command to do anything, so it is stricter
+    than the L2 brief's own graceful-skip default (MAINT-1: a MISSING brief lets the generic
+    `worker`/`advisor`/`reviewer` fall back to working generically - fine for them, but this agent's whole
+    job IS the brief's test command). **Check before scaffolding, don't just offer it:** confirm
+    `.claude/skills/tier-project-brief/SKILL.md` exists AND its `## Test / verify` section has neither the
+    unfilled command-line template slot nor the unfilled verify-rule slot right after it still in place;
+    if any of those is missing, write or finish the brief first rather than scaffolding an agent that can
+    only ever return `blocked`. The scaffolded agent also refuses this same check at spawn time as a
+    second, independent line of defense. Frontend and DB starting templates are not built yet.
 - **CLAUDE.md kit block:** inject the contents of `${CLAUDE_PLUGIN_ROOT}/templates/tiers-block.md`
   into the project `CLAUDE.md` (create it if absent), so the tier vocabulary **and the
   build→prove→propagate rule** are always loaded. **Idempotent:** if a kit block (the `## Agent tiers` ...
@@ -114,8 +133,9 @@ in step 6d).
   content alone - suggest *structure* only, never overwrite their about-you / machine / preferences.
 - **Resume handoff:** if no `RESUME_SESSION.md` exists, offer to drop
   `${CLAUDE_PLUGIN_ROOT}/templates/RESUME_SESSION.md`. The agent-tiers **SessionStart hook auto-injects
-  it** on compact/resume/clear - no per-project wiring needed. That hook ships in the plugin for the
-  standalone CLI; under a **plugin-ignoring GUI** (e.g. CodeMoss) it's the GLOBAL `~/.claude/settings.json`
+  it** on startup/compact/resume/clear, capped so the whole inject stays under the host's 10000-character inline limit, which leaves about 5-8 KB for the handoff (past the cap: the head, cut at a whole
+  line, plus a line naming the file to Read) - no per-project wiring needed. That hook ships in the
+  plugin for the standalone CLI; under a **plugin-ignoring GUI** (e.g. CodeMoss) it's the GLOBAL `~/.claude/settings.json`
   hook that `scripts/install-flat.sh` wires. (A project may instead drop its own
   `.claude/hooks/load-resume.sh`; the global hook then stands down for it.)
 - **Private-notes seam (6d - offer; recommend YES if the repo shares a `docs/` tree with an upstream or a

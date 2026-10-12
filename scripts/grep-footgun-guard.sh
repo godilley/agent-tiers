@@ -37,10 +37,6 @@ command -v jq >/dev/null 2>&1 || exit 0   # no jq -> can't parse; fail open (nev
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 [ -n "$CMD" ] || exit 0
 
-# Heredoc present -> this is writing a file/feeding stdin, not running grep. Stand down: heredoc bodies
-# carry real newlines that the per-line split below would misread as grep invocations. (ponytail carve-out)
-case "$CMD" in *'<<'*) exit 0 ;; esac
-
 # Judge PER PIPELINE SEGMENT so a recursive flag on some OTHER command (`ls -R | grep foo`) or an rg
 # in the pipe (`rg -r .. | grep bar`) can't be misattributed to grep. Split via the SHARED
 # guard-cmdpos.sh library (the inline sed copy this replaced was a GNU-ism that glued chained
@@ -51,6 +47,12 @@ case "$CMD" in *'<<'*) exit 0 ;; esac
 SELFDIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 [ -n "$SELFDIR" ] && [ -f "$SELFDIR/guard-cmdpos.sh" ] || exit 0   # fail open: no lib, no split
 . "$SELFDIR/guard-cmdpos.sh" 2>/dev/null || exit 0
+
+# Heredoc present -> this is writing a file/feeding stdin, not running grep. Stand down: heredoc bodies
+# carry real newlines that the per-line split below would misread as grep invocations.
+# guard_has_heredoc (guard-cmdpos.sh, 2026-09-02): was an inline case here, extracted once a 3rd/4th
+# consumer needed the identical carve-out.
+guard_has_heredoc "$CMD" && exit 0
 SEGMENTS="$(guard_split_segments "$CMD")"
 
 HIT="$(printf '%s\n' "$SEGMENTS" | while IFS= read -r seg; do

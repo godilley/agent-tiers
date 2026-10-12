@@ -76,9 +76,6 @@ BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s dangerous-actions-blocker fail-open: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 # T2.6 (2026-08-16): the reason is read by the MODEL as the acting party (under cc-gui / -p nobody else
@@ -137,6 +134,57 @@ if [ "$TOOL" = "Bash" ]; then
   push_reason() {
     echo "Force-push with no explicit ref targets whatever branch is checked out in the repo the command runs in, and this guard cannot work out WHICH repo that is: $1. Denied rather than guessed past - a force-push to main/master is irreversible, a re-spelled command costs one retry. Make it resolvable: spell the path literally, create the directory in a SEPARATE tool call first, re-spell --git-dir/--work-tree as a -C into the repo, or name the branch explicitly in the refspec so no branch resolution is needed."
   }
+  # Config can only ADD protected names - main/master stay hardcoded below, never env-gated.
+  # $1 = the directory already resolved for this push (may be "unresolved ..." or empty); used only
+  # to read the remote's default branch, never to decide allow/deny (that stays guard_cwd_unresolved's
+  # job, unchanged, further down). A name from the remote or from AGENT_TIERS_PROTECTED_BRANCHES is
+  # rejected unless every char is in [A-Za-z0-9._/-] - a hostile value must not inject regex syntax
+  # into the alternation this builds; a literal "." in a kept name is escaped so it still matches only
+  # itself, not "any char" (over-wide would be a false-deny risk on an unrelated branch, not a
+  # weakening, but there is no reason to accept it).
+  protected_branch_re() {
+    PB_DIR="$1"
+    PB_NAMES="main|master"
+    case "$PB_DIR" in
+      ""|unresolved\ *) : ;;
+      *)
+        if command -v git >/dev/null 2>&1; then
+          # Full ref form, not --short: --short can return an ambiguous "remotes/origin/x" on a
+          # ref name that collides elsewhere in the refs namespace, and the origin/-prefix strip
+          # below would then silently drop it (leaving PB_DEF_NAME unset instead of wrong - safe,
+          # but the full form is unambiguous so there is no reason to accept that risk).
+          PB_DEF_REF="$(cd "$PB_DIR" 2>/dev/null && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || true)"
+          PB_DEF_NAME="${PB_DEF_REF#refs/remotes/origin/}"
+          # git itself allows ( ) + { | in a branch name - unescaped, any of those makes the
+          # alternation an INVALID ERE, grep exits 2, the caller's `if` reads that as no-match, and
+          # the deny is skipped for main/master too (a remote-controlled value weakening a hard deny).
+          # Same charset gate as AGENT_TIERS_PROTECTED_BRANCHES below: reject rather than escape.
+          case "$PB_DEF_NAME" in
+            *[!A-Za-z0-9._/-]*) PB_DEF_NAME="" ;;
+          esac
+          if [ -n "$PB_DEF_NAME" ] && [ "$PB_DEF_NAME" != "$PB_DEF_REF" ]; then
+            PB_NAMES="$PB_NAMES|$(printf '%s' "$PB_DEF_NAME" | sed 's/\./\\./g')"
+          fi
+        fi
+        ;;
+    esac
+    # noglob around the loop: an unquoted `for x in $VAR` word-splits AND pathname-expands, so a
+    # value like "release/*" would glob against the hook's OWN cwd and iterate real filenames
+    # instead of the literal string (found in review). Restore the prior noglob state rather than
+    # assuming it was off - `set +f` unconditionally would turn ON globbing for the rest of the
+    # script if some caller had already set -f.
+    case $- in *f*) PB_HADF=1 ;; *) PB_HADF=0 ;; esac
+    set -f
+    for PB_EXTRA in ${AGENT_TIERS_PROTECTED_BRANCHES:-}; do
+      case "$PB_EXTRA" in
+        "") continue ;;
+        *[!A-Za-z0-9._/-]*) continue ;;
+      esac
+      PB_NAMES="$PB_NAMES|$(printf '%s' "$PB_EXTRA" | sed 's/\./\\./g')"
+    done
+    [ "$PB_HADF" = 1 ] || set +f
+    printf '%s' "$PB_NAMES"
+  }
   push_n=0
 
   # fork-bomb check runs against the WHOLE command, NOT per-segment: the bomb's own syntax legitimately
@@ -193,6 +241,13 @@ if [ "$TOOL" = "Bash" ]; then
       # introduced by making detection GITOPTS-aware). BARE_PUSH_SHAPE still reads the whole stripped
       # segment: its job is to match the option span and the tail together.
       segtail="$(printf '%s' "$segb" | sed -E "s#${CMDPOS_PREFIX}git[[:space:]]+(${CMDPOS_GITOPTS})*push##")"
+      # RCWD/PROTECTED_RE are resolved LAZILY (at most once per push segment, by either leg below) -
+      # reset here so a PREVIOUS push segment's values are never reused for this one.
+      RCWD=""
+      PROTECTED_RE=""
+      # ORIGINAL static main/master check, text UNCHANGED from before the remote-default/env-config
+      # addition further down: this is the one path that must keep working even if every dynamic
+      # mechanism below it has a bug, so it stays a plain literal grep, never built from a variable.
       if printf '%s' "$segtail" | grep -aqE '(--force(-with-lease)?\b|(^|[[:space:]])-f([[:space:]]|$)|(^|[[:space:]])\+(origin/)?(main|master)\b)'; then
         if printf '%s' "$segtail" | grep -aqE '(^|[[:space:]/:+])(main|master)([[:space:]:]|$)'; then
           echo "Force-push targeting main/master is a hard deny."; break
@@ -213,7 +268,7 @@ if [ "$TOOL" = "Bash" ]; then
           fi
           # push_n = WHICH push segment this is. guard_resolve_cwd stops at the first stop_ere match by
           # default, which is the wrong segment for every push after the first (HIGH, same review).
-          RCWD="$(guard_resolve_cwd "$SEGMENTS" "$PUSH_FRAG" "$PAYLOAD_CWD" push "$push_n")"
+          [ -n "$RCWD" ] || RCWD="$(guard_resolve_cwd "$SEGMENTS" "$PUSH_FRAG" "$PAYLOAD_CWD" push "$push_n")"
           if guard_cwd_unresolved "$RCWD"; then
             # An EMPTY payload cwd with no cd/-C in the command is a tooling gap (no directory to
             # start the walk from), not an unresolvable target - fail open with a breadcrumb, the same
@@ -232,7 +287,45 @@ if [ "$TOOL" = "Bash" ]; then
             case "$CUR_BRANCH" in
               (main|master) echo "Force-push with no explicit ref targets the CURRENT branch ($CUR_BRANCH) - a hard deny."; break ;;
             esac
+            # Dynamic protected names (remote default branch + AGENT_TIERS_PROTECTED_BRANCHES) cannot
+            # share the leading-paren case above - a pattern built from a variable hits the same bash
+            # 3.2 parse failure the comment above describes, just with the variable's value instead of
+            # a literal - so loop over the names instead of a case alternation. A plain string compare,
+            # not a grep, so there is no ERE-injection surface here even before protected_branch_re's
+            # own charset filter.
+            [ -n "$PROTECTED_RE" ] || PROTECTED_RE="$(protected_branch_re "$RCWD")"
+            case $- in *f*) PB_HADF=1 ;; *) PB_HADF=0 ;; esac
+            set -f
+            for PB_NAME in $(printf '%s' "$PROTECTED_RE" | tr '|' ' '); do
+              PB_NAME="$(printf '%s' "$PB_NAME" | sed 's/\\\./\./g')"
+              if [ "$CUR_BRANCH" = "$PB_NAME" ]; then
+                [ "$PB_HADF" = 1 ] || set +f
+                echo "Force-push with no explicit ref targets the CURRENT branch ($CUR_BRANCH) - a hard deny."; break 2
+              fi
+            done
+            [ "$PB_HADF" = 1 ] || set +f
           fi
+        fi
+      fi
+      # SEPARATE dynamic-name check (remote default branch + AGENT_TIERS_PROTECTED_BRANCHES), run
+      # AFTER the static main/master check above, never folded into it: a bug in this leg (or a
+      # hostile config value) can then never disable the static deny, only miss ITS OWN extra names.
+      # Gated on a GENERIC force-push shape (any force flag, or a leading "+" on any ref - not just
+      # main/master) so a plain non-force push never pays for guard_resolve_cwd/protected_branch_re.
+      if printf '%s' "$segtail" | grep -aqE '(--force(-with-lease)?\b|(^|[[:space:]])-f([[:space:]]|$)|(^|[[:space:]])\+[A-Za-z0-9_./-])'; then
+        [ -n "$RCWD" ] || RCWD="$(guard_resolve_cwd "$SEGMENTS" "$PUSH_FRAG" "$PAYLOAD_CWD" push "$push_n")"
+        [ -n "$PROTECTED_RE" ] || PROTECTED_RE="$(protected_branch_re "$RCWD")"
+        PB_DYN_MATCH="$(printf '%s' "$segtail" | grep -aoE "(^|[[:space:]/:+])(${PROTECTED_RE})([[:space:]:]|\$)" 2>/dev/null)"
+        PB_DYN_STATUS=$?
+        if [ "$PB_DYN_STATUS" -gt 1 ]; then
+          # A protected-branch name that still broke the pattern despite protected_branch_re's own
+          # charset filter (defense in depth, not the expected path) - deny rather than let an
+          # unreadable check silently pass as allow.
+          echo "Force-push branch-name check failed (a protected-branch config value - the repo's remote default branch, or AGENT_TIERS_PROTECTED_BRANCHES=\"${AGENT_TIERS_PROTECTED_BRANCHES:-}\" - produced an invalid pattern) - denied rather than allowed past a broken check."; break
+        fi
+        if [ -n "$PB_DYN_MATCH" ]; then
+          PB_DYN_MATCH="$(printf '%s' "$PB_DYN_MATCH" | head -1 | sed -E 's#^[[:space:]/:+]*##; s#[[:space:]:]*$##')"
+          echo "Force-push targeting protected branch ($PB_DYN_MATCH) is a hard deny."; break
         fi
       fi
     fi

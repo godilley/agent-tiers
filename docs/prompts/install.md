@@ -7,7 +7,7 @@ inspection dir until you say go.
 ---
 
 I want to install the **agent-tiers** kit from https://github.com/godilley/agent-tiers - a small,
-portable Claude Code add-on that sets up a Lead / Worker / Advisor / Reviewer / Boss sub-agent
+portable Claude Code add-on that sets up a Lead / Sublead / Worker / Advisor / Reviewer / Boss sub-agent
 tier system, two optional companions (an agentsview session ledger, a Codex cross-lab "dual-lab
 review"), plus a light plan/gate + session-handoff workflow.
 

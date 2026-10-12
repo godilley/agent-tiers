@@ -5,6 +5,20 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.12 - 2026-10-12
+
+Kit add Sublead tier, plan-wave skill, task-spawn-guard, memory-write-gate, peer-guard, worktree.sh (up/down/list), long-run-guard, notify system (desktop/OSC notifications + Stop-tag gate), ask-gate, pre-commit selfcheck hook, context-map tool, MEMORY policy card.
+
+Security/safety: git-add-stash-guard, demo-css-guard, agent-selfdef-guard, sc52a-write-disclosure-guard, read-basis-guard, simple-rules-guard (6 misc rules), subagent-bg-return-guard, portable-citation-advisory.
+
+Guard behavior change: most form-fixable guards now DENY instead of ASK (guard-ask-deny rule); exception markers moved to trailing comments, not bare words.
+
+review-gate-guard: now gates push/PR too, per-repo `review_gate: commit|push` mode.
+
+Fixes: heredoc-body false matches across many guards (strip body, keep opener); dangerous-actions-blocker adds dynamic protected-branch names; guards.log rotates instead of truncates; resume-inject now restores handoff on startup too, capped to host's 10000-char limit; DEF-DELTA tag retired (unused) in favor of plain-prose flagging.
+
+Docs: agent-tiers doctrine bumped v16→v28, identity-evidence contract added (requested/resolved/observed, no more "model: declared" handwave), ATTEMPTS.md file-ledger retired for in-context tracking, maturity emoji tags retired.
+
 ## v2026.08.31.10 - 2026-08-31
 
 - Fixed selfcheck badge styling in README to match sibling badges (dark label and background colors).

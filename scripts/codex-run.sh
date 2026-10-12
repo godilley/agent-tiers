@@ -50,6 +50,13 @@ for a in "$@"; do
 done
 [ -d "$DIR" ] || { echo "codex-run: workspace '$DIR' does not exist" >&2; exit 2; }
 
+# SC-1.2 arrival event: an unconditional reminder, not a check - this wrapper's scan below (and the
+# filename scan after it) only catches CREDENTIAL-shaped secrets. It has no way to judge business/client
+# sensitivity (real names, unreleased pricing, a client's own confidential docs with no key-shaped
+# content at all) - that classification stays a human/Lead judgment call every time, per SC-1.2, and
+# a clean scan result must never be read as "cleared for business sensitivity too".
+echo "codex-run: workspace '$DIR' - scanned below for credential-shaped secrets ONLY, not business/client sensitivity. Classify that yourself (SC-1.2) before this send." >&2
+
 # --- secrets scan (hard fail-closed, including on scanner error) -----------------------------------
 # Content tripwires (key-material shapes) + filename tripwires (files that ARE key material).
 # Both scanners read EVERYTHING: `--text`/`-a`, no size cap, and symlinks FOLLOWED (`--follow`/`-R`/`-L`).

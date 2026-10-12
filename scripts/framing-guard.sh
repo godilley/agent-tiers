@@ -40,20 +40,14 @@ set -u
 
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
-FRAMING_LOG="${BASE:-${TMPDIR:-/tmp}}/.state/framing.log"
+FRAMING_LOG="${AGENT_TIERS_FRAMING_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/framing.log}"   # env override: matches LOG above, keeps guard-summary's rotator pointed at the same path
 
 note() { # $1 = message - fail-open only, shared log, same convention as every other guard
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s framing-guard fail-open: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
-  if [ -f "$LOG" ] && [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 2500 "$LOG" > "$LOG.tmp" 2>/dev/null && mv -f "$LOG.tmp" "$LOG" 2>/dev/null || true
-  fi
 }
 
 note_hit() { # $1 = message - framing hits, own log, own rotation budget
   { mkdir -p "$(dirname "$FRAMING_LOG")" 2>/dev/null && printf '%s framing-guard hit: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$FRAMING_LOG"; } 2>/dev/null || true
-  if [ -f "$FRAMING_LOG" ] && [ "$(wc -l < "$FRAMING_LOG" 2>/dev/null || echo 0)" -gt 5000 ]; then
-    tail -n 100 "$FRAMING_LOG" > "$FRAMING_LOG.tmp" 2>/dev/null && mv -f "$FRAMING_LOG.tmp" "$FRAMING_LOG" 2>/dev/null || true
-  fi
 }
 
 INPUT="$(cat 2>/dev/null || true)"

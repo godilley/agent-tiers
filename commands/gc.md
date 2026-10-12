@@ -39,10 +39,16 @@ areas the argument names (default: every breached area). If nothing is breached,
 - **memory** (Lead auto-memory `~/.claude/projects/<slug>/memory/`): list stale candidates with the failed
   existence check that damns each; propose retire/merge. Propose merging near-duplicate memories into one
   canonical file + updating `[[links]]`. Re-slim the `MEMORY.md` index to one line per surviving memory.
-  **Maturity re-verification** (dormant until entries carry tags - going-forward only): a 🌱 tag older
-  than ~3 months is a RE-VERIFICATION trigger ONLY - surface it for re-check against the repo, then
-  re-tag (🌿 if it still holds; retire ONLY if its claim is now disproven per the guardrail above). Age
-  alone never retires.
+  **Age-triggered re-verification** (the manual maturity tag is retired, see `cards/MEMORY.md`): prefer the
+  harness-written `metadata.modified` field (memory.md) when a file carries one - it is Claude Code's own
+  record of the last edit, so read it before falling back to mtime. A memory file whose age (by
+  `metadata.modified`, or by **mtime** for a file that predates that field) is older than ~3 months is a
+  RE-VERIFICATION trigger ONLY - surface it for re-check against the repo, then write a
+  `verified: YYYY-MM-DD` frontmatter field (gc-written, not hand-kept, and deliberately separate from
+  `metadata.modified` - that field tracks the last EDIT, this one tracks the last CHECK against the repo,
+  a different event; any edit resets the mtime clock, which is an accepted ceiling of using mtime here).
+  Age alone never retires -
+  retire ONLY if the re-check disproves the claim, per the guardrail above.
 - **agent memories** (`.claude/agent-memory*/<name>/`): consolidate loose `notes-*.md` into that agent's
   `MEMORY.md` (dedup, keep durable facts); if `MEMORY.md` exceeds ~150 lines, propose trimming the least-used.
 - **resume** (`RESUME_SESSION.md`): a RESUME far over threshold is being used as a STORE, so this pass is
@@ -81,4 +87,4 @@ the def-version PENDING-REFRESH protocol (bump the stamp; a fresh spawn is neede
   line when breached (`⚠ lifecycle: ... - /agent-tiers-gc`). Zero model tokens; fires every session.
 - **Lead check-stop:** at checkpoint moments (pre-compact RESUME refresh, just after writing a new memory,
   during init/doctor) glance at the thresholds; breached → OFFER `gc` via a gate. Mirrors
-  [[check-stop-delegate-the-hunt]].
+  the delegation skill's check-stop on a solo hunt.

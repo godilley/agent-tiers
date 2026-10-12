@@ -22,7 +22,28 @@
 set -u
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
-[ -f "$LOG" ] || exit 0
+FRAMING_LOG="${AGENT_TIERS_FRAMING_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/framing.log}"
+
+# Rotate (never truncate) once a log passes ROTATE_BYTES: the record feeds retro/audit and the
+# public-share flow, so old data moves to a dated archive file instead of being discarded (this
+# replaces a tail-truncate every guard writer used to carry in its own note(), which silently
+# dropped whichever lines landed mid read-modify-write - deleted, not kept, in the same wave).
+# Runs LAST (after this session's own summary is read below) so a same-session rotation can never
+# erase the very line it's about to report. mv is an atomic rename - no lock needed; a writer
+# whose open() raced the mv keeps appending to the archived file, which is a stray line, never
+# data loss.
+ROTATE_BYTES="${AGENT_TIERS_LOG_ROTATE_BYTES:-2097152}"   # 2MB; env override lets the selfcheck trigger it small
+rotate_if_large() {
+  f="$1"
+  [ -f "$f" ] || return 0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  [ "${sz:-0}" -gt "$ROTATE_BYTES" ] 2>/dev/null || return 0
+  dest="${f}.$(date +%Y%m%d)"
+  [ -e "$dest" ] && dest="${dest}-$$"   # same-day double rotation is rare; disambiguate, never clobber
+  mv "$f" "$dest" 2>/dev/null
+}
+
+[ -f "$LOG" ] || { rotate_if_large "$FRAMING_LOG"; exit 0; }   # framing.log's rotation must not depend on guards.log existing
 INPUT="$(cat 2>/dev/null || true)"
 SID=""
 command -v jq >/dev/null 2>&1 && SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -65,4 +86,27 @@ else
   LAST="$(printf '%s\n' "$HITS" | tail -1 | sed -E 's/ \[sid=[^]]*\]$//' | cut -c1-160)"
   printf 'agent-tiers: %s guard block(s) %s (deny %s, ask %s); last: %s (record: %s)\n' "$N" "$SCOPE" "$D" "$A" "$LAST" "$LOG" >&2
 fi
+
+# Timeout/kill tracing: a `start [pid=N]` breadcrumb with no matching `end [pid=N] done=1` means the
+# guard was killed (SIGKILL: no end at all) or hit its budget (SIGTERM: end done=0 - an untrapped
+# SIGTERM still runs the EXIT trap, but `$?` there always reads 0, so `done=` is the only reliable
+# signal). Anchored at end-of-line so this can't false-match a guard's free-text reason that happens to
+# contain the substring "start"/"end". No `[sid=]` on these lines (see each guard's own instrumentation
+# comment), so pid is the only join key available - this is scanned over the WHOLE log file (not scoped
+# to this session, unlike deny/ask above), and only the current, unrotated $LOG; a run whose start/end
+# pair straddles a rotation, or a recycled pid reused by an unrelated process days apart, could
+# misreport - disclosed ceiling, not fixed here.
+INCOMPLETE="$(awk '
+  /start \[pid=[0-9]+\]$/ { match($0, /pid=[0-9]+/); starts[substr($0, RSTART+4, RLENGTH-4)]=1 }
+  /end \[pid=[0-9]+\] done=[01]$/ {
+    match($0, /pid=[0-9]+/); p=substr($0, RSTART+4, RLENGTH-4)
+    match($0, /done=[01]/); ends[p]=substr($0, RSTART+5, 1)
+  }
+  END { n=0; for (p in starts) if (!(p in ends) || ends[p]=="0") n++; print n }
+' "$LOG" 2>/dev/null || true)"
+case "$INCOMPLETE" in ''|*[!0-9]*) INCOMPLETE=0 ;; esac
+[ "$INCOMPLETE" -gt 0 ] 2>/dev/null && printf 'agent-tiers: %s guard run(s) did not complete (timeout/kill); see %s\n' "$INCOMPLETE" "$LOG" >&2
+
+rotate_if_large "$LOG"
+rotate_if_large "$FRAMING_LOG"
 exit 0

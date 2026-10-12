@@ -21,7 +21,6 @@
 
 ## Attempts so far (Boss: required; others: if any)
 - tried: <exact command / edit> -> result: <exact error / observation> -> ruled out: <what>
-- (or point at `ATTEMPTS.md`)
 - current hypothesis: <one line>
 
 ## Scope - touch only these (Codex/Worker)
@@ -47,11 +46,12 @@
 - Mode, picked by artifact MATURITY: <ADVERSARIAL (new/unreviewed: "attack it") | CLAIM ADJUDICATION
   (converged: numbered claims, one verdict each CONFIRMED/REFUTED/UNVERIFIABLE; evidence MANDATORY
   for REFUTED; state that zero refutations is a valid outcome - and not to defer either)>
-- Planted control(s) (SC-4.2): <the pre-verified claim/defect, seeded above UNMARKED and formatted
-  like the uncertain items; record them in chat BEFORE spawning>
 - Escape hatches (mandatory on any claim list): end the ask with "which claim are you least
   confident in, and why" + "what is missing".
 
 ## Spawn record (fill at send time)
-- tier: <advisor|boss|worker|codex-write|codex-read> . model: <sonnet|opus|fable|codex-id> . effort: <level>
-  (state the model here so the agent's check-in can report it truthfully)
+- tier: <advisor|reviewer|boss|worker|codex-write|codex-read>
+- requested model selector/alias: <value>; requested effort: <value> (declared, unverified)
+- resolved model/effort: <value + adapter record, or unverified>
+- observed model/effort: <value + harness/runtime evidence tied to this invocation, or unverified>
+- Keep these fields distinct. The brief and agent greeting are not runtime proof (SC-6.4).

@@ -12,6 +12,7 @@
 # never writes (opus reviewer, 2026-08-23, M1) - every fixture below is deliberately multi-line per turn
 # so this class of bug cannot slip past again.
 set -u
+unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS
 SRC_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (guard fails open by design)"; exit 0; }

@@ -5,6 +5,7 @@
 # is supposed to read: the session_id is a path component, and an unvalidated one made it an
 # arbitrary-file read (F-12).
 set -u
+unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS
 # Resolved ABSOLUTELY up front: the helpers below cd into a temp project dir, and a relative $0-derived
 # path would silently fail there - producing empty output, which every assertion would read as a pass.
 H="$(cd "$(dirname "$0")" && pwd)/resume-inject.sh"
@@ -29,6 +30,9 @@ touch_at() {
 
 # Isolated config root, so the real ~/.claude/.state is never touched.
 export CLAUDE_CONFIG_DIR="$T/cfg"
+# Block F reads the host entrypoint; a selfcheck launched from an interactive session inherits `cli` and
+# would silently stand the HOST-1 nag down for every case below that expects it. Cases set it explicitly.
+unset CLAUDE_CODE_ENTRYPOINT
 PREFS="$CLAUDE_CONFIG_DIR/agent-tiers/.state/session-prefs"
 mkdir -p "$PREFS" "$T/proj"
 echo "CANARY-MUST-NOT-LEAK" > "$CLAUDE_CONFIG_DIR/canary"   # ../../../canary from PREFS
@@ -70,14 +74,18 @@ case "$out" in
   *) fail "a valid session id should still re-inject its pref" ;;
 esac
 
-# 3. Source gate: a plain startup injects no resume CONTENT and no version stamp YET (no kit stub is in
-#    place until test 6). Since 2026-08-16 the loaded-doctrine manifest DOES fire here (it has no kit
-#    dependency - global CLAUDE.md is doctrine with or without a kit), so "nothing" now means "manifest
-#    only, every fixed path absent". Test 6 proves the stamp is not source-gated either.
+# 3. Source gate: a plain startup, with no RESUME_SESSION.md present (not created until test 4) and no
+#    kit stub (not created until test 6), injects no resume CONTENT and no version stamp - "Restored
+#    working-state" never appears with nothing to restore. Since 2026-08-16 the loaded-doctrine
+#    manifest DOES fire here (it has no kit dependency - global CLAUDE.md is doctrine with or without a
+#    kit), so "nothing" now means "manifest only, every fixed path absent" (plus the session pref this
+#    id already has, from the no-RESUME-file path, which case 4c below proves is NOT what fires once a
+#    RESUME_SESSION.md exists). Test 6 proves the stamp is not source-gated either.
 out="$(run 11111111-2222-3333-4444-555555555555 startup)"
-case "$out" in *"session stamp"*|*"Restored working-state"*|*"session prefs"*)
-  fail "startup with no kit should carry the manifest ONLY, got: $out" ;; esac
+case "$out" in *"session stamp"*|*"Restored working-state"*)
+  fail "startup with no RESUME file and no kit should carry the manifest (plus the session pref) ONLY, got: $out" ;; esac
 case "$out" in *"agent-tiers loaded-doctrine manifest:"*) ;; *) fail "startup should carry the manifest line, got: $out" ;; esac
+case "$out" in *"code-engine: codex"*) ;; *) fail "startup with no RESUME file should still carry this session's pref, got: $out" ;; esac
 case "$out" in *"./CLAUDE.md=absent"*"./RESUME_SESSION.md=absent"*) ;; *) fail "manifest must render a missing fixed path as absent, got: $out" ;; esac
 
 # 4. Throttle is keyed by project AND SESSION. Until 2026-08-04 it was project-only, so a second session
@@ -141,13 +149,219 @@ case "$out" in *"vcs policy (vcs_defaults): NEVER commit or nudge-to-commit: res
 rm -f "$CLAUDE_CONFIG_DIR/agent-tiers/kit-config.md"
 rm -f "$T/proj/.claude/agent-tiers.local.md" "$T/proj/RESUME_SESSION.md"
 
+# 4c. Startup now restores the handoff too (2026-10-11), capped at RESUME_CAP_BYTES. The cap is a budget
+# (host limit minus the lines that ride along), so the tests read the effective value from the hook's
+# own truncation note in 4c(b) and build the boundary fixtures from it.
+# 4c(a): a small handoff, well under the cap, must full-inject on startup same as resume/compact/clear.
+printf '# RESUME_SESSION\n\nMARKER-4C-HEAD-SMALL\n\nbody line\n' > "$T/proj/RESUME_SESSION.md"
+out="$(run 44444444-aaaa-bbbb-cccc-000000000001 startup)"
+case "$out" in *"Restored working-state"*) ;; *) fail "4c(a): startup should full-inject a small handoff, got: $out" ;; esac
+case "$out" in *"MARKER-4C-HEAD-SMALL"*) ;; *) fail "4c(a): startup inject is missing the fixture marker, got: $out" ;; esac
+case "$out" in *"handoff truncated"*) fail "4c(a): a small handoff must not be reported as truncated" ;; esac
+
+# 4c(h): a startup full inject must NOT seed the throttle - a compact seconds later in the SAME session,
+# same unchanged file, must still get the full "Restored working-state", not the "not re-injecting"
+# pointer (that pointer assumes the context already has the handoff, which a /compact just discarded).
+out="$(run 44444444-aaaa-bbbb-cccc-000000000001 compact)"
+case "$out" in *"Restored working-state"*) ;; *) fail "4c(h): a compact right after a startup full inject should still full-inject, got: $out" ;; esac
+case "$out" in *"not re-injecting"*) fail "4c(h): startup must not have seeded the throttle state" ;; esac
+
+# 4c(b): a handoff over the cap must inject only the head (whole lines), name the full path to read the
+# rest, and never carry the tail. Non-vacuous: assert the fixture itself is over the host limit.
+awk 'BEGIN {
+  print "MARKER-4C-HEAD-BIG";
+  for (i = 0; i < 400; i++) printf "%s\n", "line " i " 0123456789012345678901234567890123456789012345678901234567890123456789";
+  print "MARKER-4C-TAIL-BIG";
+}' > "$T/proj/RESUME_SESSION.md"
+fsize="$(wc -c < "$T/proj/RESUME_SESSION.md" | tr -d ' ')"
+[ "$fsize" -gt 10000 ] || fail "4c(b): fixture invalid - RESUME_SESSION.md is only $fsize bytes, must exceed the 10000-char host limit"
+out="$(run 44444444-aaaa-bbbb-cccc-000000000002 startup)"
+CAP="$(printf '%s' "$out" | sed -n "s/.*over this hook's \([0-9][0-9]*\)-byte cap.*/\1/p" | head -1)"
+[ "${CAP:-0}" -gt 1024 ] 2>/dev/null || fail "4c(b): could not read a sane cap from the truncation note (got '$CAP'), got: $out"
+case "$out" in *"MARKER-4C-HEAD-BIG"*) ;; *) fail "4c(b): truncated startup inject is missing the head marker, got: $out" ;; esac
+case "$out" in *"handoff truncated"*) ;; *) fail "4c(b): over-cap handoff should be reported as truncated, got: $out" ;; esac
+case "$out" in *"$T/proj/RESUME_SESSION.md"*) ;; *) fail "4c(b): truncation message must name the full file path, got: $out" ;; esac
+case "$out" in *"MARKER-4C-TAIL-BIG"*) fail "4c(b): the tail marker must not survive the cap" ;; esac
+ctx_bytes="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' | wc -c | tr -d ' ')"
+# 4c(i): the whole inject must stay at or under the host's 10000-char inline limit; past it the host
+# saves the context to a file and shows only a ~2000-byte preview (seen live 2026-10-11 at 13.4 KB).
+[ "$ctx_bytes" -le 10000 ] || fail "4c(i): additionalContext is $ctx_bytes bytes, over the host's 10000-char inline limit"
+
+# 4c(f): whole-line cut - the last content line before the truncation note must be a COMPLETE fixture
+# line, never a partial one cut mid-line. Isolate the text before "[handoff truncated", drop the blank
+# line the hook appends, and take the last non-empty line.
+head_part="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' | awk '/\[handoff truncated/{exit} {print}')"
+lastline="$(printf '%s' "$head_part" | awk 'NF{l=$0} END{print l}')"
+case "$lastline" in
+  "line "[0-9]*" 0123456789012345678901234567890123456789012345678901234567890123456789") ;;
+  *) fail "4c(f): the line before the truncation note must be a complete fixture line, got: '$lastline'" ;;
+esac
+
+# 4c(c): an unknown source must still fail closed - no resume body even with a RESUME_SESSION.md present.
+out="$(run 44444444-aaaa-bbbb-cccc-000000000003 subagent)"
+case "$out" in *"Restored working-state"*) fail "4c(c): an unknown source must not restore the handoff, got: $out" ;; esac
+case "$out" in *"agent-tiers loaded-doctrine manifest:"*) ;; \
+  *) fail "4c(c): an unknown source must still be a real no-restore (manifest present), not an empty/crashed run, got: $out" ;; esac
+
+# 4c(d): a multi-byte handoff whose BYTE size is over the cap but whose CHARACTER count is under it -
+# the hook must still truncate (it counts bytes via LC_ALL=C inside the awk call, regardless of this
+# selfcheck's own locale). CAP/60 lines of 30 copies of a 3-byte char (U+2500, written via octal escapes
+# so no literal non-ASCII lands in this source file): about 1.5x CAP in bytes, about 0.5x CAP in characters.
+LOCALES="$(locale -a 2>/dev/null)"
+UTF8_LOCALE="$(printf '%s\n' "$LOCALES" | grep -i '^en_us\.utf-\?8$' | head -1)"
+[ -n "$UTF8_LOCALE" ] || UTF8_LOCALE="$(printf '%s\n' "$LOCALES" | grep -i '^c\.utf-\?8$' | head -1)"
+if [ -n "$UTF8_LOCALE" ]; then
+  CHAR3="$(printf '\342\224\200')"
+  chars30=""; i=0; while [ "$i" -lt 30 ]; do chars30="${chars30}${CHAR3}"; i=$((i + 1)); done
+  {
+    echo "MARKER-4C-D-HEAD"
+    i=0; while [ "$i" -lt $((CAP / 60)) ]; do printf '%s\n' "$chars30"; i=$((i + 1)); done
+    echo "MARKER-4C-D-TAIL"
+  } > "$T/proj/RESUME_SESSION.md"
+  dbytes="$(wc -c < "$T/proj/RESUME_SESSION.md" | tr -d ' ')"
+  [ "${dbytes:-0}" -gt "$CAP" ] || fail "4c(d): fixture invalid - byte size $dbytes must exceed $CAP"
+  dchars="$(LC_ALL="$UTF8_LOCALE" wc -m < "$T/proj/RESUME_SESSION.md" 2>/dev/null | tr -d ' ')"
+  [ -n "${dchars:-}" ] && [ "$dchars" -lt "$CAP" ] 2>/dev/null \
+    || fail "4c(d): fixture invalid - character count '$dchars' (locale $UTF8_LOCALE) must be under $CAP"
+  out="$( ( cd "$T/proj" && printf '%s' "$(jq -cn --arg s 44444444-aaaa-bbbb-cccc-000000000004 --arg src startup '{session_id:$s, source:$src}')" \
+      | LC_ALL="$UTF8_LOCALE" CLAUDE_PROJECT_DIR="$T/proj" sh "$H" 2>/dev/null ) )"
+  case "$out" in *"handoff truncated"*) ;; \
+    *) fail "4c(d): a byte-over-cap, character-under-cap handoff should still truncate (the hook counts bytes), got: $out" ;; esac
+  case "$out" in *"MARKER-4C-D-HEAD"*) ;; *) fail "4c(d): truncated multi-byte inject is missing the head marker, got: $out" ;; esac
+else
+  echo "  (4c(d) skipped: no en_US.UTF-8 or C.UTF-8 locale available)"
+fi
+
+# 4c(e): boundary - the manifest line carries RESUME_SESSION.md's own cksum and size, so the budget moves
+# by a few bytes from one fixture to the next; an exact-byte boundary cannot hold across two files. So:
+# a file 64 bytes under the 4c(b) cap must inject WHOLE (tail marker present), one 64 bytes over must
+# truncate, and the truncated head must never exceed the cap that same run reports. 64-byte lines, the
+# tail line padded to make up the remainder; awk's own padding, never a literal non-ASCII byte.
+mkfix() {
+  awk -v n="$1" -v head="MARKER-4C-E-HEAD" -v tail="MARKER-4C-E-TAIL" 'BEGIN {
+    k = int(n / 64); rem = n - 64 * k; pad = "x";
+    hline = head; while (length(hline) < 63) hline = hline pad; print hline;
+    filler = ""; while (length(filler) < 63) filler = filler pad;
+    for (i = 2; i <= k - 1; i++) print filler;
+    tline = tail; while (length(tline) < 63 + rem) tline = tline pad; print tline;
+  }' > "$T/proj/RESUME_SESSION.md"
+  esize="$(wc -c < "$T/proj/RESUME_SESSION.md" | tr -d ' ')"
+  [ "$esize" = "$1" ] || fail "4c(e): fixture invalid - expected exactly $1 bytes, got $esize"
+}
+mkfix $((CAP - 64))
+out="$(run 44444444-aaaa-bbbb-cccc-000000000005 startup)"
+case "$out" in *"handoff truncated"*) fail "4c(e): a handoff 64 bytes under the cap must not be reported as truncated, got: $out" ;; esac
+case "$out" in *"MARKER-4C-E-TAIL"*) ;; *) fail "4c(e): an under-cap inject should carry the whole file including the tail marker" ;; esac
+mkfix $((CAP + 64))
+out="$(run 44444444-aaaa-bbbb-cccc-000000000006 startup)"
+case "$out" in *"handoff truncated"*) ;; *) fail "4c(e): a handoff 64 bytes over the cap must truncate" ;; esac
+ecap="$(printf '%s' "$out" | sed -n "s/.*over this hook's \([0-9][0-9]*\)-byte cap.*/\1/p" | head -1)"
+ehead="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' \
+  | awk 'NR <= 2 {next} /^\[handoff truncated/ {exit} {print}' | sed '$d' | LC_ALL=C wc -c | tr -d ' ')"
+[ "${ehead:-0}" -le "${ecap:-0}" ] 2>/dev/null && [ "${ehead:-0}" -gt $((${ecap:-0} - 128)) ] 2>/dev/null \
+  || fail "4c(e): injected head is $ehead bytes against a reported cap of '$ecap' (must be at most the cap, and within two lines of it)"
+
+# 4c(g): a FIRST line alone over the cap (a single 20000-byte line) leaves no whole line to inject at
+# all - the "not injected" message, never a false claim of "the head above".
+awk 'BEGIN{s=""; for(i=0;i<20000;i++) s = s "x"; print s}' > "$T/proj/RESUME_SESSION.md"
+gsize="$(wc -c < "$T/proj/RESUME_SESSION.md" | tr -d ' ')"
+[ "${gsize:-0}" -gt "$CAP" ] || fail "4c(g): fixture invalid - single-line file must exceed the $CAP-byte cap"
+out="$(run 44444444-aaaa-bbbb-cccc-000000000007 startup)"
+case "$out" in *"handoff not injected"*"$T/proj/RESUME_SESSION.md"*) ;; \
+  *) fail "4c(g): a first line alone over the cap should report handoff not injected with the path, got: $out" ;; esac
+case "$out" in *"head above"*) fail "4c(g): must not claim a head was injected when nothing was" ;; esac
+
+rm -f "$T/proj/RESUME_SESSION.md"
+
+# 4c(j): host-limit falsifier (block P). A persisted copy of THIS hook's restore in the project's transcript
+# bucket, newer than the hook script, must raise the advisory; one with other content, or one older than
+# the script, must not.
+printf '# RESUME_SESSION\n\nsmall\n' > "$T/proj/RESUME_SESSION.md"
+PB="$CLAUDE_CONFIG_DIR/projects/$(printf '%s' "$T/proj" | tr -c 'A-Za-z0-9' '-')/sess-1/tool-results"
+mkdir -p "$PB"
+printf 'some other hook output\n' > "$PB/hook-a-1-additionalContext.txt"
+out="$(run 44444444-aaaa-bbbb-cccc-000000000008 startup)"
+case "$out" in *"saved this hook's own restore"*) fail "4c(j): another hook's persisted output must not raise the advisory" ;; esac
+printf "Restored working-state from RESUME_SESSION.md after 'startup':\n\nx\n" > "$PB/hook-b-1-additionalContext.txt"
+touch_at "$PB/hook-b-1-additionalContext.txt" 2000-01-01
+out="$(run 44444444-aaaa-bbbb-cccc-000000000009 startup)"
+case "$out" in *"saved this hook's own restore"*) fail "4c(j): a persisted restore older than the hook script must not raise the advisory" ;; esac
+touch "$PB/hook-b-1-additionalContext.txt"
+out="$(run 44444444-aaaa-bbbb-cccc-00000000000a startup)"
+case "$out" in *"saved this hook's own restore to a file 1 time(s)"*"hook-b-1-additionalContext.txt"*) ;; \
+  *) fail "4c(j): a fresh persisted restore must raise the advisory naming the file, got: $out" ;; esac
+rm -rf "$CLAUDE_CONFIG_DIR/projects"
+
+# 4c(j) cont.: a persisted restore bigger than the host limit proves only an over-budget inject, never a
+# stale limit, so it must not fire; nor may a match outside tool-results/.
+mkdir -p "$PB"
+awk 'BEGIN { print "Restored working-state from RESUME_SESSION.md after x"; for (i = 0; i < 200; i++) print "0123456789012345678901234567890123456789012345678901234567890123456789" }' \
+  > "$PB/hook-c-1-additionalContext.txt"
+[ "$(wc -c < "$PB/hook-c-1-additionalContext.txt" | tr -d ' ')" -gt 10000 ] || fail "4c(j): fixture invalid - oversize persisted file missing or under 10000 bytes"
+out="$(run 44444444-aaaa-bbbb-cccc-00000000000b startup)"
+case "$out" in *"saved this hook's own restore"*) fail "4c(j): a persisted restore over the host limit must not raise the stale-limit advisory" ;; esac
+rm -f "$PB/hook-c-1-additionalContext.txt"
+PM="$(dirname "$(dirname "$PB")")/memory/sub"; mkdir -p "$PM"
+printf "Restored working-state from RESUME_SESSION.md after 'startup':\n" > "$PM/hook-d-1-additionalContext.txt"
+out="$(run 44444444-aaaa-bbbb-cccc-00000000000c startup)"
+case "$out" in *"saved this hook's own restore"*) fail "4c(j): a match outside tool-results/ must not count" ;; esac
+rm -rf "$CLAUDE_CONFIG_DIR/projects"
+# A config dir with a space in it must still detect (the file list is read line by line, not word-split).
+SP="$T/c fg"; mkdir -p "$SP"
+PBS="$SP/projects/$(printf '%s' "$T/proj" | tr -c 'A-Za-z0-9' '-')/sess-1/tool-results"; mkdir -p "$PBS"
+printf "Restored working-state from RESUME_SESSION.md after 'startup':\n" > "$PBS/hook-e-1-additionalContext.txt"
+out="$( ( cd "$T/proj" && jq -cn '{session_id:"44444444-aaaa-bbbb-cccc-00000000000d",source:"startup"}' \
+    | CLAUDE_CONFIG_DIR="$SP" CLAUDE_PROJECT_DIR="$T/proj" sh "$H" 2>/dev/null ) )"
+case "$out" in *"saved this hook's own restore to a file 1 time(s)"*) ;; \
+  *) fail "4c(j): a config dir containing a space must still detect a persisted restore, got: $out" ;; esac
+rm -rf "$SP"
+
+# 4c(k): worst case for the reserve - a ~420-char project path (past ~275 a flat 1536 reserve overflows), a 12-row vcs_policy with 40-char names,
+# and a handoff over 70 lines (lifecycle line) and over the cap. The whole inject must stay within the
+# host limit, and the budget must not starve.
+LP="$T/$(printf 'p%.0s' $(seq 1 200))/$(printf 'q%.0s' $(seq 1 200))"; mkdir -p "$LP/.claude"
+{ printf -- '---\nvcs_policy:\n'; for i in 01 02 03 04 05 06 07 08 09 10 11 12; do printf '  n%s%s: ignore-personal\n' "$i" "$(printf 'x%.0s' $(seq 1 37))"; done; printf -- '---\n'; } \
+  > "$LP/.claude/agent-tiers.local.md"
+awk 'BEGIN { for (i = 0; i < 400; i++) print "line " i " 0123456789012345678901234567890123456789012345678901234567890123456789" }' > "$LP/RESUME_SESSION.md"
+out="$( ( cd "$LP" && jq -cn '{session_id:"44444444-aaaa-bbbb-cccc-00000000000e",source:"startup"}' \
+    | CLAUDE_PROJECT_DIR="$LP" sh "$H" 2>/dev/null ) )"
+case "$out" in *"vcs policy (vcs_policy)"*) ;; *) fail "4c(k): fixture invalid - the vcs line did not fire" ;; esac
+case "$out" in *"lifecycle thresholds breached"*) ;; *) fail "4c(k): fixture invalid - the lifecycle line did not fire" ;; esac
+case "$out" in *"handoff truncated"*) ;; *) fail "4c(k): an over-cap handoff with a long path should truncate, got: $out" ;; esac
+k_units="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' | wc -c | tr -d ' ')"
+[ "$k_units" -le 10000 ] || fail "4c(k): worst-case inject is $k_units bytes, over the host's 10000-char limit"
+rm -rf "$LP"
+
+# 4c(l): starved budget. Oversized session prefs eat the budget: an over-cap handoff must get the
+# "session prefs, stamp, manifest" message, never the first-line one; and with the prefs tuned so the
+# cap lands near 500, a small handoff that fits must still inject whole.
+SL=44444444-aaaa-bbbb-cccc-00000000000f
+awk 'BEGIN { for (i = 0; i < 9000; i++) printf "x" }' > "$PREFS/$SL"
+awk 'BEGIN { for (i = 0; i < 400; i++) print "line " i " 0123456789012345678901234567890123456789" }' > "$T/proj/RESUME_SESSION.md"
+out="$(run "$SL" startup)"
+case "$out" in *"session prefs, stamp, manifest and advisory lines already use"*) ;; \
+  *) fail "4c(l): a starved budget should name the prefs/stamp/manifest lines, got: $out" ;; esac
+case "$out" in *"first line alone"*) fail "4c(l): a starved budget must not blame the handoff's first line" ;; esac
+lx="$(printf '%s' "$out" | sed -n 's/.*lines already use \([0-9][0-9]*\) bytes.*/\1/p' | head -1)"
+[ "${lx:-0}" -gt 9000 ] || fail "4c(l): could not read extra bytes from the starved note (got '$lx')"
+lcap=$((10000 - 1536 - 3 * ${#T} - 15 - lx))   # cap the hook computed with 9000 bytes of prefs ($DIR = $T/proj)
+want=$((9000 + lcap - 500))                    # prefs size that leaves a cap of about 500
+[ "$want" -gt 0 ] || fail "4c(l): fixture invalid - cannot tune prefs (cap was $lcap)"
+awk -v n="$want" 'BEGIN { for (i = 0; i < n; i++) printf "x" }' > "$PREFS/$SL"
+printf '# RESUME_SESSION\n\nMARKER-4C-L-SMALL\n' > "$T/proj/RESUME_SESSION.md"
+out="$(run "$SL" startup)"
+case "$out" in *"MARKER-4C-L-SMALL"*) ;; *) fail "4c(l): a small handoff that fits a low (but non-zero) cap must inject whole, got: $out" ;; esac
+case "$out" in *"handoff not injected"*) fail "4c(l): a fitting handoff must not be dropped as starved" ;; esac
+rm -f "$PREFS/$SL" "$T/proj/RESUME_SESSION.md"
+
 # 5. Project stand-down: a project shipping its own resume hook silences the global one.
 mkdir -p "$T/proj/.claude/hooks" && : > "$T/proj/.claude/hooks/load-resume.sh"
 out="$(run 11111111-2222-3333-4444-555555555555 resume)"
 [ -z "$out" ] || fail "global hook should stand down when the project owns resume injection"
 rm -rf "$T/proj/.claude/hooks"
 
-# 6. Version stamp: fires on EVERY source INCLUDING startup, unlike resume content.
+# 6. Version stamp: fires on EVERY source INCLUDING startup (resume content now also fires on startup,
+#    but this test's fixture has no RESUME_SESSION.md at all here, so that is not what it is proving).
 #    Stub a minimal kit under the isolated CLAUDE_CONFIG_DIR so the stamp has something to report.
 mkdir -p "$CLAUDE_CONFIG_DIR/agent-tiers/skills/agent-tiers/cards" "$CLAUDE_CONFIG_DIR/agent-tiers/agents"
 printf '*doctrine-v9 c=1-2 - bump on every normative edit*\n' > "$CLAUDE_CONFIG_DIR/agent-tiers/skills/agent-tiers/SKILL.md"
@@ -161,7 +375,7 @@ case "$out" in
 esac
 case "$out" in *"XLAB=v3(c=3-4)"*) ;; *) fail "version stamp missing the card version+cksum" ;; esac
 case "$out" in *"worker=v6(c=5-6)"*) ;; *) fail "version stamp missing the def-version+cksum" ;; esac
-case "$out" in *"Restored working-state"*) fail "startup must still not restore resume CONTENT, stamp or not" ;; esac
+case "$out" in *"Restored working-state"*) fail "no RESUME file present here, so there is nothing to restore, stamp or not" ;; esac
 
 # The stamp must also ride along a full inject and a throttled pointer, not just the standalone case.
 printf '# RESUME_SESSION\n\nhandoff body\n' > "$T/proj/RESUME_SESSION.md"
@@ -277,6 +491,129 @@ out="$(adv $SADV)"
 case "$out" in *"the project layer was never wired"*) fail "7a: fired in a directory that is not a git checkout" ;; esac
 rm -rf "$CLAUDE_CONFIG_DIR/projects/$slug"
 
+# 7f. HOST-1 never probed: needs a .git, an agent-tiers.local.md that EXISTS but has no `probed_at:`,
+#     and >=3 session transcripts. Block A's own fixture already proved a probed_at-less local.md stands
+#     block A down; this proves the same file instead WAKES this block.
+mkdir -p "$T/proj/.git" "$T/proj/.claude" "$CLAUDE_CONFIG_DIR/projects/$slug"
+printf -- '---\nhost: "x"\n---\n' > "$T/proj/.claude/agent-tiers.local.md"
+out="$(adv $SADV)"
+case "$out" in *"host/effort resolution was never probed"*) fail "7f: fired with no transcripts" ;; esac
+for i in 1 2; do : > "$CLAUDE_CONFIG_DIR/projects/$slug/s$i.jsonl"; done
+out="$(adv $SADV)"
+case "$out" in *"host/effort resolution was never probed"*) fail "7f: fired at 2 transcripts, the threshold is 3" ;; esac
+: > "$CLAUDE_CONFIG_DIR/projects/$slug/s3.jsonl"
+out="$(adv $SADV)"
+case "$out" in *"HOST-1: 3 session(s) in this repo and .claude/agent-tiers.local.md has no probed_at:"*) ;; \
+  *) fail "7f: should fire at 3 transcripts with no probed_at, got: $out" ;; esac
+case "$out" in *"mkdir -p $CLAUDE_CONFIG_DIR/agent-tiers/.state/no-host-probe && touch "*) ;; \
+  *) fail "7f: the silence command must create its own parent dir or it ENOENTs on first use, got: $out" ;; esac
+case "$out" in *"ASK before running /agent-tiers-init, do not self-run it"*) ;; \
+  *) fail "7f: must not self-run the same rewriting command block A already guards, got: $out" ;; esac
+mkdir -p "$KITF/.state/no-host-probe"; : > "$KITF/.state/no-host-probe/$slug"
+out="$(adv $SADV)"
+case "$out" in *"host/effort resolution was never probed"*) fail "7f: the per-repo silence sentinel did not stand it down" ;; esac
+rm -rf "$KITF/.state/no-host-probe"
+printf -- '---\nhost: "x"\nprobed_at: "2026-09-05T00:00:00Z"\n---\n' > "$T/proj/.claude/agent-tiers.local.md"
+out="$(adv $SADV)"
+case "$out" in *"host/effort resolution was never probed"*) fail "7f: a real probed_at: must stand it down" ;; esac
+rm -f "$T/proj/.claude/agent-tiers.local.md"; rmdir "$T/proj/.claude" 2>/dev/null
+rm -rf "$T/proj/.git" "$CLAUDE_CONFIG_DIR/projects/$slug"
+
+# 7g. Host split + brief gap. Same fixture as 7f at threshold (no probed_at, 3 transcripts, no brief).
+#     The entrypoint is set inside a subshell with an explicit export: an assignment prefixed to a shell
+#     FUNCTION call is not portably exported (POSIX leaves it unspecified) and CI runs dash.
+adv_ep() { ( CLAUDE_CODE_ENTRYPOINT="$1"; export CLAUDE_CODE_ENTRYPOINT; adv "$2" ); }
+mkdir -p "$T/proj/.git" "$T/proj/.claude" "$CLAUDE_CONFIG_DIR/projects/$slug"
+printf -- '---\nhost: "x"\n---\n' > "$T/proj/.claude/agent-tiers.local.md"
+for i in 1 2 3; do : > "$CLAUDE_CONFIG_DIR/projects/$slug/s$i.jsonl"; done
+GAP="no .claude/skills/tier-project-brief/SKILL.md"
+out="$(adv_ep cli $SADV)"
+case "$out" in *"host/effort resolution was never probed"*) fail "7g: native cli must not get the HOST-1 nag, got: $out" ;; esac
+case "$out" in *"$GAP"*"/agent-tiers-init --scaffold-only"*) ;; \
+  *) fail "7g: native cli with no brief must get the scaffold-gap line, got: $out" ;; esac
+# The silence command is asserted whole and later RUN as printed: a prefix match cannot see a wrong
+# sentinel path, and a hand-made sentinel proves the condition, not the command a user copies.
+sil="$(printf '%s\n' "$out" | sed -n 's/.*Silence for this repo: \(mkdir -p [^ ]* && touch [^ ]*\)$/\1/p')"
+case "$sil" in "mkdir -p $KITF/.state/no-brief-gap && touch $KITF/.state/no-brief-gap/$slug") ;; \
+  *) fail "7g: gap silence command must create and touch the no-brief-gap sentinel, got: $sil" ;; esac
+out="$(adv_ep sdk-cli $SADV)"
+case "$out" in *"HOST-1: 3 session(s)"*) ;; *) fail "7g: sdk-cli is not proof of native, nag must fire, got: $out" ;; esac
+case "$out" in *"$GAP"*) fail "7g: nag and gap line must not both fire, got: $out" ;; esac
+out="$(adv_ep CLI $SADV)"
+case "$out" in *"HOST-1: 3 session(s)"*) ;; *) fail "7g: only the exact value cli is native, got: $out" ;; esac
+mkdir -p "$KITF/.state/no-host-probe"; : > "$KITF/.state/no-host-probe/$slug"
+out="$(adv $SADV)"
+case "$out" in *"$GAP"*) ;; *) fail "7g: a silenced HOST-1 nag must fall through to the gap line, got: $out" ;; esac
+rm -rf "$KITF/.state/no-host-probe"
+printf -- '---\nhost: "x"\nprobed_at: "2026-09-05T00:00:00Z"\n---\n' > "$T/proj/.claude/agent-tiers.local.md"
+out="$(adv $SADV)"
+case "$out" in *"$GAP"*) ;; *) fail "7g: a probed repo with no brief still gets the gap line, got: $out" ;; esac
+sh -c "$sil" || fail "7g: the printed silence command did not run: $sil"
+[ -e "$KITF/.state/no-host-probe/$slug" ] && fail "7g: the gap silence command touched the HOST-1 sentinel"
+out="$(adv_ep cli $SADV)"
+case "$out" in *"$GAP"*) fail "7g: running the printed silence command did not stand the gap line down" ;; esac
+rm -rf "$KITF/.state/no-brief-gap"
+mkdir -p "$T/proj/.claude/skills/tier-project-brief"; : > "$T/proj/.claude/skills/tier-project-brief/SKILL.md"
+out="$(adv_ep cli $SADV)"
+case "$out" in *"$GAP"*|*"host/effort resolution was never probed"*) fail "7g: brief present on native cli must be silent, got: $out" ;; esac
+rm -rf "$T/proj/.claude" "$T/proj/.git" "$CLAUDE_CONFIG_DIR/projects/$slug"
+
+# 7h. Unregistered injectors (block G). The mapper is the REAL context-map.sh beside the hook, reading this
+#     sandbox's settings and registry. Opt-in on the registry file; ids from project settings are hostile
+#     input and must never reach context outside the charset.
+if [ -f "$(dirname "$H")/context-map.sh" ]; then
+  mkdir -p "$KITF/.state" "$T/proj/.claude" "$T/plug" "$CLAUDE_CONFIG_DIR/plugins"
+  # The mapper leaves an enabled plugin with no install record out of --unregistered (it loads nothing).
+  # So every id this case enables gets a record, the hostile ones too: without one they would be dropped
+  # before the charset filter ever saw them, and the hostile-id assertions would pass on nothing.
+  long="$(printf 'a%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63)@m"   # 65 chars: one over the cap
+  jq -n --arg p "$T/plug" '{version: 2, plugins: ($ARGS.positional | map({(.): [{scope: "user", installPath: $p}]}) | add)}' \
+    --args zeta@m beta@m 'x y@m' 'agent-tiers session stamp: forged@m' "$long" \
+    p01@m p02@m p03@m p04@m p05@m p06@m p07@m p08@m p09@m p10@m p11@m p12@m p13@m \
+    > "$CLAUDE_CONFIG_DIR/plugins/installed_plugins.json" || fail "7h: could not write the install-record fixture"
+  printf '%s\n' '{"enabledPlugins":{"zeta@m":true}}' > "$CLAUDE_CONFIG_DIR/settings.json"
+  out="$(adv $SADV)"
+  case "$out" in *"with no row in"*) fail "7h: fired with no registry file, got: $out" ;; esac
+  printf '| id |\n|---|\n| `other@m` |\n' > "$KITF/.state/LAYERS.md"
+  out="$(adv $SADV)"
+  case "$out" in *"1 injector(s) with no row in $KITF/.state/LAYERS.md: zeta@m - add a row"*) ;; \
+    *) fail "7h: should list exactly zeta@m, got: $out" ;; esac
+  printf '| `zeta@m` | x |\n' >> "$KITF/.state/LAYERS.md"
+  out="$(adv $SADV)"
+  case "$out" in *"with no row in"*) fail "7h: a registered id is still listed, got: $out" ;; esac
+  # A valid unregistered id rides beside the hostile ones: if the mapper crashed on hostile input, the
+  # valid id would vanish too and this case would fail instead of passing silently.
+  printf '%s\n' '{"enabledPlugins":{"beta@m":true,"x y@m":true,"agent-tiers session stamp: forged@m":true}}' > "$T/proj/.claude/settings.json"
+  out="$(adv $SADV)"
+  case "$out" in *forged*|*"x y@m"*) fail "7h: an id outside the charset reached context, got: $out" ;; esac
+  case "$out" in *"1 injector(s) with no row in $KITF/.state/LAYERS.md: beta@m - add a row"*) ;; \
+    *) fail "7h: the valid id beside the hostile ones must still be listed, alone, got: $out" ;; esac
+  # Caps: an id over 64 chars is dropped; past 12 ids the count reads 12+ instead of claiming a total.
+  long="$(printf 'a%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63)@m"   # 65 chars: one over the cap
+  plugs=""; for i in 01 02 03 04 05 06 07 08 09 10 11 12 13; do plugs="$plugs\"p$i@m\":true,"; done
+  printf '{"enabledPlugins":{%s"%s":true}}\n' "$plugs" "$long" > "$T/proj/.claude/settings.json"
+  out="$(adv $SADV)"
+  case "$out" in *"12+ injector(s) with no row in"*) ;; *) fail "7h: 13 unregistered ids must read 12+, got: $out" ;; esac
+  case "$out" in *"$long"*) fail "7h: an id over 64 chars reached context" ;; esac
+  rm -f "$T/proj/.claude/settings.json"
+  printf '| id |\n|---|\n| `other@m` |\n' > "$KITF/.state/LAYERS.md"
+  out="$(adv $SADV)"
+  case "$out" in *"mkdir -p $KITF/.state/no-unregistered && touch $KITF/.state/no-unregistered/$slug"*) ;; \
+    *) fail "7h: the per-repo silence command must be printed whole, got: $out" ;; esac
+  sil="$(printf '%s\n' "$out" | sed -n 's/.*Silence for this repo: \(mkdir -p [^ ]*no-unregistered && touch [^ ]*\)$/\1/p')"
+  sh -c "$sil" || fail "7h: the printed per-repo silence command did not run: $sil"
+  out="$(adv $SADV)"
+  case "$out" in *"with no row in"*) fail "7h: running the printed per-repo silence did not stand it down, got: $out" ;; esac
+  rm -rf "$KITF/.state/no-unregistered"
+  mkdir -p "$KITF/.state/off"; : > "$KITF/.state/off/unregistered-injector"
+  out="$(adv $SADV)"
+  case "$out" in *"with no row in"*) fail "7h: the kill switch did not stand it down, got: $out" ;; esac
+  rm -rf "$KITF/.state/off" "$KITF/.state/LAYERS.md" "$CLAUDE_CONFIG_DIR/settings.json" "$T/proj/.claude" \
+    "$CLAUDE_CONFIG_DIR/plugins" "$T/plug"
+else
+  echo "SKIP 7h: context-map.sh not beside the hook"
+fi
+
 # 7b. Kit unpushed. Skipped rather than faked when git is unusable here - a fabricated pass is worse
 #     than a stated skip. `git -C`, never a cd: the kit's own hygiene guard denies an unresolvable cd.
 if command -v git >/dev/null 2>&1 && git init -q --bare "$T/kitremote.git" 2>/dev/null; then
@@ -376,5 +713,73 @@ else
 fi
 rm -rf "$T/proj/.git"
 
+# 7i. Memory advisory (block M, 2026-09): moved ABOVE both the source gate and the no-RESUME exit, so it
+#     must fire on a PLAIN STARTUP with no RESUME_SESSION.md at all - the case the lifecycle-threshold
+#     block below it (gated on an existing RESUME_SESSION.md; since 2026-10-11 it fires on startup too,
+#     but only once a RESUME_SESSION.md exists) could never reach.
+MEMDIR="$CLAUDE_CONFIG_DIR/projects/$slug/memory"
+mkdir -p "$MEMDIR"
+rm -f "$T/proj/RESUME_SESSION.md"
+out="$(adv $SADV)"
+case "$out" in *"MEMORY.md thresholds breached"*) fail "7i: fired with no MEMORY.md at all" ;; esac
+awk 'BEGIN{for(i=0;i<90;i++) print "- line " i}' > "$MEMDIR/MEMORY.md"
+out="$(adv $SADV)"
+case "$out" in *"MEMORY.md thresholds breached:"*"memory-index(90>80)"*"consider /agent-tiers-gc"*) ;; \
+  *) fail "7i: a 90-line index should breach memory-index(90>80) on a PLAIN STARTUP with no RESUME_SESSION.md, got: $out" ;; esac
+# Also fires on source=resume with still no RESUME_SESSION.md - proves it is not piggybacking on the
+# lifecycle-threshold block's own RESUME-file gate.
+out="$(run $SADV resume | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)"
+case "$out" in *"MEMORY.md thresholds breached:"*"memory-index(90>80)"*) ;; \
+  *) fail "7i: must also fire on source=resume with no RESUME_SESSION.md (no-RESUME exit must not gate it), got: $out" ;; esac
+# Byte check: one huge line keeps line/file counts at 1 each, isolating the byte-only breach.
+awk 'BEGIN{s=""; for(i=0;i<26000;i++) s = s "a"; print s}' > "$MEMDIR/MEMORY.md"
+out="$(adv $SADV)"
+case "$out" in *"memory-bytes("*"b>25000b)"*) ;; *) fail "7i: a 25 KB+ MEMORY.md should breach the byte check, got: $out" ;; esac
+case "$out" in *"memory-index"*) fail "7i: byte-only fixture should not also trip the line-count check" ;; esac
+# Kill switch: .state/off/memory-advisory silences it even against the worst fixture.
+mkdir -p "$KITF/.state/off"; : > "$KITF/.state/off/memory-advisory"
+out="$(adv $SADV)"
+case "$out" in *"MEMORY.md thresholds breached"*) fail "7i: kill switch .state/off/memory-advisory did not silence it" ;; esac
+rm -f "$KITF/.state/off/memory-advisory"
+rm -rf "$MEMDIR" "$CLAUDE_CONFIG_DIR/projects/$slug"
+
+# 7j. Memory advisory git-root derivation (2026-09 review, MEDIUM): the memory dir is keyed off the
+#     git COMMON dir's parent, not off the launch directory - so a session started in a SUBDIRECTORY or a
+#     LINKED WORKTREE must resolve to the SAME memory dir as the main repo root.
+if command -v git >/dev/null 2>&1; then
+  rm -rf "$T/proj/.git"
+  if git init -q "$T/proj" >/dev/null 2>&1; then
+    ( cd "$T/proj" && git -c user.email=x@x -c user.name=x commit -q --allow-empty -m init ) >/dev/null 2>&1
+    root_slug="$(printf '%s' "$T/proj" | tr -c 'A-Za-z0-9' '-')"
+    ROOTMEM="$CLAUDE_CONFIG_DIR/projects/$root_slug/memory"
+    mkdir -p "$ROOTMEM"
+    awk 'BEGIN{for(i=0;i<90;i++) print "- line " i}' > "$ROOTMEM/MEMORY.md"
+
+    # Subdirectory: CLAUDE_PROJECT_DIR points below the repo root.
+    mkdir -p "$T/proj/sub/deeper"
+    out="$( ( cd "$T/proj" && printf '%s' "$(jq -cn --arg s "$SADV" --arg src startup '{session_id:$s, source:$src}')" \
+        | CLAUDE_PROJECT_DIR="$T/proj/sub/deeper" sh "$H" 2>/dev/null ) | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null )"
+    case "$out" in *"MEMORY.md thresholds breached:"*"memory-index(90>80)"*) ;; \
+      *) fail "7j: a session in a SUBDIRECTORY should still find the repo-root memory dir, got: $out" ;; esac
+
+    # Linked worktree: a second worktree of the same repo, in a DIFFERENT directory tree entirely.
+    if git -C "$T/proj" worktree add -q "$T/wt" -b at-selfcheck-wt >/dev/null 2>&1; then
+      out="$( ( cd "$T/wt" && printf '%s' "$(jq -cn --arg s "$SADV" --arg src startup '{session_id:$s, source:$src}')" \
+          | CLAUDE_PROJECT_DIR="$T/wt" sh "$H" 2>/dev/null ) | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null )"
+      case "$out" in *"MEMORY.md thresholds breached:"*"memory-index(90>80)"*) ;; \
+        *) fail "7j: a LINKED WORKTREE should resolve to the SAME memory dir as the main worktree root, got: $out" ;; esac
+      git -C "$T/proj" worktree remove -f "$T/wt" >/dev/null 2>&1 || rm -rf "$T/wt"
+    else
+      echo "  (7j worktree case skipped: 'git worktree add' unusable in this environment)"
+    fi
+    rm -rf "$T/proj/sub" "$ROOTMEM" "$CLAUDE_CONFIG_DIR/projects/$root_slug"
+  else
+    echo "  (7j skipped: git init unusable in this environment)"
+  fi
+  rm -rf "$T/proj/.git"
+else
+  echo "  (7j skipped: git unavailable)"
+fi
+
 rm -rf "$T"
-echo "OK resume-inject: session id cannot escape the prefs dir; gates, stand-down, version stamp, manifest and the four arrival advisories hold, and the doc-lifecycle advisory (block E) rides the same stamp line"
+echo "OK resume-inject: session id cannot escape the prefs dir; gates, stand-down, version stamp, manifest, the memory advisory (fires pre-gate) and the four arrival advisories hold, the doc-lifecycle advisory (block E) rides the same stamp line, and startup now restores the handoff (capped to keep the whole inject under the host's 10000-char inline limit, fail-closed on an unknown source)"

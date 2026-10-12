@@ -12,6 +12,8 @@
 #      one of cc-gui's ten permission-signal substrings - a match makes cc-gui rewrite the row into a generic
 #      "mode policy" card and DROP the hook's reason (RENDER-MAP 2026-08-16); a miss at least stays honest.
 #      Was a recorded "0 hits, 2026-08-16"; a recorded number is not a check (MASTER B5).
+#   9. M1 meta-gate (two halves): a script named in doctrine must exist, and a stated enforcement gap
+#      must carry a `no-hook: <reason>` marker rather than freehand prose. Detail at the check itself.
 #   7. agents/*.md: every `def-v<M>` quoted in prose (the check-in line) equals the file's `def-version: N` -
 #      the cksum stamp catches edit-without-bump; this catches bump-without-updating-the-check-in (MASTER B6).
 #      Deliberately strict: an agent file may quote NO def-v number but its own (keep examples version-free).
@@ -49,8 +51,13 @@ rc=0
 # The trailing [a-z]? matters: sub-rules like SC-5.3a/SC-6.1a were INVISIBLE to this lint, so they got
 # no duplicate-definition enforcement, and a `see SC-5.3a` reference prefix-matched SC-5.3 and passed.
 sc_defs=$(printf '%s\n' "$HOT" | grep -oE '^[[:space:]]*(- )?`SC-[0-9]+\.[0-9]+[a-z]?`' | grep -oE 'SC-[0-9]+\.[0-9]+[a-z]?' | sort || true)
-card_defs=$(printf '%s\n' "$CARDS" | grep -oE '^#{1,6} (XLAB|BOSS|MAINT|HOST|ROUTE)-[0-9]+' | grep -oE '(XLAB|BOSS|MAINT|HOST|ROUTE)-[0-9]+' | sort || true)
-all_defs=$(printf '%s\n%s\n' "$sc_defs" "$card_defs" | grep -E '.' | sort || true)
+# Section ids for rule-bearing sections that carry no SC number (the tier table, the band dial, the
+# review-mode delta). Added 2026-09-05 with the ids themselves: without this they get no duplicate
+# enforcement and a `see TIER-1` is never anchor-checked. Kept as an explicit alternation rather than a
+# generic [A-Z]+-N so an ordinary capitalised word in backticks cannot mint a definition.
+sec_defs=$(printf '%s\n' "$HOT" | grep -oE '^[[:space:]]*(- )?`(TIER|BAND|REVMODE)-[0-9]+`' | grep -oE '(TIER|BAND|REVMODE)-[0-9]+' | sort || true)
+card_defs=$(printf '%s\n' "$CARDS" | grep -oE '^#{1,6} (XLAB|BOSS|MAINT|HOST|ROUTE|MEMORY)-[0-9]+' | grep -oE '(XLAB|BOSS|MAINT|HOST|ROUTE|MEMORY)-[0-9]+' | sort || true)
+all_defs=$(printf '%s\n%s\n%s\n' "$sc_defs" "$card_defs" "$sec_defs" | grep -E '.' | sort || true)
 
 # 1. duplicate definitions (across hot + cards)
 dups=$(printf '%s\n' "$all_defs" | uniq -d || true)
@@ -60,8 +67,8 @@ else echo "ok  no duplicate rule-id definitions"; fi
 # 2. broken anchors. Every "see <ID>" referenced anywhere must be defined.
 defined=$(printf '%s\n' "$all_defs" | sort -u || true)
 referenced=$(printf '%s\n' "$HOT" "$COLD" "$CARDS" \
-  | grep -oE 'see (SC-[0-9]+\.[0-9]+[a-z]?|(XLAB|BOSS|MAINT|HOST|ROUTE)-[0-9]+)' \
-  | grep -oE '(SC-[0-9]+\.[0-9]+[a-z]?|(XLAB|BOSS|MAINT|HOST|ROUTE)-[0-9]+)' | sort -u || true)
+  | grep -oE 'see (SC-[0-9]+\.[0-9]+[a-z]?|(XLAB|BOSS|MAINT|HOST|ROUTE|MEMORY|TIER|BAND|REVMODE)-[0-9]+)' \
+  | grep -oE '(SC-[0-9]+\.[0-9]+[a-z]?|(XLAB|BOSS|MAINT|HOST|ROUTE|MEMORY|TIER|BAND|REVMODE)-[0-9]+)' | sort -u || true)
 broken=""
 for r in $referenced; do printf '%s\n' "$defined" | grep -qx "$r" || broken="$broken $r"; done
 if [ -n "$broken" ]; then echo "FAIL broken anchors (referenced, never defined):"; printf '  %s\n' $broken; rc=1
@@ -92,7 +99,7 @@ else echo "ok  all skill descriptions within ${DESC_MAX} chars"; fi
 # 3. modal verbs in COLD SKILL prose without an id pointer (baseline -> 0 as cards land).
 # A line carrying any SC-/card-id token is a pointer or a quoted rule title (exempt).
 modal=$(printf '%s\n' "$COLD" | grep -nE '\b(MUST|NEVER|ALWAYS|REQUIRES|ONLY|GATED|STOP)\b' \
-  | grep -vE '(SC|XLAB|BOSS|MAINT|HOST|ROUTE)-[0-9]' || true)
+  | grep -vE '(SC|XLAB|BOSS|MAINT|HOST|ROUTE|MEMORY)-[0-9]' || true)
 count=$(printf '%s' "$modal" | grep -c . || true)
 echo "info cold-prose modal-verb lines (target: 0 as cards land): $count"
 [ -n "$modal" ] && printf '%s\n' "$modal" | sed 's/^/  cold:/'
@@ -135,6 +142,37 @@ else
     echo "FAIL provenance stamp drift (bump the version, then: lint-doctrine.sh --stamp):"
     printf '  %s\n' $drift; rc=1
   else echo "ok  provenance stamps match file contents"; fi
+
+  # The check above compares a stamp against its OWN file, so `--stamp` satisfies it without the
+  # version label ever moving - which is how doctrine-v16 came to span three commits and +1150 bytes
+  # (v9 spanned three too, v12 two). The failure text tells you to bump the version and then verifies
+  # only the re-stamp, so a missed bump has always passed. Compare the label against git instead:
+  # body changed since HEAD, label did not, means the bump was missed. Body excludes the stamp line
+  # itself so a pure re-stamp is not mistaken for a content change.
+  if git -C "$KIT_ROOT" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    nobump=""
+    for f in $STAMPED; do
+      [ -f "$f" ] || continue
+      rel="${f#$KIT_ROOT/}"
+      git -C "$KIT_ROOT" cat-file -e "HEAD:$rel" 2>/dev/null || continue
+      old_body="$(git -C "$KIT_ROOT" show "HEAD:$rel" 2>/dev/null | grep -vE "$STAMP_RE c=" | cksum)"
+      new_body="$(grep -vE "$STAMP_RE c=" "$f" | cksum)"
+      [ "$old_body" = "$new_body" ] && continue
+      # Anchor on " c=" exactly as check 5 does: without it this reads the first doctrine-v/card-v
+      # mention anywhere in the file, so one prose reference above the stamp line silently swaps the
+      # compared label - either a blocking false FAIL or a missed bump.
+      old_ver="$(git -C "$KIT_ROOT" show "HEAD:$rel" 2>/dev/null | grep -oE "$STAMP_RE c=" | head -1 | sed 's/ c=$//')"
+      new_ver="$(grep -oE "$STAMP_RE c=" "$f" | head -1 | sed 's/ c=$//')"
+      [ -n "$old_ver" ] || continue
+      [ "$old_ver" = "$new_ver" ] && nobump="$nobump $(basename "$f"):$new_ver"
+    done
+    if [ -n "$nobump" ]; then
+      echo "FAIL content changed since HEAD with no version bump (the stamp check above cannot catch this):"
+      printf '  %s\n' $nobump; rc=1
+    else echo "ok  no stamped file changed body without moving its version label"; fi
+  else
+    echo "skip version-bump check (no git HEAD)"
+  fi
 fi
 
 # --- 6. cc-gui permission-signal substrings in guard reasons ------------------------------------
@@ -209,5 +247,51 @@ if [ "$hz" = 1 ]; then
 else
   echo "ok  no apostrophe in a comment inside a command substitution (bash 3.2 parse hazard)"
 fi
+
+# --- 9. M1 meta-gate: doctrine may not claim enforcement it lacks, nor claim absence in freehand --
+# prose. This wave's own thesis applied to the doctrine that carries it: MEMORY-5 shipped with an
+# inline "no hook enforces this" plus a falsifier, the falsifier fired the same day, and nothing
+# noticed for two sessions because both the claim and its falsifier were prose. Two mechanical halves:
+#   9a. every `<name>.sh` / `<name>.py` a doctrine file names must exist in scripts/ or scripts/lib/.
+#       A doctrine sentence pointing at a renamed or deleted guard asserts enforcement that is gone,
+#       and nothing else in the kit compares the two.
+#   9b. a line asserting that nothing enforces a rule must carry the `no-hook: <reason>` marker, so
+#       the judgement-only lane is greppable (`rg no-hook: skills/`) instead of being a sweep.
+# NOT implemented: detecting a hookable-rule SHAPE in prose. R11 measured the cost of guessing at
+# phrasing - none of the five phrasings guessed before the sweep appeared even once in 359 real
+# prompts. Only the ADMISSION of absence has a stable surface form, so that is what is checked.
+# CEILING, disclosed: 9b treats any line carrying a double quote as reporting rather than claiming
+# (MEMORY-5's own status paragraph quotes its historical wording and must not trip). Quoting the
+# phrase therefore evades the check. It is a lint against forgetting, not against an adversary.
+DOCTRINE_FILES="$FILE"
+[ -d "$CARDS_DIR" ] && DOCTRINE_FILES="$DOCTRINE_FILES $(ls "$CARDS_DIR"/*.md 2>/dev/null || true)"
+
+ghost=""
+for f in $DOCTRINE_FILES; do
+  [ -f "$f" ] || continue
+  named=$(grep -aoE '[a-z0-9_-]+\.(sh|py)' "$f" | sort -u || true)
+  for s in $named; do
+    [ -f "$KIT_ROOT/scripts/$s" ] || [ -f "$KIT_ROOT/scripts/lib/$s" ] \
+      || ghost="$ghost $(basename "$f"):$s"
+  done
+done
+if [ -n "$ghost" ]; then
+  echo "FAIL doctrine names a script that is absent from scripts/ and scripts/lib/ (the rule claims enforcement that is gone):"
+  printf '  %s\n' $ghost; rc=1
+else echo "ok  every script named in doctrine exists"; fi
+
+ABSENCE_RE='no hook|not hooked|unhooked|nothing enforces|nothing checks this|no guard enforces|enforced by neither'
+unmarked=""
+for f in $DOCTRINE_FILES; do
+  [ -f "$f" ] || continue
+  h=$(grep -aniE "$ABSENCE_RE" "$f" | grep -av '"' | grep -av 'no-hook:' | cut -c1-110 \
+    | sed "s|^|  $(basename "$f"):|" || true)
+  [ -n "$h" ] && unmarked="$unmarked
+$h"
+done
+if [ -n "$unmarked" ]; then
+  echo "FAIL doctrine states a rule is unenforced without the marker - write 'no-hook: <reason>' on that line so the judgement-only lane stays greppable:"
+  printf '%s\n' "$unmarked" | grep -av '^$'; rc=1
+else echo "ok  every stated enforcement gap carries a no-hook: marker"; fi
 
 exit $rc

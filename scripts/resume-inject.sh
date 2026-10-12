@@ -8,17 +8,41 @@
 #   - Stand-down: if the project ships its OWN resume hook the global one bows out (no double-inject) -
 #     that INCLUDES the version stamp and loaded-doctrine manifest below, not just resume content; a
 #     project with its own hook gets none of this one's output.
-#   - Source-gate: RESUME CONTENT only restores on compact|resume|clear, NOT a fresh startup (CLAUDE.md
-#     loads then) - but the version stamp + manifest fire on every source, startup included, since they
-#     have no other arrival point.
+#   - Source-gate: RESUME CONTENT restores on compact|resume|clear|startup (any other/unknown source
+#     gets the version stamp + manifest only, fail-closed) - the body is byte-capped (see
+#     RESUME_CAP_BYTES below) so the whole inject stays under the host's inline limit.
 #   - Structured hookSpecificOutput JSON when jq is present; raw-stdout fallback otherwise.
+#   - Disclosure: a headless `claude -p` run started in a project directory is indistinguishable from an
+#     interactive startup at this hook's level (both report source=startup), so it also gets the body on
+#     startup. Disclosed, not opted out of - no mechanism here tells the two apart.
 set -u
 DIR="${CLAUDE_PROJECT_DIR:-$PWD}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"   # follow a relocated config dir (2nd account etc.)
 
+BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
+LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
+note() {
+  { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s resume-inject %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
+}
+
+# Timeout tracing, scoped to the expensive window only. Unlike the other three guards, this script has
+# no single scan-then-decide shape (no identifiable hot block - many small file reads and subprocess
+# calls spread across the whole body, none dominant on its own; the 19s timeout this traces, seen
+# on a Windows (Git Bash) host, is plausibly death by a thousand small shellouts, not one slow step) -
+# so the window covers the whole body, opened right after the stand-down check below (a project that
+# owns its own resume hook bows out before the window even opens, logging nothing) and closed at each
+# of its several normal exit points further down, all marked `end ... done=1`. A guard killed at its
+# hook budget cannot write its own breadcrumb, so the window brackets itself. A kill inside it leaves
+# `start` with either `done=0` (SIGTERM - probed 2026-09-17: an untrapped SIGTERM still runs the EXIT
+# trap, and `$?` reads 0 there, so the flag is what distinguishes it) or no `end` at all (SIGKILL runs
+# no trap).
+GUARD_TRACE_OPEN=0
+trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+
 # A project that wants to own resume-injection drops its own .claude/hooks/load-resume.sh;
 # the global hook then stands down so it doesn't double-inject over the project's richer hook.
 [ -f "$DIR/.claude/hooks/load-resume.sh" ] && exit 0
+GUARD_TRACE_OPEN=1; note "start [pid=$$]"
 
 # Claude Code slugs projects/ dirs with replace(/[^a-zA-Z0-9]/g,"-") - verified against the CLI
 # binary 2026-08-10, prompted by cold-review F9. Matching only `/` made the memory-threshold check
@@ -28,10 +52,10 @@ slug="$(printf '%s' "$DIR" | tr -c 'A-Za-z0-9' '-')"
 
 # --- version stamp (2026-08-09): the "join key" any after-the-fact usage review needs to attribute a
 #     session to an exact doctrine/card/def revision without inferring it from a date. Fires on EVERY
-#     SessionStart source, startup included (unlike the resume-content restore below, which is
-#     source-gated) - a plain new session is exactly the case a date-inferred join would otherwise have
-#     to cover. Cheap (a handful of greps over files already on disk); any read failure fails open to an
-#     empty stamp, never an error.
+#     SessionStart source, startup included (same as the resume-content restore below now does) - a
+#     plain new session is exactly the case a date-inferred join would otherwise have to cover. Cheap
+#     (a handful of greps over files already on disk); any read failure fails open to an empty stamp,
+#     never an error.
 KIT="$CLAUDE_DIR/agent-tiers"
 STAMP=""
 if [ -f "$KIT/skills/agent-tiers/SKILL.md" ]; then
@@ -78,14 +102,14 @@ mf_add '~/.claude/CLAUDE.md' "$CLAUDE_DIR/CLAUDE.md"
 mf_add './CLAUDE.md' "$DIR/CLAUDE.md"
 mf_add './.claude/agent-tiers.local.md' "$DIR/.claude/agent-tiers.local.md"
 mf_add './RESUME_SESSION.md' "$DIR/RESUME_SESSION.md"
-# The delegation doctrine itself (2026-08-23, retro run 3): SKILL.md + the 5 policy cards are the
+# The delegation doctrine itself (2026-08-23, retro run 3): SKILL.md + the policy cards are the
 # rule-bearing surface every scoped/measurable retro rubric row is written against, yet before this
 # line the manifest carried none of it - 0 of 55 manifested sessions in that run's corpus could show
-# whether the doctrine was actually loaded. Fixed set (not a glob): these six files are the kit's own
+# whether the doctrine was actually loaded. Fixed set (not a glob): these files are the kit's own
 # skill, not project-controlled, so no charset/length/count cap applies (see the globbed blocks below
 # for why THOSE need one - a project-shipped filename lands verbatim in model context, these do not).
 mf_add '~/.claude/agent-tiers/skills/agent-tiers/SKILL.md' "$KIT/skills/agent-tiers/SKILL.md"
-for _c in BOSS HOST MAINT ROUTE XLAB; do
+for _c in BOSS HOST MAINT ROUTE XLAB MEMORY; do
   mf_add "~/.claude/agent-tiers/skills/agent-tiers/cards/$_c.md" "$KIT/skills/agent-tiers/cards/$_c.md"
 done
 unset _c
@@ -138,14 +162,82 @@ NL='
 #     surfaces only if a human re-reads the right file at the right moment. Same shape and same posture as
 #     the lifecycle-threshold block below and as the project-local retro-due.sh: never blocking, never
 #     auto-acting, fail-open on every missing file or tool, and NO new hook file - they ride the stamp
-#     line, so they reach a plain startup too (the lifecycle block cannot: it sits behind the
-#     compact|resume|clear gate AND behind "this project has a RESUME_SESSION.md"). Why a hook and not
-#     more prose: measurement across real usage found a small single-digit percent of sessions ending
-#     with a reviewed diff, flat across weeks of added doctrine - a rule fires when something checks it
-#     at an ACT, not when it is written.
+#     line, so they reach a plain startup too (the lifecycle block now also fires there since the
+#     SOURCE gate includes startup; its only remaining ceiling is "this project has a
+#     RESUME_SESSION.md"). Why a hook and not more prose: measurement across real usage found a small
+#     single-digit percent of sessions ending with a reviewed diff, flat across weeks of added
+#     doctrine - a rule fires when something checks it at an ACT, not when it is written.
 ADVISORY=""
 PENDING_TOKENS=""   # optional 2nd arg to adv_add: a SPEECH-ACT advisory's ack token (advisory-ack-guard.sh's Stop hook)
 adv_add() { ADVISORY="${ADVISORY:+$ADVISORY$NL}$1"; [ -n "${2:-}" ] && PENDING_TOKENS="${PENDING_TOKENS:+$PENDING_TOKENS$NL}$2"; }
+
+# M. Memory governance (2026-09): MEMORY.md index-size advisory. Deliberately placed HERE,
+#    before both the SOURCE gate (the case statement below, which now restores on startup too but still
+#    exits early on any OTHER/unknown source) and the no-RESUME early exit (the "$F" check further
+#    down) - it rides ADVISORY/STAMP_LINE, which reaches every exit path in this script AFTER the
+#    project stand-down at the top (a project shipping its own .claude/hooks/load-resume.sh already
+#    exits before this point, same as every other block here - see that stand-down's own comment). The
+#    advisory this replaces sat inside the lifecycle-threshold block below, which fires ONLY in a
+#    project that already has a RESUME_SESSION.md - so a project's first sessions (no RESUME yet) never
+#    saw a breached MEMORY.md until now. Adds a byte check alongside the existing line/file-count checks -
+#    Claude Code's own read-time load cap for MEMORY.md (memory.md:401 warns at WRITE time when a Claude
+#    edit pushes it over; this is the SessionStart-time equivalent, catching an out-of-band edit a human
+#    editor or a restore made). 25000 bytes, not 25600: matches context-map.sh's own MEMORY.md byte cap
+#    (scripts/context-map.sh, the "b. auto-memory index" section) rather than inventing a second number
+#    for the same documented "25KB" figure. Kill switch checked first, before any read.
+#
+#    Memory-dir derivation: Claude Code shares ONE auto-memory directory per git repository - every
+#    worktree and every subdirectory (memory.md: "derived from the git repository... shared across
+#    worktrees and subdirectories") - so the dir is keyed off the git COMMON dir's parent, never off
+#    $DIR (which is the launch/worktree path and differs per worktree). Same idiom context-map.sh already
+#    uses for its own MEMORY.md row: `git rev-parse --path-format=absolute --git-common-dir`, then its
+#    parent. Outside a git repo, $DIR (the project root) is used, matching memory.md's own fallback.
+#    Deliberately a SEPARATE slug from the top-of-file "$slug" (which stays $DIR-based: it also keys the
+#    session-transcript count in blocks A/F/G below, and Claude Code's transcript directory naming is not
+#    claimed to be git-root-based - only the auto-memory directory is documented that way).
+#
+#    Edge cases, disclosed not built: (1) a git version that predates 2.31 rejects `--path-format` outright
+#    - the command fails, `&&` short-circuits, and `mem_root_m` silently stays at its `$DIR` default, which
+#    IS the documented outside-git fallback, so this degrades safely rather than erroring, but it means an
+#    OLD git on a real repo behaves as if it were not a repo at all. (2) A SUBMODULE's common dir lives
+#    under the SUPERPROJECT's `.git/modules/<name>`, so `dirname` of it does not land on the submodule's
+#    own root - not verified against what Claude Code itself resolves for a submodule checkout. (3) A
+#    `--separate-git-dir` clone has the same shape as (2) for the same reason (the common dir is not a
+#    child of the worktree root). Neither (2) nor (3) is built or tested here.
+#
+#    Resolution now comes from lib/guard-mempath.sh, shared with memory-content-lint.sh. It closes the
+#    gap this comment used to disclose: this block derived the dir from the git repo and ignored
+#    `autoMemoryDirectory`, while the lint honoured `autoMemoryDirectory` and knew nothing about the git
+#    derivation, so a relocated memory dir was linted but never sized, or sized but never linted. The
+#    library is the superset of the two. `CLAUDE_CODE_PROJECT_DIR_NAME` (memory.md:369) is still not
+#    read, by either side - see the library's own header for why.
+LC_MEM_INDEX_MAX=80; LC_MEM_FILES_MAX=80; LC_MEM_BYTES_MAX=25000
+if [ ! -f "$CLAUDE_DIR/agent-tiers/.state/off/memory-advisory" ]; then
+  # A missing library falls back to the git derivation that was here before, so the advisory degrades
+  # to its previous behaviour rather than disappearing.
+  _MP_R="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)/lib/guard-mempath.sh"
+  if [ -f "$_MP_R" ]; then
+    . "$_MP_R"
+    MEMDIR_M="$(guard_mem_dir "$CLAUDE_DIR" "$DIR")"
+  else
+    note "fail-open: lib/guard-mempath.sh missing - memory advisory uses the git derivation only"
+    mem_root_m="$DIR"
+    gcd_m="$(git -C "$DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && [ -n "$gcd_m" ] \
+      && mem_root_m="$(dirname "$gcd_m")"
+    mem_slug_m="$(printf '%s' "$mem_root_m" | tr -c 'A-Za-z0-9' '-')"
+    MEMDIR_M="$CLAUDE_DIR/projects/$mem_slug_m/memory"
+  fi
+  if [ -f "$MEMDIR_M/MEMORY.md" ]; then
+    m_breach=""
+    m_n="$(wc -l < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0)"
+    [ "${m_n:-0}" -gt "$LC_MEM_INDEX_MAX" ] 2>/dev/null && m_breach="$m_breach memory-index(${m_n}>${LC_MEM_INDEX_MAX})"
+    m_fc="$(ls -1 "$MEMDIR_M"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${m_fc:-0}" -gt "$LC_MEM_FILES_MAX" ] 2>/dev/null && m_breach="$m_breach memory-files(${m_fc}>${LC_MEM_FILES_MAX})"
+    m_b="$(wc -c < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0)"
+    [ "${m_b:-0}" -gt "$LC_MEM_BYTES_MAX" ] 2>/dev/null && m_breach="$m_breach memory-bytes(${m_b}b>${LC_MEM_BYTES_MAX}b)"
+    [ -n "$m_breach" ] && adv_add "agent-tiers: MEMORY.md thresholds breached:$m_breach - consider /agent-tiers-gc"
+  fi
+fi
 
 # A. The project layer was never wired. Measured across real usage: several repos with >=3 sessions
 #    carried no agent-tiers.local.md, including the single heaviest delegation repo, and nothing ever
@@ -159,6 +251,65 @@ if [ -e "$DIR/.git" ] && [ ! -f "$DIR/.claude/agent-tiers.local.md" ] &&
     # so a bare `touch` published here would ENOENT and the advisory would keep firing (review finding,
     # missed by the selfcheck because the fixture mkdir's it separately instead of running this text).
     adv_add "agent-tiers: $n_sess session(s) in this repo and no .claude/agent-tiers.local.md - the project layer was never wired. ASK before running /agent-tiers-init, do not self-run it. Silence for this repo: mkdir -p $CLAUDE_DIR/agent-tiers/.state/no-project-layer && touch $CLAUDE_DIR/agent-tiers/.state/no-project-layer/$slug" "/agent-tiers-init"
+  fi
+fi
+
+# F. HOST-1's per-agent model/effort resolution was never probed for this project. Block A already
+#    covers "the project layer does not exist at all"; this covers the narrower, previously-invisible
+#    case where the layer IS wired (agent-tiers.local.md exists, so A stays silent) but nobody ever ran
+#    the probe that fills its `probed_at:` frontmatter field (per templates/agent-tiers.local.md) - a
+#    corpus sweep found real projects sitting in exactly this state indefinitely, since nothing else
+#    ever checks it. Same n_sess>=3 noise floor and same self-heal shape as block A (a sentinel file,
+#    not an env var - see block A's comment on why).
+#    The probe exists for hosts not known to resolve model/effort correctly. The interactive native CLI is
+#    treated as proven, so there the nag is noise: it stands down when the hook's own env carries
+#    CLAUDE_CODE_ENTRYPOINT=cli (observed in a SessionStart hook env, 2026-09-13). `sdk-cli` does NOT
+#    count as native: every `claude -p` driver reports it, third-party GUI hosts included.
+#    F2. The host-independent half of init: no project brief skill, so every tier spawn here runs without
+#    the project's commands and landmines. Fires only when the HOST-1 nag did not, so a non-native host
+#    still gets one line pointing at init, which covers both.
+if [ -e "$DIR/.git" ] && [ -f "$DIR/.claude/agent-tiers.local.md" ]; then
+  n_sess_f="$(ls -1 "$CLAUDE_DIR/projects/$slug"/*.jsonl 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${n_sess_f:-0}" -ge 3 ] 2>/dev/null; then
+    if [ "${CLAUDE_CODE_ENTRYPOINT:-}" != "cli" ] &&
+       ! grep -q '^probed_at:' "$DIR/.claude/agent-tiers.local.md" 2>/dev/null &&
+       [ ! -f "$CLAUDE_DIR/agent-tiers/.state/no-host-probe/$slug" ]; then
+      adv_add "agent-tiers HOST-1: $n_sess_f session(s) in this repo and .claude/agent-tiers.local.md has no probed_at: - host/effort resolution was never probed here, so a silent GUI/host drift would go undetected. ASK before running /agent-tiers-init, do not self-run it (it rewrites this file - see block A above). Silence for this repo: mkdir -p $CLAUDE_DIR/agent-tiers/.state/no-host-probe && touch $CLAUDE_DIR/agent-tiers/.state/no-host-probe/$slug" "/agent-tiers-init"
+    elif [ ! -f "$DIR/.claude/skills/tier-project-brief/SKILL.md" ] &&
+         [ ! -f "$CLAUDE_DIR/agent-tiers/.state/no-brief-gap/$slug" ]; then
+      adv_add "agent-tiers: $n_sess_f session(s) in this repo and no .claude/skills/tier-project-brief/SKILL.md - worker/advisor/reviewer spawns here run without the project's commands and landmines. ASK before running /agent-tiers-init --scaffold-only (step 6 scaffold, no host probe), do not self-run it. Silence for this repo: mkdir -p $CLAUDE_DIR/agent-tiers/.state/no-brief-gap && touch $CLAUDE_DIR/agent-tiers/.state/no-brief-gap/$slug" "/agent-tiers-init"
+    fi
+  fi
+fi
+
+# G. Unregistered injectors: an enabled plugin or a settings hook script with no row in the machine-local
+#    layer registry, so nothing records why it loads or who wins when it conflicts with another layer.
+#    Opt-in: silent when no registry exists, and when context-map.sh is missing. context-map.sh is resolved
+#    from THIS script's own dir, so a sandboxed CLAUDE_CONFIG_DIR still reaches the real mapper. Ids come
+#    from settings files a cloned repo can ship and land verbatim in model context, so they get the same
+#    charset / length / count caps as the manifest globs above. Kill switch checked before anything runs:
+#    .state/off/unregistered-injector.
+#    Two silences, same shape as blocks A and F: per repo (.state/no-unregistered/<slug>) for a repo whose
+#    project hook is known and deliberately unregistered, and machine-wide (.state/off/...). The mapper
+#    runs with stdin detached: this block sits before the hook reads its own payload, so a mapper that ever
+#    read stdin would swallow {session_id, source} and turn every compact/resume/startup into the
+#    fail-closed unknown-source branch below (no restore at all).
+if [ ! -f "$CLAUDE_DIR/agent-tiers/.state/off/unregistered-injector" ] &&
+   [ ! -f "$CLAUDE_DIR/agent-tiers/.state/no-unregistered/$slug" ] &&
+   [ -f "$CLAUDE_DIR/agent-tiers/.state/LAYERS.md" ]; then
+  CM="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/context-map.sh"
+  if [ -f "$CM" ]; then
+    ui_out="$(CLAUDE_PROJECT_DIR="$DIR" sh "$CM" --unregistered </dev/null 2>/dev/null)"
+    ui=""; ui_n=0; ui_more=""
+    while IFS= read -r ui_id; do
+      case "$ui_id" in ''|*[!A-Za-z0-9_.:@-]*) continue ;; esac
+      [ "${#ui_id}" -le 64 ] || continue
+      [ "$ui_n" -lt 12 ] || { ui_more="+"; continue; }
+      ui="$ui $ui_id"; ui_n=$((ui_n + 1))
+    done <<UI_EOF
+$ui_out
+UI_EOF
+    [ -n "$ui" ] && adv_add "agent-tiers: $ui_n$ui_more injector(s) with no row in $CLAUDE_DIR/agent-tiers/.state/LAYERS.md:$ui - add a row (owner, why it loads, precedence class, kill switch) so a conflict has a recorded winner. Silence for this repo: mkdir -p $CLAUDE_DIR/agent-tiers/.state/no-unregistered && touch $CLAUDE_DIR/agent-tiers/.state/no-unregistered/$slug"
   fi
 fi
 
@@ -238,6 +389,37 @@ if [ -e "$DIR/.git" ] && [ -f "$DLC" ]; then
   [ -n "$dlc_hits" ] && adv_add "$dlc_hits"
 fi
 
+# P. Host-limit falsifier (2026-10-11): HOST_CTX_MAX below is a number read out of the host's bundle, and
+#    nothing else notices if a host update moves it. The host leaves its own evidence when it does: an
+#    over-limit hook output is saved as <transcript bucket>/<session>/tool-results/hook-*-additionalContext.txt
+#    and the model sees only a preview. So: any such file whose content is THIS hook's restore, written
+#    after this script last changed, means the budget is too big for the real limit. Stateless on
+#    purpose: it repeats on every start until the script is edited (the fix touches this file, which
+#    resets the mtime comparison). Fail-open: no bucket, no find, or an unresolvable self path = silent.
+#    Only a file of at most HOST_CTX_MAX bytes counts: one that small, persisted anyway, proves the real
+#    limit is lower. A bigger one proves only that an inject went over budget, which an older kit
+#    version (its files can carry a tag-time mtime older than its persisted restores) or a starved
+#    budget also produce, and "lower HOST_CTX_MAX" would be the wrong fix for both. Disclosed false
+#    negative: a multi-byte inject over 10000 bytes but under 10000 UTF-16 units is skipped too.
+HOST_CTX_MAX=10000
+SELF="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+if [ -f "$SELF" ] && [ -d "$CLAUDE_DIR/projects/$slug" ]; then
+  p_hits=0; p_last=""
+  p_list="$(find "$CLAUDE_DIR/projects/$slug" -mindepth 3 -maxdepth 3 -type f \
+      -path '*/tool-results/hook-*-additionalContext.txt' -newer "$SELF" 2>/dev/null | head -50)"
+  while IFS= read -r p_f; do
+    [ -n "$p_f" ] || continue
+    p_sz="$(wc -c < "$p_f" 2>/dev/null | tr -d ' ')"
+    [ "${p_sz:-0}" -le "$HOST_CTX_MAX" ] 2>/dev/null || continue
+    case "$(head -c 64 "$p_f" 2>/dev/null)" in
+      "Restored working-state from RESUME_SESSION.md"*) p_hits=$((p_hits + 1)); p_last="$p_f" ;;
+    esac
+  done <<P_EOF
+$p_list
+P_EOF
+  [ "$p_hits" -gt 0 ] && adv_add "agent-tiers: the host saved this hook's own restore to a file $p_hits time(s) since resume-inject.sh last changed (e.g. $p_last, $(wc -c < "$p_last" | tr -d ' ') bytes), so that session saw only a preview of it. HOST_CTX_MAX in resume-inject.sh is above the host's real inline limit: lower it."
+fi
+
 STAMP_LINE="$STAMP"
 STAMP_LINE="${STAMP_LINE:+$STAMP_LINE$NL}$MANIFEST"
 STAMP_LINE="${STAMP_LINE}${ADVISORY:+$NL$ADVISORY}"
@@ -245,7 +427,7 @@ STAMP_LINE="${STAMP_LINE}${ADVISORY:+$NL$ADVISORY}"
 INPUT="$(cat 2>/dev/null || true)"
 
 # SESSION_ID parsed here (not just before the session-prefs block below) because it now has a SECOND
-# consumer that must see the plain-startup path too: session e824d942 (the arrival-advisory swallow
+# consumer that must see the plain-startup path too: an observed session (the arrival-advisory swallow
 # incident) WAS a plain startup, so a speech-act advisory's pending ack-token has to reach
 # advisory-ack-guard.sh even when the case-statement below exits before session prefs are ever read.
 # Validate BEFORE it becomes a path component (F-12): this id is concatenated into a file path, so a
@@ -264,15 +446,21 @@ if [ -n "${SESSION_ID:-}" ]; then
     # same session) - clear any stale pending file so advisory-ack-guard.sh does not keep blocking on it.
     rm -f "$PENDING_DIR/$SESSION_ID" 2>/dev/null || true
   fi
-  { [ -d "$PENDING_DIR" ] && find "$PENDING_DIR" -type f -mtime +7 -delete; } 2>/dev/null || true
+  # default 7 (AGENT_TIERS_STATE_DAYS), validated: non-digit, 0, or over 3650 silently falls back to 7.
+  days="${AGENT_TIERS_STATE_DAYS:-7}"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
+  [ "$days" -gt 0 ] 2>/dev/null && [ "$days" -le 3650 ] 2>/dev/null || days=7
+  { [ -d "$PENDING_DIR" ] && find "$PENDING_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
 fi
 
-SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // "startup"' 2>/dev/null || echo startup)"
+# Default is "unknown", not "startup": a plain startup now restores the handoff, so defaulting a
+# no-jq or malformed/empty payload to "startup" would restore it too, when the fail-closed branch
+# below is supposed to be what fires when the source cannot actually be read.
+SOURCE="$(printf '%s' "$INPUT" | jq -r '.source // "unknown"' 2>/dev/null || echo unknown)"
 case "$SOURCE" in
-  compact|resume|clear) ;;
+  compact|resume|clear|startup) ;;
   *)
-    # Plain startup: CLAUDE.md already loads then, so no resume content - but the version stamp /
-    # manifest have no other arrival point on a fresh session, so they still ride out here.
+    # Unknown/other source: fail closed, no resume body - only the version stamp / manifest ride
+    # out here, since they have no other arrival point.
     if [ -n "$STAMP_LINE" ]; then
       if command -v jq >/dev/null 2>&1; then
         jq -n --arg ctx "$STAMP_LINE" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
@@ -280,6 +468,7 @@ case "$SOURCE" in
         printf '%s\n' "$STAMP_LINE"
       fi
     fi
+    GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"
     exit 0
     ;;
 esac
@@ -289,7 +478,8 @@ esac
 #     Leads may run concurrently on one repo. The Lead writes the file when a pref gate fires:
 #       ~/.claude/agent-tiers/.state/session-prefs/<session-id>   e.g. "code-engine: codex (set ...)"
 #     A /clear mints a new session id, so cleared chats correctly start pref-less. Needs jq; without
-#     it prefs are skipped (the Lead just re-asks). Files older than 7 days are GC'd opportunistically.
+#     it prefs are skipped (the Lead just re-asks). Files older than default 7 days
+#     (AGENT_TIERS_STATE_DAYS) are GC'd opportunistically.
 #     SESSION_ID is already parsed + F-12-validated above (moved there so the speech-act pending-token
 #     write reaches the plain-startup path too, not just compact/resume/clear).
 PREFS_DIR="$CLAUDE_DIR/agent-tiers/.state/session-prefs"
@@ -297,12 +487,16 @@ PREF=""
 if [ -n "${SESSION_ID:-}" ] && [ -f "$PREFS_DIR/$SESSION_ID" ]; then
   PREF="session prefs (agent-tiers, this session): $(tr '\n' ' ' < "$PREFS_DIR/$SESSION_ID")"
 fi
-{ [ -d "$PREFS_DIR" ] && find "$PREFS_DIR" -type f -mtime +7 -delete; } 2>/dev/null || true
+# default 7 (AGENT_TIERS_STATE_DAYS), validated: non-digit, 0, or over 3650 silently falls back to 7.
+days="${AGENT_TIERS_STATE_DAYS:-7}"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
+[ "$days" -gt 0 ] 2>/dev/null && [ "$days" -le 3650 ] 2>/dev/null || days=7
+{ [ -d "$PREFS_DIR" ] && find "$PREFS_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
 
 F="$DIR/RESUME_SESSION.md"
 if [ ! -f "$F" ]; then
   # no handoff file, but a session pref and/or the version stamp may still need re-injecting
   NOPREF="${PREF}${PREF:+$NL}${STAMP_LINE}"
+  GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"
   [ -n "$NOPREF" ] || exit 0
   if command -v jq >/dev/null 2>&1; then
     jq -n --arg ctx "$NOPREF" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
@@ -311,23 +505,56 @@ if [ ! -f "$F" ]; then
   fi
   exit 0
 fi
-CONTENT="$(cat "$F")"
+# RESUME_CAP_BYTES: the host (Claude Code) saves any hook additionalContext longer than HOST_CTX_MAX
+# characters to a file and puts only a ~2000-byte preview in context (found in the CLI bundle as the
+# hook-output persist threshold, 1e4, 2026-10-11; a 13.4 KB startup inject here arrived as the preview).
+# So the cap is a BUDGET for this hook's whole output, not a fixed size for the handoff: HOST_CTX_MAX
+# minus the session prefs and stamp/manifest/advisory lines that ride along, minus RESUME_RESERVE for the
+# header, truncation note, lifecycle line and vcs line (the vcs line alone is row- and length-capped
+# to well under 1 KB). Bytes are counted, and the host counts UTF-16 units, so the byte budget is never
+# under-counted. Past the cap: inject the head, cut at the last whole line that fits, followed by one
+# line naming the full file path to read for the rest; if even the FIRST line alone is over the cap,
+# inject nothing and just name the path; if the cap is under 1024 because the other lines ate the budget,
+# say that instead. If the host limit moves, this constant goes stale: block P
+# above (the persisted-file probe) is what notices.
+# The reserve covers lines whose size is known only later; two of them carry the project path (the
+# truncation note names $F, the vcs line names its source file), so the path length is reserved twice
+# plus slack, rather than assuming a short path.
+RESUME_RESERVE=$((1536 + 3 * ${#DIR}))
+extra_b="$(printf '%s%s' "$PREF" "$STAMP_LINE" | LC_ALL=C wc -c | tr -d ' ')"
+RESUME_CAP_BYTES=$((HOST_CTX_MAX - RESUME_RESERVE - ${extra_b:-0}))
+[ "$RESUME_CAP_BYTES" -gt 0 ] 2>/dev/null || RESUME_CAP_BYTES=0
+rb="$(wc -c < "$F" 2>/dev/null | tr -d ' ')"
+# Read and cap in ONE pass, not a separate `wc -c` size check followed by an uncapped `cat` - a
+# concurrent write growing the file between those two reads would otherwise let content past the cap
+# through. `LC_ALL=C` makes `length()` count BYTES, not characters - a cap meant to bound tokens/bytes
+# sent to the model must not undercount a multi-byte UTF-8 line as fewer "characters" than bytes.
+CONTENT="$(LC_ALL=C awk -v cap="$RESUME_CAP_BYTES" '{ n += length($0) + 1; if (n > cap) exit 3; print }' "$F")"
+cap_rc=$?
+if [ "$cap_rc" = 3 ] && [ "$RESUME_CAP_BYTES" -lt 1024 ]; then
+  # Starved: the prefs, stamp, manifest and advisory lines left too little room for a useful head. Say
+  # so, rather than blaming the handoff's first line. A handoff that fits whole still goes in whole.
+  CONTENT="[handoff not injected: the session prefs, stamp, manifest and advisory lines already use ${extra_b:-?} bytes of this hook's ${HOST_CTX_MAX}-character budget. Read $F.]"
+elif [ "$cap_rc" = 3 ]; then
+  if [ -n "$CONTENT" ]; then
+    CONTENT="${CONTENT}${NL}${NL}[handoff truncated: RESUME_SESSION.md is ${rb} bytes, over this hook's ${RESUME_CAP_BYTES}-byte cap, so only the head above (whole lines) was injected. Read $F for the rest.]"
+  else
+    # The cap was hit before a single whole line fit (the first line alone exceeds it) - there is no
+    # "head above" to point at, so say so plainly instead of claiming one.
+    CONTENT="[handoff not injected: RESUME_SESSION.md is ${rb} bytes and its first line alone exceeds this hook's ${RESUME_CAP_BYTES}-byte cap. Read $F.]"
+  fi
+fi
 
 # --- lifecycle threshold advisory (cheap; appends ONE line when breached; mirrors doctor step 4d) ---
-# Two stated ceilings, the same pair the VCS-policy block below carries: it arrives only on
-# compact|resume|clear (a fresh-startup session never reaches here), and only when the project has a
-# RESUME_SESSION.md at all (the no-handoff early exit above runs first). A project that breaches every
-# threshold and has no handoff file is never told.
+# One stated ceiling now: it arrives only when the project has a RESUME_SESSION.md at all (the
+# no-handoff early exit above runs first) - it used to also require compact|resume|clear, but the
+# SOURCE gate above now includes startup too. A project that breaches every threshold and has no
+# handoff file is never told. MEMORY.md's own checks moved OUT of this block in 2026-09 (see block M
+# above) precisely because they needed neither constraint - the resume/brief/plans checks below still
+# legitimately need the RESUME_SESSION.md constraint, since none of them exist without one.
 # Tunable constants - keep in sync with the agent-tiers SKILL.md / doctor thresholds.
-LC_MEM_INDEX_MAX=80; LC_MEM_FILES_MAX=80; LC_RESUME_MAX=70; LC_BRIEF_MAX=4096; LC_PLANS_MAX_KB=500
+LC_RESUME_MAX=70; LC_BRIEF_MAX=4096; LC_PLANS_MAX_KB=500
 lc_breach=""
-MEMDIR="$CLAUDE_DIR/projects/$slug/memory"
-if [ -f "$MEMDIR/MEMORY.md" ]; then
-  n="$(wc -l < "$MEMDIR/MEMORY.md" 2>/dev/null || echo 0)"
-  [ "${n:-0}" -gt "$LC_MEM_INDEX_MAX" ] 2>/dev/null && lc_breach="$lc_breach memory-index(${n}>${LC_MEM_INDEX_MAX})"
-  fc="$(ls -1 "$MEMDIR"/*.md 2>/dev/null | wc -l | tr -d ' ')"
-  [ "${fc:-0}" -gt "$LC_MEM_FILES_MAX" ] 2>/dev/null && lc_breach="$lc_breach memory-files(${fc}>${LC_MEM_FILES_MAX})"
-fi
 rl="$(wc -l < "$F" 2>/dev/null || echo 0)"
 [ "${rl:-0}" -gt "$LC_RESUME_MAX" ] 2>/dev/null && lc_breach="$lc_breach resume(${rl}>${LC_RESUME_MAX})"
 BRIEF="$DIR/.claude/skills/tier-project-brief/SKILL.md"
@@ -345,9 +572,9 @@ fi
 #     agent-tiers.local.md but never reached a Lead in-session - evidenced by a Lead nudging a commit of
 #     RESUME_SESSION.md, which the policy AND the user's global gitignore both forbid. Surface the
 #     never-commit list at the same arrival point as the handoff itself. Project policy wins over kit
-#     defaults; fail-open (no source or unparsable -> no line). Two stated ceilings: it arrives only on
-#     compact|resume|clear (a fresh-startup session has no arrival for it), and only when the project
-#     has a RESUME_SESSION.md at all (the no-handoff early exit above runs first).
+#     defaults; fail-open (no source or unparsable -> no line). One stated ceiling now: it arrives only
+#     when the project has a RESUME_SESSION.md at all (the no-handoff early exit above runs first) -
+#     it used to also require compact|resume|clear, but the SOURCE gate above now includes startup too.
 VCS_SRC="$DIR/.claude/agent-tiers.local.md"; VCS_KEY="vcs_policy"
 if ! grep -q "^$VCS_KEY:" "$VCS_SRC" 2>/dev/null; then
   VCS_SRC="$CLAUDE_DIR/agent-tiers/kit-config.md"; VCS_KEY="vcs_defaults"
@@ -408,11 +635,15 @@ if [ "$suppress" = 1 ]; then
   else
     printf '%s\n' "$PTR"
   fi
+  GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"
   exit 0
 fi
 
-# full inject → record state so the next UNCHANGED resume IN THIS SESSION within the window is throttled
-printf '%s %s %s\n' "$HASH" "$NOW" "${SESSION_ID:-none}" > "$STATE" 2>/dev/null || true
+# full inject: record state so the next UNCHANGED resume IN THIS SESSION within the window is
+# throttled - EXCEPT on startup: a /compact minutes later in the same session just discarded this
+# handoff from context, so it needs the FULL inject again, not an "already injected" pointer that
+# assumes the context still has it.
+[ "$SOURCE" = "startup" ] || printf '%s %s %s\n' "$HASH" "$NOW" "${SESSION_ID:-none}" > "$STATE" 2>/dev/null || true
 [ -n "$PREF" ] && CONTENT="${CONTENT}${NL}${NL}${PREF}"
 [ -n "$STAMP_LINE" ] && CONTENT="${CONTENT}${NL}${NL}${STAMP_LINE}"
 
@@ -422,4 +653,5 @@ if command -v jq >/dev/null 2>&1; then
 else
   printf '%s\n\n%s\n' "===== RESUME_SESSION.md (agent-tiers handoff) =====" "$CONTENT"
 fi
+GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"
 exit 0

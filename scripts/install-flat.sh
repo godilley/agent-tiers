@@ -10,7 +10,7 @@
 # idempotent; PreToolUse guard rows are consent-only via --with-<id> - see section 4).
 #
 # Canonical source of truth stays ~/.claude/agent-tiers/ - edit there, re-run this to re-flatten.
-# Standalone-CLI users installing the PLUGIN get skills/agents/commands + the two SessionStart hooks
+# Standalone-CLI users installing the PLUGIN get skills/agents/commands + the three SessionStart hooks
 # from hooks/hooks.json - and NO guards. Every PreToolUse/PostToolUse row (consent class below) exists
 # only via this script -> settings.json, so plugin users who want a guard still run
 # `install-flat.sh --with-<id>` (corrected 2026-08-16, Tier 1 review T1.6: this line used to say
@@ -50,24 +50,49 @@ fi
 
 # id;class;event;matcher;timeout   (script = scripts/<id>.sh; empty matcher = none). Defined up here,
 # before flag parsing, so an unknown id can be rejected before the install touches anything.
-HOOK_ROWS='resume-inject;core;SessionStart;;10
+# resume-inject's timeout is a ceiling, not a cost: on Windows (Git Bash) one startup run measured 19 s
+# (likely per-file process spawns in the stamp/manifest; not profiled), and 10 s dropped its output
+# silently. Re-running this installer does NOT update the timeout on an already-wired row (see the
+# drift note further down), so existing installs need the value changed in settings.json by hand.
+HOOK_ROWS='resume-inject;core;SessionStart;;60
 codex-home-isolate;core;SessionStart;;10
+ledger-check;core;SessionStart;;10
 guard-summary;core;SessionEnd;;5
 grep-footgun-guard;consent;PreToolUse;Bash;5
 pgrep-footgun-guard;consent;PreToolUse;Bash;5
+worktree-guard;consent;PreToolUse;Bash;5
+long-run-guard;consent;PreToolUse;Bash;5
+git-add-stash-guard;consent;PreToolUse;Bash;5
 codex-guard;consent;PreToolUse;Bash;5
 dangerous-actions-blocker;consent;PreToolUse;Bash|Write|Edit|NotebookEdit|MultiEdit;5
 security-gate;consent;PreToolUse;Write|Edit|NotebookEdit|Bash;5
 hygiene-commit-guard;consent;PreToolUse;Bash;5
 vcs-commit-guard;consent;PreToolUse;Bash;5
+sc52a-write-disclosure-guard;consent;PreToolUse;Bash;5
 review-gate-guard;consent;PreToolUse;Bash;5
 kit-leak-guard;consent;PreToolUse;Bash;5
 framing-guard;consent;PreToolUse;Task|Agent;5
 unattended-guard;consent;PreToolUse;EnterPlanMode|AskUserQuestion;5
 authorship-record;consent;PostToolUse;Edit|Write|MultiEdit|NotebookEdit;5
+memory-content-lint;consent;PostToolUse;Write|Edit|MultiEdit;5
+memory-write-gate;consent;PreToolUse;Write|Edit|MultiEdit|Bash;5
+peer-guard;consent;PreToolUse;Bash|Write|Edit|MultiEdit|NotebookEdit;5
+task-spawn-guard;consent;PreToolUse;Task|Agent;5
+simple-rules-guard;consent;PreToolUse;Bash|AskUserQuestion|SendMessage;5
+agent-selfdef-guard;consent;PreToolUse;Write|Edit|MultiEdit;5
+demo-css-guard;consent;PreToolUse;Write|Edit|MultiEdit;5
+portable-citation-advisory;consent;PostToolUse;Write|Edit|MultiEdit;5
+subagent-bg-return-guard;consent;SubagentStop;;5
 numeric-claim-ledger;consent;PostToolUse;Bash;5
 plan-graduate-nudge;consent;PostToolUse;ExitPlanMode;5
-advisory-ack-guard;consent;Stop;;5'
+read-basis-guard;consent;PreToolUse;ExitPlanMode;5
+advisory-ack-guard;consent;Stop;;5
+precompact-guard;consent;PreCompact;manual;5
+notify;consent;Notification;permission_prompt;5
+notify-stop;consent;Stop;;5
+notify-tag-guard;consent;Stop;;5
+ask-gate;consent;PreToolUse;AskUserQuestion;5
+notify-tag-strip;consent;MessageDisplay;;10'
 KNOWN_IDS="$(printf '%s\n' "$HOOK_ROWS" | cut -d';' -f1 | tr '\n' ' ')"
 
 has_id() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -76,10 +101,13 @@ has_id() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # --without-<id> removes/skips a kit-owned row. Ids = the hook script name minus .sh.
 # An unknown id is a hard error, not a silent no-op: a typo'd --with-<guard> would otherwise
 # report a successful install with a consent-class control silently absent (review 2026-08-10).
-WITH="" WITHOUT="" HSCOPE_ARG=""
+# --force-with-<id> wires the row WITHOUT running its support probe (below) - an escape hatch for a
+# probe false negative, never a way to skip the unknown-id/missing-script checks, which still apply.
+WITH="" WITHOUT="" HSCOPE_ARG="" FORCE=""
 for arg in "$@"; do
   case "$arg" in
     --with-*)    WITH="$WITH ${arg#--with-}" ;;
+    --force-with-*) fw="${arg#--force-with-}"; WITH="$WITH $fw"; FORCE="$FORCE $fw" ;;
     --without-*) WITHOUT="$WITHOUT ${arg#--without-}" ;;
     # hygiene-commit-guard's unstaged-scan scope (bundle-9 W3-2). A POSTURE choice, not a wiring one, so
     # it is recorded as config rather than a hook row: `repo` (default) scans every unstaged tracked
@@ -93,7 +121,8 @@ for arg in "$@"; do
         repo|narrow) ;;
         *) echo "install-flat: --hygiene-scope must be repo or narrow (got '$HSCOPE_ARG')"; exit 1 ;;
       esac ;;
-    *) echo "usage: install-flat.sh [--with-<hook-id>] [--without-<hook-id>] [--hygiene-scope=repo|narrow]"; exit 1 ;;
+    --check) CHECK_ONLY=1 ;;
+    *) echo "usage: install-flat.sh [--check] [--with-<hook-id>] [--force-with-<hook-id>] [--without-<hook-id>] [--hygiene-scope=repo|narrow]"; exit 1 ;;
   esac
 done
 for w in $WITH $WITHOUT; do
@@ -107,6 +136,64 @@ done
 for w in $WITH; do
   [ -f "$ROOT/scripts/$w.sh" ] || { echo "install-flat: --with-$w requested but scripts/$w.sh is not in this kit copy (usually because it is kit-local and export-ignored in .gitattributes, e.g. kit-leak-guard; a partial checkout hits this too). Not installing: a consent control you asked for would otherwise be silently absent."; exit 1; }
 done
+
+# Support probe (`# kit-probe: yes` marker): before any settings.json write, ask each REQUESTED
+# --with-<id> hook whether THIS host can actually support it. A hook depending on a HOST-STABLE
+# fact (a binary on PATH, a sibling hook also wired) that wires anyway and only degrades silently
+# at runtime reports a clean install of a guard that will never fire - worse than refusing up front.
+# Convention: `sh scripts/<id>.sh --probe` does no side effects, reads no stdin, ignores the kill
+# switch; exit 0 with no output = supported, exit 3 with a one-line reason on stdout = unsupported,
+# any OTHER exit is also treated as unsupported (a probe that errors is not proof of support). A
+# probe must judge HOST-stable facts only, never a per-session one (which terminal a future session
+# runs in): notify.sh's own probe was corrected out of doing that - see its header.
+# KIT_PROBE_WITH/KIT_PROBE_WITHOUT carry this install's full --with/--without lists, so a probe can
+# depend on a SIBLING row also being requested (or REMOVED) in this same run (precompact-guard needs
+# authorship-record, and must not be fooled by a same-run `--without-authorship-record` that a
+# settings.json grep alone cannot see coming); KIT_PROBE_SETTINGS is the target settings.json, so a
+# probe can check what is ALREADY wired there instead. --force-with-<id> (above) skips the probe
+# entirely for that id - an escape hatch for a false negative, not a way around the unknown-id/
+# missing-script checks above, which still ran first.
+for w in $WITH; do
+  has_id "$w" "$FORCE" && continue
+  grep -q '^# kit-probe: yes$' "$ROOT/scripts/$w.sh" 2>/dev/null || continue
+  # `if probe_out=$(...)` (not a bare assignment) so a nonzero probe exit is TESTED, not a bare
+  # failing simple command - under this script's `set -e`, the untested form aborts the whole
+  # script right here (silently, with the probe's own exit code) before the refusal message below
+  # ever runs.
+  if probe_out="$(KIT_PROBE_WITH="$WITH" KIT_PROBE_WITHOUT="$WITHOUT" KIT_PROBE_SETTINGS="$TARGET/settings.json" sh "$ROOT/scripts/$w.sh" --probe 2>&1)"; then
+    probe_rc=0
+  else
+    probe_rc=$?
+  fi
+  if [ "$probe_rc" != 0 ]; then
+    reason="$probe_out"
+    [ -n "$reason" ] || reason="probe exited $probe_rc with no reason given"
+    echo "install-flat: refusing --with-$w: $reason"
+    exit 1
+  fi
+done
+
+# --check: are the BAKED command copies still what the canonical sources would produce? Commands are the
+# only baked artifact (skills and agents are symlinks, so they cannot go stale); editing a canonical
+# command and forgetting to re-run this installer ships a stale copy, and nothing detects it. Re-runs the
+# same substitution the bake loop below does and diffs, so a match is proof, not a mtime guess.
+if [ "${CHECK_ONLY:-0}" = 1 ]; then
+  stale=0; missing=0; n=0
+  for f in "$ROOT"/commands/*.md; do
+    n=$((n + 1))
+    out="$TARGET/commands/agent-tiers-$(basename "$f" .md).md"
+    if [ ! -f "$out" ]; then
+      echo "  MISSING  $out"; missing=$((missing + 1)); continue
+    fi
+    if ! sed -e "s#\${CLAUDE_PLUGIN_ROOT}#$ROOT#g" -e "s#\${AGENT_TIERS_LEDGER}#$LEDGER#g" "$f" \
+         | diff -q - "$out" >/dev/null 2>&1; then
+      echo "  STALE    $out  (canonical: $f)"; stale=$((stale + 1))
+    fi
+  done
+  echo "commands: $((n - stale - missing)) of $n current, $stale stale, $missing missing  (target: $TARGET)"
+  [ "$stale" = 0 ] && [ "$missing" = 0 ] || { echo "re-run install-flat.sh to refresh."; exit 1; }
+  exit 0
+fi
 
 mkdir -p "$TARGET/skills" "$TARGET/agents" "$TARGET/commands"
 
@@ -206,7 +293,6 @@ vcs_defaults:
   agent_memory_local:   ignore-personal   # .claude/agent-memory-local/ (local scope = never commit)
   agent_memory_project: commit            # .claude/agent-memory/ (only if a project opts into memory: project)
   resume_session:       ignore-personal   # RESUME_SESSION.md (personal handoff)
-  attempts_log:         ignore-personal   # ATTEMPTS.md (scratch)
   private_notes:        ignore-personal   # docs/_local/ notes dir -> .git/info/exclude (never on a code branch)
 
 # private-notes seam: a side ref backs up the notes dir; it is NEVER merged into any code branch, so
@@ -268,14 +354,26 @@ fi
 
 # 4. Hooks - the EXTERNAL-INTEGRATIONS seam: one wiring mechanism for every kit hook.
 #
-#    Two row classes (an install-time probe deliberately does NOT decide wiring - a probe is a stale
-#    snapshot nothing re-runs, while every kit hook already self-scopes at runtime):
+#    Two row classes:
 #      core    - self-scoping SessionStart hooks, wired on every install (each no-ops where it does
-#                not apply, so wiring is always safe and stays correct as the machine changes).
+#                not apply, so wiring is always safe and stays correct as the machine changes). No
+#                install-time probe: a probe is a stale snapshot nothing re-runs, and every core
+#                hook already self-scopes at runtime, so there is nothing a probe would add.
 #      consent - per-tool-call rows (PreToolUse guards, and PostToolUse recorders). These run a command
 #                around EVERY matching tool call and either shape a permission decision or observe what
 #                the session did, i.e. they are security policy or a record of your work: wired ONLY on
 #                an explicit --with-<id> flag, never automatically; the exact JSON is printed at wire time.
+#    Support probe (2026-09-14): a consent row whose script carries `# kit-probe: yes` (e.g.
+#    precompact-guard, notify) is asked, at --with-<id> time and BEFORE any settings.json write,
+#    whether THIS host can actually support it (`sh scripts/<id>.sh --probe`) - unlike the runtime
+#    self-scoping above, a hook depending on a HOST-STABLE fact (a binary on PATH, a sibling hook
+#    also wired) would otherwise wire cleanly and then silently never fire. Deliberately scoped to
+#    host-stable facts only, never a PER-SESSION one (which terminal a future session runs in,
+#    which project it opens): that varies session to session on the same wired row, so probing it
+#    at install time is a stale snapshot nothing re-runs - exactly the trap a probe checking `TERM`
+#    at install time fell into and was corrected out of (see notify.sh's own header). Exit 0 =
+#    supported, anything else = refused, nothing written. `--force-with-<id>` skips the probe for a
+#    false negative.
 #    Ledger: .state/integrations.json records every row THIS installer wrote (command, script cksum,
 #            time, settings path). Re-runs converge on the target state: ours-current is left alone,
 #            ours-stale (target command changed) is rewritten, and a row that mentions a kit script
@@ -391,6 +489,9 @@ if command -v jq >/dev/null 2>&1; then
     [ -f "$LEDGER" ] || echo '{}' > "$LEDGER"
     BAK="$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
     cp -p "$SETTINGS" "$BAK"
+    # cp -p inherits settings.json's own perms, which may be world-readable. These copies carry env
+    # blocks and API keys verbatim, so clamp them regardless of what the live file allows.
+    chmod 600 "$BAK"
     echo "  hook    settings backup: $BAK"
     # Keep only the 5 newest. These are verbatim settings.json copies (env blocks, API keys), so an
     # unbounded pile of them next to the live file is a growing disclosure surface, not just clutter.
