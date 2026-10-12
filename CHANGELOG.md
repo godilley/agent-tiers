@@ -5,6 +5,14 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.12.2 - 2026-10-12 (2)
+
+Fix CI: lint-doctrine.sh skip lines indented 6+ spaces (pasted command output) when checking script names in doctrine files.
+
+## v2026.10.12.2 - 2026-10-12
+
+Fix CI
+
 ## v2026.10.12 - 2026-10-12
 
 Kit add Sublead tier, plan-wave skill, task-spawn-guard, memory-write-gate, peer-guard, worktree.sh (up/down/list), long-run-guard, notify system (desktop/OSC notifications + Stop-tag gate), ask-gate, pre-commit selfcheck hook, context-map tool, MEMORY policy card.

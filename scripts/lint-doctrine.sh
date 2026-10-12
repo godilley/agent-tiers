@@ -254,7 +254,11 @@ fi
 # noticed for two sessions because both the claim and its falsifier were prose. Two mechanical halves:
 #   9a. every `<name>.sh` / `<name>.py` a doctrine file names must exist in scripts/ or scripts/lib/.
 #       A doctrine sentence pointing at a renamed or deleted guard asserts enforcement that is gone,
-#       and nothing else in the kit compares the two.
+#       and nothing else in the kit compares the two. Lines indented 6+ spaces are skipped, because
+#       doctrine uses that depth only for pasted command output (a record of what a command printed,
+#       which can name an export-ignored script a published copy lacks). Wrapped prose under a nested
+#       bullet uses 4. CEILING: this is an indent rule, not output detection - a claim indented 6+
+#       would be exempt too.
 #   9b. a line asserting that nothing enforces a rule must carry the `no-hook: <reason>` marker, so
 #       the judgement-only lane is greppable (`rg no-hook: skills/`) instead of being a sweep.
 # NOT implemented: detecting a hookable-rule SHAPE in prose. R11 measured the cost of guessing at
@@ -269,7 +273,7 @@ DOCTRINE_FILES="$FILE"
 ghost=""
 for f in $DOCTRINE_FILES; do
   [ -f "$f" ] || continue
-  named=$(grep -aoE '[a-z0-9_-]+\.(sh|py)' "$f" | sort -u || true)
+  named=$(grep -avE '^      ' "$f" | grep -aoE '[a-z0-9_-]+\.(sh|py)' | sort -u || true)
   for s in $named; do
     [ -f "$KIT_ROOT/scripts/$s" ] || [ -f "$KIT_ROOT/scripts/lib/$s" ] \
       || ghost="$ghost $(basename "$f"):$s"
