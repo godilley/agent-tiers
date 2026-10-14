@@ -311,7 +311,7 @@ case "$seq" in *"evil-title"*) ;; *) fail "fixture invalid: the forged text shou
 out="$(run "x;y" idle_prompt "/home/user/projects/a;b")"
 seq="$(printf '%s' "$out" | jq -r '.terminalSequence')"
 semi_count="$(printf '%s' "$seq" | tr -cd ';' | wc -c)"
-[ "$semi_count" = 3 ] || fail "a ';' in the cwd basename or message must be replaced before composing the OSC 777 sequence (got $semi_count semicolons, want 3: $seq)"
+[ "$semi_count" -eq 3 ] || fail "a ';' in the cwd basename or message must be replaced before composing the OSC 777 sequence (got $semi_count semicolons, want 3: $seq)"
 case "$seq" in *"a,b"*) ;; *) fail "the cwd basename's ';' should be replaced with ',' (got: $seq)" ;; esac
 case "$seq" in *"x,y"*) ;; *) fail "the message's ';' should be replaced with ',' (got: $seq)" ;; esac
 
@@ -528,18 +528,18 @@ out="$(TERM=xterm-kitty run "plain message" idle_prompt "")"
 seq="$(printf '%s' "$out" | jq -r '.terminalSequence')"
 case "$seq" in *'99;i=1:d=0:p=title;Claude Code'*) ;; *) fail "OSC 99 title chunk missing/malformed (got: $seq)" ;; esac
 case "$seq" in *'99;i=1:d=1:p=body;idle_prompt: plain message'*) ;; *) fail "OSC 99 body chunk missing/malformed (got: $seq)" ;; esac
-esc_count="$(printf '%s' "$seq" | tr -cd '\033' | wc -c)"
+esc_count="$(( $(printf '%s' "$seq" | tr -cd '\033' | wc -c) ))"
 [ "$esc_count" = 4 ] || fail "OSC 99 (two chunks, each ESC...ST) should carry exactly 4 ESC bytes (2 open + 2 ST), got $esc_count: $seq"
-bel_count="$(printf '%s' "$seq" | tr -cd '\007' | wc -c)"
+bel_count="$(( $(printf '%s' "$seq" | tr -cd '\007' | wc -c) ))"
 [ "$bel_count" = 0 ] || fail "OSC 99 is ST-terminated, not BEL - got $bel_count BEL byte(s): $seq"
 
 # 17. do_osc() composes OSC 9 (iTerm2/WezTerm/Windows Terminal) when TERM_PROGRAM=WezTerm.
 out="$(TERM_PROGRAM=WezTerm run "plain message" idle_prompt "")"
 seq="$(printf '%s' "$out" | jq -r '.terminalSequence')"
 case "$seq" in *']9;Claude Code: idle_prompt: plain message'*) ;; *) fail "OSC 9 body missing/malformed (got: $seq)" ;; esac
-esc_count="$(printf '%s' "$seq" | tr -cd '\033' | wc -c)"
+esc_count="$(( $(printf '%s' "$seq" | tr -cd '\033' | wc -c) ))"
 [ "$esc_count" = 1 ] || fail "OSC 9 should carry exactly one ESC, got $esc_count: $seq"
-bel_count="$(printf '%s' "$seq" | tr -cd '\007' | wc -c)"
+bel_count="$(( $(printf '%s' "$seq" | tr -cd '\007' | wc -c) ))"
 [ "$bel_count" = 1 ] || fail "OSC 9 is BEL-terminated, got $bel_count BEL byte(s): $seq"
 
 # 18. Ambient-leak proof: even if the CALLER of this selfcheck exported a real terminal's env vars,

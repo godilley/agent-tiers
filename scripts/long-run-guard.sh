@@ -137,7 +137,7 @@ HIT="$(printf '%s\n' "$CHUNKS" | while IFS= read -r chunk; do
   printf '%s' "$first" | grep -aEq "${CMDPOS_PREFIX}${LONGCMD_FRAG}" || continue
   if [ "${nstages:-1}" -gt 1 ]; then echo PIPE; break; fi
   trimmed="$(printf '%s' "$bare" | sed -E 's/[[:space:]]+$//')"
-  case "$trimmed" in *'&') echo BG; break ;; esac
+  case "$trimmed" in (*'&') echo BG; break ;; esac
 done)"
 case "$HIT" in
   PIPE) PIPED=1 ;;

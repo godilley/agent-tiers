@@ -127,21 +127,21 @@ if [ -n "$ADD_SEGS" ]; then
     for rawtok in $(printf '%s' "$bare" | tr -s '[:space:]' '\n' | grep -av '^[[:space:]]*$' | tail -n +"$((n + 1))"); do
       tok="$(unquote_tok "$rawtok")"
       case "$tok" in
-        -n|--dry-run) exempt=1 ;;
-        --renormalize) exempt=1 ;;
-        .|./|:/|\*) danger=1 ;;
-        -A|--all) hasdashA=1 ;;
-        -u|--update) hasdashu=1 ;;
-        --*) ;;
-        -*)
-          case "$tok" in *A*) hasdashA=1 ;; esac
-          case "$tok" in *u*) hasdashu=1 ;; esac
+        (-n|--dry-run) exempt=1 ;;
+        (--renormalize) exempt=1 ;;
+        (.|./|:/|\*) danger=1 ;;
+        (-A|--all) hasdashA=1 ;;
+        (-u|--update) hasdashu=1 ;;
+        (--*) ;;
+        (-*)
+          case "$tok" in (*A*) hasdashA=1 ;; esac
+          case "$tok" in (*u*) hasdashu=1 ;; esac
           ;;
         # a redirect word (>file, >>file, <file, 2>&1, 2>/dev/null, &>file) is not a pathspec - it
         # was previously falling into the catch-all below and counting as haspath, which allowed
         # `git add -A 2>/dev/null`/`git add -u 2>&1` straight through (guards-review-2 claim 8).
-        [0-9]*'>'*|[0-9]*'<'*|'>'*|'<'*|'&>'*) ;;
-        *) haspath=1 ;;
+        ([0-9]*'>'*|[0-9]*'<'*|'>'*|'<'*|'&>'*) ;;
+        (*) haspath=1 ;;
       esac
     done
     set +f
@@ -163,7 +163,7 @@ if [ -z "$DENY" ]; then
       n="$(guard_verb_optspan "$bare" stash | wc -l | tr -d ' ')"
       rawsub="$(printf '%s' "$bare" | tr -s '[:space:]' '\n' | grep -av '^[[:space:]]*$' | sed -n "$((n + 1))p")"
       sub="$(unquote_tok "$rawsub")"
-      case "$sub" in list|show|--help|-h) : ;; *) echo BAD; break ;; esac
+      case "$sub" in (list|show|--help|-h) : ;; (*) echo BAD; break ;; esac
     done)"
     [ "$HIT" = BAD ] && DENY="deny: git stash is one ref shared by every worktree of this repo - a stash here can pop or clear another parallel session's uncommitted work (observed 2026-08-18). list/show/--help are read-only and stay allowed. $REMEDY"
   fi

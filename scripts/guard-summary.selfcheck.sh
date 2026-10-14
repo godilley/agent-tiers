@@ -120,6 +120,7 @@ LOG="${AGENT_TIERS_GUARDS_LOG:?}"
 note() { { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s fixture-guard %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true; }
 GUARD_TRACE_OPEN=0
 trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+trap 'exit 143' TERM
 # $2 = "fast" simulates a run that exits before ever reaching the expensive window (a normal fail-open
 # path in a real guard) - must exit without ever opening the window.
 [ "${2:-}" = fast ] && exit 0

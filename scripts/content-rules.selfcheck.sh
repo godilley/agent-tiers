@@ -60,7 +60,7 @@ printf '%s' "$NOU_OUT" | grep -q '^SET_U_OFF$' || fail "content-rules.sh turned 
 UUID_F="$T/uuid.md"
 printf 'session 11111111-2222-4333-8444-5555aaaa5555 reviewed the plan\n' > "$UUID_F"
 AGENTID_F="$T/agentid.md"
-printf 'agent id agent-a1b2c3d4e5f60718a handled it\n' > "$AGENTID_F"
+printf 'agent id agent-a1b2c3d4e5f60718a handled it\nagent-b2c3d4e5f6 agent-c3d4e5f6a7 agent-d4e5f6a7b8\n' > "$AGENTID_F"
 BAREHEX_F="$T/barehex.md"
 printf 'bare token: session 5c7e9a1b started\n' > "$BAREHEX_F"
 

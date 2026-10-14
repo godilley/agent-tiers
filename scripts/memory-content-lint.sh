@@ -64,11 +64,12 @@ note() {
 # scope gate, kill switch and every fail-open exit before it are cheap and never traced, which is what
 # keeps this off every Write/Edit outside the memory dir. A guard killed at its hook budget cannot
 # write its own breadcrumb, so the window brackets itself: `start` on entry, `end done=1` on exit. A
-# kill inside the window leaves `start` with either `done=0` (SIGTERM - probed 2026-09-17: an
-# untrapped SIGTERM still runs the EXIT trap, and `$?` reads 0 there, so the flag is what
-# distinguishes it) or no `end` at all (SIGKILL runs no trap).
+# kill inside the window leaves `start` with either `done=0` (SIGTERM: the TERM trap below makes
+# dash run the EXIT trap too, which it skips on an untrapped TERM) or no `end` at all (SIGKILL runs
+# no trap).
 GUARD_TRACE_OPEN=0
 trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+trap 'exit 143' TERM
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_DIR="${CLAUDE_DIR%/}"

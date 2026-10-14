@@ -11,7 +11,7 @@ unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS
 H="$(cd "$(dirname "$0")" && pwd)/resume-inject.sh"
 command -v jq >/dev/null 2>&1 || { echo "SKIP resume-inject: jq absent (prefs path is jq-only)"; exit 0; }
 
-T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
+T="$(mktemp -d)" && T="$(cd "$T" && pwd -P)" || { echo "FAIL: mktemp"; exit 1; }
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
 
 # `touch -d` is GNU-only (BSD/macOS touch has no -d) - stamp mtimes portably via `touch -t`.

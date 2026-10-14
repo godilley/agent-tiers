@@ -70,12 +70,16 @@ _content_rules_prep() (
 # `agent-<hex>` token replaced by an equal-shaped placeholder that cannot itself match the sha pattern.
 # Used ONLY as a detection pass inside content_rules_shas - the ORIGINAL line text is still what gets
 # reported, so a real sha sitting next to a neutralised id on the same line is still caught and quoted
-# verbatim. Same "skip, do not fall back to raw" contract as _content_rules_prep.
+# verbatim. Same "skip, do not fall back to raw" contract as _content_rules_prep. Word edges are spelled
+# out as character classes: `\b` in sed -E is GNU-only, and BSD sed (macOS) silently never matched it.
+# The agent-id expression runs twice because each match consumes the edge character after it, so of two
+# ids one space apart the first pass replaces only the first; the second pass gets every one it skipped.
 _content_rules_neutralize_ids() (
   tmp="$(mktemp 2>/dev/null)" || { printf 'content-rules: mktemp unavailable - skipping id-neutralisation for %s\n' "$1" >&2; exit 1; }
   sed -E \
     -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/uuididuuididuuididuuididuuididuuidid/g' \
-    -e 's/\bagent-[0-9a-f]{6,}\b/agentidagentidagentidagentidagentid/g' \
+    -e 's/(^|[^[:alnum:]_])agent-[0-9a-f]{6,}([^[:alnum:]_]|$)/\1agentidagentidagentidagentidagentid\2/g' \
+    -e 's/(^|[^[:alnum:]_])agent-[0-9a-f]{6,}([^[:alnum:]_]|$)/\1agentidagentidagentidagentidagentid\2/g' \
     "$1" > "$tmp" 2>/dev/null && { printf '%s' "$tmp"; exit 0; }
   rm -f "$tmp" 2>/dev/null || true
   printf 'content-rules: sed unavailable - skipping id-neutralisation for %s\n' "$1" >&2
@@ -225,7 +229,7 @@ content_rules_repo_state() (
     } | while IFS=: read -r ln match; do
           tok="$(printf '%s' "$match" | grep -oEi '[0-9a-f]{7,40}' | tail -1)"
           case "$tok" in
-            *[a-fA-F]*[0-9]*|*[0-9]*[a-fA-F]*) printf '%s\n' "$ln" ;;
+            (*[a-fA-F]*[0-9]*|*[0-9]*[a-fA-F]*) printf '%s\n' "$ln" ;;
           esac
         done
   )"

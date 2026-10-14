@@ -105,11 +105,12 @@ SEEN_FILE="$SEEN_DIR/$SESSION_ID"
 # that has pending tokens but exits before ever reaching the scan (STILL_ACTIVE empty, no readable
 # transcript) is a normal completion, not traced, and logs nothing here either. A guard killed at its
 # hook budget cannot write its own breadcrumb, so the window brackets itself: `start` on entry, `end
-# done=1` on exit. A kill inside the window leaves `start` with either `done=0` (SIGTERM - probed
-# 2026-09-17: an untrapped SIGTERM still runs the EXIT trap, and `$?` reads 0 there, so the flag is
-# what distinguishes it) or no `end` at all (SIGKILL runs no trap).
+# done=1` on exit. A kill inside the window leaves `start` with either `done=0` (SIGTERM: the TERM
+# trap below makes dash run the EXIT trap too, which it skips on an untrapped TERM) or no `end` at
+# all (SIGKILL runs no trap).
 GUARD_TRACE_OPEN=0
 trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+trap 'exit 143' TERM
 
 # Opportunistic GC, same posture as session-prefs/review-gate-asked (mtime, default 7 days via
 # AGENT_TIERS_STATE_DAYS). Validated: non-digit, 0, or over 3650 silently falls back to 7.

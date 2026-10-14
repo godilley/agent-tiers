@@ -33,11 +33,11 @@ note() {
 # owns its own resume hook bows out before the window even opens, logging nothing) and closed at each
 # of its several normal exit points further down, all marked `end ... done=1`. A guard killed at its
 # hook budget cannot write its own breadcrumb, so the window brackets itself. A kill inside it leaves
-# `start` with either `done=0` (SIGTERM - probed 2026-09-17: an untrapped SIGTERM still runs the EXIT
-# trap, and `$?` reads 0 there, so the flag is what distinguishes it) or no `end` at all (SIGKILL runs
-# no trap).
+# `start` with either `done=0` (SIGTERM: the TERM trap below makes dash run the EXIT trap too, which
+# it skips on an untrapped TERM) or no `end` at all (SIGKILL runs no trap).
 GUARD_TRACE_OPEN=0
 trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+trap 'exit 143' TERM
 
 # A project that wants to own resume-injection drops its own .claude/hooks/load-resume.sh;
 # the global hook then stands down so it doesn't double-inject over the project's richer hook.
@@ -229,11 +229,11 @@ if [ ! -f "$CLAUDE_DIR/agent-tiers/.state/off/memory-advisory" ]; then
   fi
   if [ -f "$MEMDIR_M/MEMORY.md" ]; then
     m_breach=""
-    m_n="$(wc -l < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0)"
+    m_n="$(( $(wc -l < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0) ))"
     [ "${m_n:-0}" -gt "$LC_MEM_INDEX_MAX" ] 2>/dev/null && m_breach="$m_breach memory-index(${m_n}>${LC_MEM_INDEX_MAX})"
     m_fc="$(ls -1 "$MEMDIR_M"/*.md 2>/dev/null | wc -l | tr -d ' ')"
     [ "${m_fc:-0}" -gt "$LC_MEM_FILES_MAX" ] 2>/dev/null && m_breach="$m_breach memory-files(${m_fc}>${LC_MEM_FILES_MAX})"
-    m_b="$(wc -c < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0)"
+    m_b="$(( $(wc -c < "$MEMDIR_M/MEMORY.md" 2>/dev/null || echo 0) ))"
     [ "${m_b:-0}" -gt "$LC_MEM_BYTES_MAX" ] 2>/dev/null && m_breach="$m_breach memory-bytes(${m_b}b>${LC_MEM_BYTES_MAX}b)"
     [ -n "$m_breach" ] && adv_add "agent-tiers: MEMORY.md thresholds breached:$m_breach - consider /agent-tiers-gc"
   fi
@@ -555,11 +555,11 @@ fi
 # Tunable constants - keep in sync with the agent-tiers SKILL.md / doctor thresholds.
 LC_RESUME_MAX=70; LC_BRIEF_MAX=4096; LC_PLANS_MAX_KB=500
 lc_breach=""
-rl="$(wc -l < "$F" 2>/dev/null || echo 0)"
+rl="$(( $(wc -l < "$F" 2>/dev/null || echo 0) ))"
 [ "${rl:-0}" -gt "$LC_RESUME_MAX" ] 2>/dev/null && lc_breach="$lc_breach resume(${rl}>${LC_RESUME_MAX})"
 BRIEF="$DIR/.claude/skills/tier-project-brief/SKILL.md"
 if [ -f "$BRIEF" ]; then
-  bb="$(wc -c < "$BRIEF" 2>/dev/null || echo 0)"
+  bb="$(( $(wc -c < "$BRIEF" 2>/dev/null || echo 0) ))"
   [ "${bb:-0}" -gt "$LC_BRIEF_MAX" ] 2>/dev/null && lc_breach="$lc_breach brief(${bb}b>${LC_BRIEF_MAX}b)"
 fi
 if [ -d "$DIR/docs/plans" ]; then

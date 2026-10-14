@@ -332,7 +332,7 @@ cmd_down() {
       | while IFS= read -r p; do
           p="${p%/}"
           [ -L "$WT/$p" ] && continue
-          case "/$p" in */node_modules|*/vendor) continue ;; esac
+          case "/$p" in (*/node_modules|*/vendor) continue ;; esac
           printf '%s\n' "$p"
         done)"
     if [ -n "$ign" ]; then

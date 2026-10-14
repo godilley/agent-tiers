@@ -125,13 +125,14 @@ note() {
 
 # Timeout tracing, scoped to the expensive window only. A guard killed at its hook budget cannot
 # write its own breadcrumb, so the window brackets itself: `start` on entry, `end done=1` on exit.
-# A kill inside the window leaves `start` with either `done=0` (SIGTERM - probed 2026-09-17: an
-# untrapped SIGTERM still runs the EXIT trap, and `$?` reads 0 there, so the flag is what
-# distinguishes it) or no `end` at all (SIGKILL runs no trap). Runs that never enter the window -
+# A kill inside the window leaves `start` with either `done=0` (SIGTERM: the TERM trap below makes
+# dash run the EXIT trap too, which it skips on an untrapped TERM) or no `end` at all (SIGKILL runs
+# no trap). Runs that never enter the window -
 # the large majority, every Bash call that never reaches the commit-segment/transcript scan below -
 # log nothing, which is what keeps this off every Bash call.
 GUARD_TRACE_OPEN=0
 trap 'if [ "$GUARD_TRACE_OPEN" = 1 ]; then note "end [pid=$$] done=0"; fi' EXIT
+trap 'exit 143' TERM
 
 INPUT="$(cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "fail-open: jq missing - cannot parse payload"; exit 0; }

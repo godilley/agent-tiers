@@ -21,7 +21,9 @@
 name: selfcheck
 on:
   push:
-    branches: [master]
+    # publish-staging: publish-public pushes each curated commit here first (via the private repo's
+    # .publish-ci) and only moves master after this run is green on every leg.
+    branches: [master, publish-staging]
   # fires on the private->public visibility flip itself: the first publish lands while the
   # staging repo is still private (push skips below), so this is what runs the badge's first CI
   public:

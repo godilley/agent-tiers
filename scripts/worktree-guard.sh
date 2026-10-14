@@ -97,11 +97,11 @@ if [ -n "$REMOVE_SEGS" ]; then
     path=""
     set -f
     for tok in $(printf '%s' "$bare" | tr -s '[:space:]' '\n' | grep -av '^[[:space:]]*$' | tail -n +"$((n + 1))"); do
-      case "$tok" in -*) continue ;; *) path="$tok"; break ;; esac
+      case "$tok" in (-*) continue ;; (*) path="$tok"; break ;; esac
     done
     set +f
     path="$(unquote_tok "$path")"
-    case "$path" in *".claude/worktrees/"*) echo BAD; break ;; esac
+    case "$path" in (*".claude/worktrees/"*) echo BAD; break ;; esac
   done)"
   if [ "$HIT" = BAD ]; then
     logdec "deny: git worktree remove under .claude/worktrees/"

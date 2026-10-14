@@ -141,15 +141,15 @@ HIT_FILE="$(printf '%s\n' "$HIT_SEGS" | while IFS= read -r seg; do
   [ -n "$seg" ] || continue
   is_hit=0
   if guard_at_command_position "$seg" 'sed\b'; then
-    case "$seg" in *' -i'*|*' --in-place'*|*'-i.'*) is_hit=1 ;; esac
+    case "$seg" in (*' -i'*|*' --in-place'*|*'-i.'*) is_hit=1 ;; esac
   elif guard_at_command_position "$seg" 'tee\b'; then
     is_hit=1
   fi
   [ "$is_hit" = 1 ] || continue
   tgt="$(last_arg "$seg")"
   case "$tgt" in
-    \"*\") tgt="${tgt#\"}"; tgt="${tgt%\"}" ;;
-    \'*\') tgt="${tgt#\'}"; tgt="${tgt%\'}" ;;
+    (\"*\") tgt="${tgt#\"}"; tgt="${tgt%\"}" ;;
+    (\'*\') tgt="${tgt#\'}"; tgt="${tgt%\'}" ;;
   esac
   tgt="${tgt#./}"
   [ -n "$tgt" ] || continue

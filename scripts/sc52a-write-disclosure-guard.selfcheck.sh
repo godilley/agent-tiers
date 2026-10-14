@@ -63,9 +63,11 @@ grep -aq 'skip: \[bash-write:bulk rename\]' "$LOGDIR/guards.log" || fail "3: ski
 # 3b. Real-world proof (not just the hook decision): the SAME sed command, marker as a trailing
 #     comment, actually EDITS the real target and touches no other file - a bare trailing word here
 #     would have made sed treat it as a SECOND file argument to edit.
+#     `-i.bak` (attached suffix) because BSD sed reads a bare `-i` as taking the script as its suffix.
 printf 'a\n' > "$WORK/proof.txt"
-(cd "$WORK" && sed -i 's/a/b/' proof.txt  # [bash-write:bulk rename proof]
+(cd "$WORK" && sed -i.bak 's/a/b/' proof.txt  # [bash-write:bulk rename proof]
 )
+rm -f "$WORK/proof.txt.bak"
 [ "$(cat "$WORK/proof.txt")" = "b" ] || fail "3b: the trailing-comment marker interfered with the real sed edit"
 [ ! -e "$WORK/[bash-write:bulk rename proof]" ] || fail "3b: sed treated the marker as a second file argument"
 rm -f "$WORK/proof.txt"

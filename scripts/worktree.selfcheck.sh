@@ -22,7 +22,7 @@ eq_rc() { [ "$1" -eq "$2" ] && ok "$3" || bad "$3 (want exit $1, got $2)"; }
 
 command -v git >/dev/null 2>&1 || { echo "SKIP: git absent"; exit 0; }
 
-W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT; W="$(cd "$W" && pwd -P)"
 
 GIT_CONFIG_GLOBAL="$W/gitconfig-global"
 export GIT_CONFIG_GLOBAL

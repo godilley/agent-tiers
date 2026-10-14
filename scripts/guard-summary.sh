@@ -88,9 +88,9 @@ else
 fi
 
 # Timeout/kill tracing: a `start [pid=N]` breadcrumb with no matching `end [pid=N] done=1` means the
-# guard was killed (SIGKILL: no end at all) or hit its budget (SIGTERM: end done=0 - an untrapped
-# SIGTERM still runs the EXIT trap, but `$?` there always reads 0, so `done=` is the only reliable
-# signal). Anchored at end-of-line so this can't false-match a guard's free-text reason that happens to
+# guard was killed (SIGKILL: no end at all) or hit its budget (SIGTERM: end done=0 - each guard traps
+# TERM so the EXIT trap runs under dash too, which skips it on an untrapped TERM; `done=` is the
+# signal read here, not the exit status). Anchored at end-of-line so this can't false-match a guard's free-text reason that happens to
 # contain the substring "start"/"end". No `[sid=]` on these lines (see each guard's own instrumentation
 # comment), so pid is the only join key available - this is scanned over the WHOLE log file (not scoped
 # to this session, unlike deny/ask above), and only the current, unrotated $LOG; a run whose start/end
