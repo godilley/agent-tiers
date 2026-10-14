@@ -5,7 +5,12 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
-## v2026.10.14 - 2026-10-14 (2)
+## v2026.10.14.2 - 2026-10-14
+
+- Updated the `actions/checkout` step from v4 to v5 in the self-check workflow, on both the Linux (sh, dash, bash) and macOS jobs.
+- CI maintenance only. No change to the shipped code or behavior.
+
+## v2026.10.14 - 2026-10-14
 
 - Guard scripts now trap SIGTERM, so a guard killed at its hook timeout reliably records `end done=0` in the trace log (dash skipped the exit handler on an untrapped TERM).
 - Agent-id redaction in content rules now works on BSD/macOS `sed`, which silently ignored `\b`, and it catches several agent ids on one line.
@@ -14,29 +19,9 @@ entry is kept privately by the maintainer.
 - The selfcheck CI workflow now also runs on pushes to the `publish-staging` branch, alongside `master`.
 - Selfcheck tests were extended to cover the TERM trap and multi-id redaction, and made more portable for macOS (resolved temp dirs, `sed -i.bak`, numeric comparisons).
 
-## v2026.10.14 - 2026-10-14
-
-- Added the `publish-staging` branch to the selfcheck CI push trigger, alongside `master`.
-- Guard scripts now trap SIGTERM, so a guard killed at its hook timeout reliably records `end done=0` in the trace log. Before, dash skipped the exit handler on an untrapped TERM.
-- Agent-id redaction in content rules now works on BSD/macOS `sed`, which silently ignored `\b`. It also catches several agent ids on one line.
-- Shell `case` patterns in several guard and worktree scripts now use the portable parenthesized form.
-- `wc` output in the resume-inject threshold checks is now evaluated arithmetically, so the numeric comparisons don't break on padded output (BSD/macOS `wc` pads its counts).
-- Selfcheck tests were extended to cover the TERM trap and the multi-id redaction case. One check now uses a numeric `-eq` comparison.
-
-## v2026.10.12.3 - 2026-10-12
-
-- selfcheck CI now runs on push to a new publish-staging branch too, not just master.
-- Fixed TERM signal handling in guard scripts so forced-timeout kills now register as SIGTERM in trace logs instead of being misread.
-- Fixed agent-id redaction in content rules to correctly match word boundaries on BSD/macOS sed and catch multiple IDs on one line.
-- Minor test coverage additions for the above fixes.
-
-## v2026.10.12.2 - 2026-10-12 (2)
-
-Fix CI: lint-doctrine.sh skip lines indented 6+ spaces (pasted command output) when checking script names in doctrine files.
-
 ## v2026.10.12.2 - 2026-10-12
 
-Fix CI
+Fix CI: lint-doctrine.sh skip lines indented 6+ spaces (pasted command output) when checking script names in doctrine files.
 
 ## v2026.10.12 - 2026-10-12
 
