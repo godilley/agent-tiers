@@ -5,6 +5,22 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.16 - 2026-10-16
+
+- Adds a `/agent-tiers:setup` command and an `agent-tiers` CLI (`install`, `configure`, `remove`, `status`). You pick a level (`core`, `recommended`, `full`) or individual hook groups, with a dry-run plan and a confirm step before anything is written.
+- Guard hooks are now grouped (safety, shell footguns, commit review, delegation, memory, attention, multi-session, planning) and are off by default. A shared kit gate lets you switch off a group, a single hook, or the whole kit through settings, a marker file, or `AGENT_TIERS_OFF=1`. The plugin now wires every shipped hook itself, so plugin installs get the same options.
+- New `reach-guard` blocks agents from reaching other machines or logged-in accounts: `ssh`, `scp`/`rsync`, cloud CLIs, `gh api`, and browser MCP servers. It hands the exact command back for you to run yourself, and an allowlist you edit by hand makes approvals permanent.
+- Adds a marketplace listing for the kit plus two pinned third-party companions, `caveman` and `ponytail`.
+- Adds `review.sh`, a reading aid for install scripts. Adds a status line and sub-agent status line (opt-in), plus environment detection for notification settings.
+- Fixes and tweaks:
+  - Reviewer now returns its findings inline instead of writing a file.
+  - A subagent's blocked commit goes back to the top Lead.
+  - Caller detection now uses `agent_id`, so a `--agent` main session isn't treated as a subagent.
+  - Hooks no longer hang when run from a terminal.
+  - Installer refuses to run alongside an enabled plugin, and `--unwire-only` removes hook rows.
+  - Self-checks run in parallel through one shared scorer.
+- Docs: the README is split into `docs/` pages (install, hooks, what ships, extending, uninstall). Routing is described per Lead model.
+
 ## v2026.10.14.2 - 2026-10-14
 
 - Updated the `actions/checkout` step from v4 to v5 in the self-check workflow, on both the Linux (sh, dash, bash) and macOS jobs.

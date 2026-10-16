@@ -5,16 +5,16 @@
 # a bundle LEAKS); this checks what a bundle SHIPS BROKEN.
 #
 # Origin (2026-08-23 audit): the kit has shipped scripts that silently assumed things only true in the
-# origin repo/companion tree - unwired (not in HOOK_ROWS, so no install path ever runs them) or
+# origin repo/companion tree - unwired (not a hook row in install/options.tsv, so no install path ever runs them) or
 # origin-only (an env var that resolves only in the operator's machine/companion repo). Free-text
 # grep for self-declared "kit-local" comments was TRIED and measured insufficient: of 5 hits, only 2
 # were actual self-declarations, the rest described a DIFFERENT file. This check uses a structural
-# marker (`# kit-scope: shared|local`, backfilled into every script header) plus mechanical HOOK_ROWS
+# marker (`# kit-scope: shared|local`, backfilled into every script header) plus mechanical hook-row (install/options.tsv)
 # parsing instead.
 #
 # Three rules, run against HEAD (the commit about to be tagged), not the working tree:
 #   1. Reachability - every scripts/*.sh that WOULD SHIP (git archive respects export-ignore) is
-#      reachable: a HOOK_ROWS id, named in another tracked script's text, or on the exemption list.
+#      reachable: an install/options.tsv hook id, named in another tracked script's text, or on the exemption list.
 #   2. Origin-only deps - a bundled script referencing an env var outside the kit's own allowlist.
 #   3. Scope marker - every tracked scripts/*.sh must carry `# kit-scope: shared` or `# kit-scope:
 #      local`; `local` must be export-ignored (a local script that isn't excluded ships dead weight
@@ -39,7 +39,7 @@
 #   dirty tree before calling this), wrong for standalone use on a dirty tree per the Usage line above.
 # - Rule 3 only flags `local` + not-export-ignored, never the reverse (`shared` + export-ignored).
 #   Degrades to a warned skip in install-flat.sh, not silent, if it ever happens.
-# - Rule 1 reads HOOK_ROWS only (the flat-install surface); a hook wired solely via hooks/hooks.json
+# - Rule 1 reads the install/options.tsv hook rows only (the flat-install surface); a hook wired solely via hooks/hooks.json
 #   (the plugin path) would false-positive as unreachable. No such hook exists today.
 # - Unquoted `for f in $ALL_SCRIPTS` word-splits on whitespace, and `is_export_ignored` string-matches
 #   `git ls-files` output against `tar -t` output, which quote non-ASCII bytes differently under
@@ -61,21 +61,17 @@ note() { printf '%s\n' "$1" >&2; fail=1; }
 
 # --- exemption list (Rule 1) -------------------------------------------------------------------
 # Scripts that are entry points in their own right, never referenced BY id/name from another script.
-EXEMPT_IDS='install-flat probe-env lint-doctrine notes-sync selfcontainment-check agent-tiers-share review-gate-mode'
+# selfcheck-all: the parallel suite runner, called from .github/workflows/selfcheck.yml (not a script).
+EXEMPT_IDS='install-flat probe-env lint-doctrine notes-sync selfcontainment-check agent-tiers-share review-gate-mode detect-env agent-tiers review selfcheck-all'
 
-# --- HOOK_ROWS ids, parsed the same way install-flat.sh does ------------------------------------
-[ -f scripts/install-flat.sh ] || { echo "selfcontainment-check: scripts/install-flat.sh missing - cannot derive HOOK_ROWS" >&2; exit 2; }
-# awk with RS="'" (not a line-oriented sed range): HOOK_ROWS is a single-quoted shell string that may
-# be one line or many, and its closing quote sits at the END of the last data line, not on a line of
-# its own - a line-anchored sed range either never closes (single-line fixtures) or, worse, silently
-# prints to EOF and folds unrelated script text into "known ids" (measured against a single-line
-# fixture while building this check). Splitting on the quote character itself is shape-independent.
-HOOK_IDS="$(awk 'BEGIN{RS="\047"} /HOOK_ROWS=$/{getline; print; exit}' scripts/install-flat.sh | cut -d';' -f1)"
-[ -n "$HOOK_IDS" ] || { echo "selfcontainment-check: could not parse any HOOK_ROWS ids from scripts/install-flat.sh - refusing to run Rule 1 blind" >&2; exit 2; }
+# --- hook ids, read from the `hook` rows of install/options.tsv (field 2) -------------------------
+[ -f install/options.tsv ] || { echo "selfcontainment-check: install/options.tsv missing - cannot derive the hook ids" >&2; exit 2; }
+HOOK_IDS="$(awk -F'\t' '$1 == "hook" { print $2 }' install/options.tsv)"
+[ -n "$HOOK_IDS" ] || { echo "selfcontainment-check: could not read any hook ids from install/options.tsv - refusing to run Rule 1 blind" >&2; exit 2; }
 
 # --- tracked scripts/*.sh plus the extensionless entry point (working-tree state; the tag equals
 # HEAD which the caller's preflight already proved clean, so `git ls-files` == HEAD's tree here) ----
-ALL_SCRIPTS="$(git ls-files 'scripts/*.sh' 'scripts/agent-tiers-share')"
+ALL_SCRIPTS="$(git ls-files 'scripts/*.sh' 'scripts/agent-tiers-share' 'scripts/agent-tiers')"
 [ -n "$ALL_SCRIPTS" ] || { echo "selfcontainment-check: no tracked scripts found" >&2; exit 2; }
 
 is_hook_id() { printf '%s\n' "$HOOK_IDS" | grep -qx "$1"; }
@@ -103,7 +99,7 @@ for f in $ALL_SCRIPTS; do
   # every guard's own selfcheck names it by basename as a kit-wide convention, so a script referenced
   # ONLY by its own selfcheck would otherwise pass this rule while still being unreachable from any
   # real install path - exactly the orphan shape this check exists to catch.
-  if git grep -l -F "$base" -- 'scripts/*.sh' ':(exclude)scripts/*.selfcheck.sh' ':(exclude)scripts/fixtures/*' 'scripts/agent-tiers-share' 2>/dev/null | grep -qv "^$f\$"; then
+  if git grep -l -F "$base" -- 'scripts/*.sh' ':(exclude)scripts/*.selfcheck.sh' ':(exclude)scripts/fixtures/*' 'scripts/agent-tiers-share' 'scripts/agent-tiers' 2>/dev/null | grep -qv "^$f\$"; then
     continue
   fi
   note "selfcontainment-check: RULE 1 (reachability) - $f ships in bundles but is not in HOOK_ROWS, not referenced by name from another tracked script (other than its own selfcheck), and not on the exemption list. A recipient's copy would have no install path that ever runs it."
@@ -131,7 +127,18 @@ done
 #     when no explicit argument is given and always with a `$$` fallback. It is production code
 #     carrying a test-only override, which is worth knowing about; the safe default is what makes it
 #     acceptable rather than a backdoor.
-ALLOW_ENV='HOME PATH PWD OLDPWD SHELL USER LOGNAME TMPDIR IFS LANG LC_ALL TERM CDPATH BASH_VERSION
+#   - XDG_CURRENT_DESKTOP, XDG_SESSION_TYPE, DISPLAY, WAYLAND_DISPLAY, I3SOCK, SWAYSOCK,
+#     HYPRLAND_INSTANCE_SIGNATURE (added 2026-10-14): set by the desktop session; detect-env.sh reads
+#     them to tell desktops apart. DETECT_ENV_PROC and DETECT_ENV_START_PID are its test seams, same
+#     shape as NOTIFY_SELFCHECK_START_PID (always read with a /proc or $PPID fallback).
+#   - AGENT_TIERS_OFF: the documented per-session kill switch.
+#   - AGENT_TIERS_BADGE_GLYPHS: opt-in user knob (=nerd) for the statusline/notify glyphs, always read as
+#     `${VAR:-}` with a plain-ASCII default. Rule 2 used to pass it only because a header COMMENT said
+#     `AGENT_TIERS_BADGE_GLYPHS=nerd`, which counted as an assignment (the defect this tightening fixes).
+#   - AGENT_TIERS_TEST_SKIP_HOOK_PROOF: install-flat.sh's test-only knob (skips the post-wire proof
+#     loop; see its header for the risk), set only by the installer selfchecks. OPTARG: set by getopts.
+ALLOW_ENV='HOME PATH PWD OLDPWD SHELL USER COLUMNS NO_COLOR LOGNAME TMPDIR IFS LANG LC_ALL TERM CDPATH BASH_VERSION OPTARG
+AGENT_TIERS_OFF AGENT_TIERS_TEST_SKIP_HOOK_PROOF
 CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR CLAUDE_PROJECT_DIR CLAUDE_CODE_EXECPATH CLAUDE_EFFORT
 CLAUDE_CODE_SESSION_ID CLAUDE_CODE_EFFORT_LEVEL CLAUDE_CODE_ENTRYPOINT CLAUDE_AGENT_SDK_VERSION
 CLAUDE_ENV_FILE ANTHROPIC_MODEL TERM_PROGRAM XDG_RUNTIME_DIR
@@ -139,16 +146,27 @@ AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS AGENT_TIERS_NOTIFY_TERMINAL AGENT
 AGENT_TIERS_PROTECTED_BRANCHES AGENT_TIERS_SHARE_REMOTE AGENT_TIERS_PEER_IDLE_SECS
 AGENT_TIERS_GUARDS_LOG AGENT_TIERS_STATE_DIR AGENT_TIERS_LEDGER AGENT_TIERS_SHARE_NO_CLIP
 AGENT_TIERS_SHARE_SKIP_CI_GATE CONTENT_RULES_NAMES_FILE
-AGENT_TIERS_FRAMING_LOG AGENT_TIERS_LOG_ROTATE_BYTES
+AGENT_TIERS_FRAMING_LOG AGENT_TIERS_LOG_ROTATE_BYTES AGENT_TIERS_BADGE_GLYPHS
 KIT_PROBE_WITH KIT_PROBE_WITHOUT KIT_PROBE_SETTINGS NOTIFY_SELFCHECK_START_PID
 WT_SESSION GHOSTTY_RESOURCES_DIR
+XDG_CURRENT_DESKTOP XDG_SESSION_TYPE DISPLAY WAYLAND_DISPLAY I3SOCK SWAYSOCK HYPRLAND_INSTANCE_SIGNATURE
+DETECT_ENV_PROC DETECT_ENV_START_PID
 CODEX_HOME CODEX_RUN_BIN
 BASE SEGMENTS CMDPOS_COMMIT_FRAG CMDPOS_GITOPTS CMDPOS_PREFIX GUARD_UNATTENDED_PREFIX GUARD_UNRESOLVED_REPO_REASON
 GUARD_PUSH_FRAG GUARD_SHIP_FRAG PPID AGENT_TIERS_KIT_ROOT PEER_GUARD_SOCK_DIR PEER_GUARD_STATE_DIR PEER_GUARD_SELF_PID'
 is_allowed_env() { printf '%s\n' "$ALLOW_ENV" | tr -s '[:space:]' '\n' | grep -qx "$1"; }
 # "assigned in THIS file" - a var read but never assigned in the same script must come from the
 # environment (or a sourced library, covered by the allowlist above).
-is_assigned_in() { grep -qE "(^|[^A-Za-z0-9_])$1=[^=]|for[[:space:]]+$1[[:space:]]+in|read[[:space:]].*\\b$1\\b" "$2"; }
+# Comment lines, trailing comments and the text inside quotes are blanked first, so `VAR=1` in a comment or
+# in echo/printf text is not an assignment (`VAR=1 cmd`, `VAR=1; export VAR`, `export VAR=1`, `VAR="x"` still
+# are: the `VAR=` sits outside the quotes; each quoted string becomes a lone `_` so `VAR=""` still has a value char). ponytail: line-based; a quote spanning lines, an escaped quote
+# inside a string, or an assignment inside a quoted `$(...)` is not understood, and heredoc bodies are not
+# blanked (VAR=1 in heredoc text still counts as an assignment). Upgrade to a real parser if
+# that ever matters.
+is_assigned_in() {
+  sed -e '/^[[:space:]]*#/d' -e "s/\"[^\"]*\"/_/g" -e "s/'[^']*'/_/g" -e 's/[[:space:]]#.*$//' "$2" |
+    grep -qE "(^|[^A-Za-z0-9_])$1=[^=]|for[[:space:]]+$1[[:space:]]+in|read[[:space:]].*\\b$1\\b"
+}
 for f in $ALL_SCRIPTS; do
   is_selfcheck "$f" && continue
   is_export_ignored "$f" && continue

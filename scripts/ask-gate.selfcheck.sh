@@ -6,12 +6,23 @@
 # tools, fail open on a missing transcript, a non-cli entrypoint, the gate's own kill switch and
 # the notify kill switch, and the install-time --probe requiring notify-tag-guard.
 set -u
-H="$(cd "$(dirname "$0")" && pwd)/ask-gate.sh"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP ask-gate: jq absent (gate fails open by design)"; exit 0; }
 
 T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
 trap 'rm -rf "$T"' EXIT
+# Run from a SANDBOX kit copy (gate, guard-cmdpos.sh, kit-gate.sh pointed at an empty managed dir,
+# options.tsv) with every kit-gate input cleared, so the live kit's state and the user's real options
+# cannot reach this check.
+mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
+cp "$SRC_DIR/ask-gate.sh" "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy gate into sandbox"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+H="$T/kit/scripts/ask-gate.sh"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 export AGENT_TIERS_GUARDS_LOG="$T/guards.log"
 export CLAUDE_CONFIG_DIR="$T/cfg"
 export AGENT_TIERS_STATE_DIR="$T/.state"   # guard_state_dir appends /.state otherwise
@@ -109,6 +120,26 @@ touch "$CLAUDE_CONFIG_DIR/agent-tiers/.state/off/notify"
 [ "$(run "$RESULT")" = allow ] || fail "with notify-tag-guard off nothing sends the turn back, so the gate must stand down"
 rm -f "$CLAUDE_CONFIG_DIR/agent-tiers/.state/off/notify"
 
+# kit-gate stand-down: the RESULT question that is denied above passes silently with the kit-root marker
+# (distinct from the CLAUDE_CONFIG_DIR markers above), logs it, and is denied again once it is removed.
+[ "$(run "$RESULT")" = deny ] || fail "test setup: a question after a tool result must be denied without the marker"
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/ask-gate"
+printf '%s\n' "$RESULT" > "$T/t.jsonl"
+out="$(jq -cn --arg tp "$T/t.jsonl" '{hook_event_name:"PreToolUse", tool_name:"AskUserQuestion", transcript_path:$tp, session_id:"s-kg"}' | CLAUDE_CODE_ENTRYPOINT=cli sh "$H" 2>"$T/err")"; rc=$?
+rm -f "$T/kit/.state/off/ask-gate"
+[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -s "$T/err" ] || fail "kit-gate stand-down must be silent exit 0 (rc=$rc out=$out)"
+grep -qF 'kit-gate standdown ask-gate:' "$AGENT_TIERS_GUARDS_LOG" || fail "kit-gate stand-down must be logged"
+[ "$(run "$RESULT")" = deny ] || fail "gate must deny again once the kit-gate marker is removed"
+
+# ask-gate depends on notify-tag-guard's send-back: its kit-root marker (no ask-gate marker) stands the gate down too.
+[ "$(run "$RESULT")" = deny ] || fail "control: a question after a tool result must be denied with no marker"
+: > "$T/kit/.state/off/notify-tag-guard"
+out="$(jq -cn --arg tp "$T/t.jsonl" '{hook_event_name:"PreToolUse", tool_name:"AskUserQuestion", transcript_path:$tp, session_id:"s-kg2"}' | CLAUDE_CODE_ENTRYPOINT=cli sh "$H" 2>"$T/err")"; rc=$?
+rm -f "$T/kit/.state/off/notify-tag-guard"
+[ "$rc" = 0 ] && [ -z "$out" ] && [ ! -s "$T/err" ] || fail "with notify-tag-guard off the gate must stand down silently (rc=$rc out=$out)"
+grep -qF 'kit-gate standdown notify-tag-guard:' "$AGENT_TIERS_GUARDS_LOG" || fail "notify-tag-guard stand-down must be logged"
+[ "$(run "$RESULT")" = deny ] || fail "gate must deny again once the notify-tag-guard marker is removed"
+
 # Install-time probe: notify-tag-guard must be wired already, or requested in the same install,
 # and not removed in it.
 printf '{"hooks":{}}' > "$T/settings.json"
@@ -117,5 +148,11 @@ KIT_PROBE_WITH="notify-tag-guard" KIT_PROBE_SETTINGS="$T/settings.json" sh "$H" 
 printf '{"hooks":{"Stop":[{"hooks":[{"command":"sh notify-tag-guard.sh"}]}]}}' > "$T/settings.json"
 KIT_PROBE_SETTINGS="$T/settings.json" sh "$H" --probe >/dev/null 2>&1 || fail "probe must pass when notify-tag-guard is already wired"
 KIT_PROBE_WITHOUT="notify-tag-guard" KIT_PROBE_SETTINGS="$T/settings.json" sh "$H" --probe >/dev/null 2>&1 && fail "probe must refuse when notify-tag-guard is removed in the same install"
+
+# --probe runs before the gate, so it answers the same with the kit-gate marker present.
+: > "$T/kit/.state/off/ask-gate"
+KIT_PROBE_WITH="notify-tag-guard" sh "$H" --probe >/dev/null 2>&1 || fail "probe (supported) must be unchanged by the kit-gate marker"
+KIT_PROBE_WITHOUT="notify-tag-guard" KIT_PROBE_SETTINGS="$T/settings.json" sh "$H" --probe >/dev/null 2>&1 && fail "probe (refusal) must be unchanged by the kit-gate marker"
+rm -f "$T/kit/.state/off/ask-gate"
 
 echo "PASS ask-gate.sh"

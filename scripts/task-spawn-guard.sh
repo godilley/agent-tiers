@@ -46,7 +46,7 @@
 # All rules fail open on any tooling gap (no jq, no payload fields), with a breadcrumb - a silent
 # fail-open is exactly the failure this whole guard class exists to close.
 #
-# Kill switch checked before any side effect: .state/off/task-spawn-guard, resolved from KIT_ROOT (the
+# Kill switch: .state/off/task-spawn-guard (enforced by kit-gate.sh), resolved from KIT_ROOT (the
 # script's own location), never from CLAUDE_CONFIG_DIR - the kill switch lives in the kit's own .state
 # and is shared across every Claude profile pointed at this kit; only the flattened view follows
 # CLAUDE_CONFIG_DIR.
@@ -59,9 +59,9 @@ note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s task-spawn-guard %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
 }
 
-[ -f "${BASE:-}/.state/off/task-spawn-guard" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "fail-open: jq missing - cannot parse payload"; exit 0; }
 
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"

@@ -38,6 +38,7 @@ logdec() { # $1 = "deny: ..." | "allow: ..."
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s unattended-guard %s [sid=%s]\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" "${SID:-}" >> "$LOG"; } 2>/dev/null || true
 }
 
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 # readable-guarded BEFORE the `.` - a missing file ABORTS dash/busybox on the dot builtin, and that
 # abort code is the PreToolUse BLOCKING code (the fail-closed inversion no guard may have).
 LIB="$(dirname "$0")/guard-cmdpos.sh"
@@ -46,7 +47,7 @@ LIB="$(dirname "$0")/guard-cmdpos.sh"
 . "$LIB" 2>/dev/null || { note "guard-cmdpos.sh failed to source"; exit 0; }
 command -v guard_unattended >/dev/null 2>&1 || { note "guard-cmdpos.sh sourced but guard_unattended undefined"; exit 0; }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 [ -n "$TOOL" ] || { note "no tool_name in payload"; exit 0; }

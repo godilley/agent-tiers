@@ -5,17 +5,33 @@
 # the actual working directory (via the payload's .cwd), not off stdin JSON alone.
 set -u
 DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
-GUARD="$DIR/hygiene-commit-guard.sh"
+# Run from a SANDBOX kit copy with a temp config dir, never the real kit (the guard now reads live kit state
+# and the user's settings through kit-gate.sh), with every kit-gate input cleared.
+SB="$(mktemp -d)" || { echo "SELF-CHECK FAILED: mktemp"; exit 1; }
+trap 'rm -rf "$SB" 2>/dev/null || true' EXIT
+mkdir -p "$SB/kit/scripts" "$SB/kit/install" "$SB/cfg" "$SB/managed"
+cp "$DIR/hygiene-commit-guard.sh" "$DIR/guard-cmdpos.sh" "$SB/kit/scripts/"
+sed "s|^_kg_managed=.*|_kg_managed='$SB/managed'|" "$DIR/kit-gate.sh" > "$SB/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$SB/managed'" "$SB/kit/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$SB/kit/install/"
+# kitgate_into <kit root>: give a fixture kit the sandboxed gate + options table.
+kitgate_into() { mkdir -p "$1/scripts" "$1/install"; cp "$SB/kit/scripts/kit-gate.sh" "$1/scripts/"; cp "$SB/kit/install/options.tsv" "$1/install/"; }
+export CLAUDE_CONFIG_DIR="$SB/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+GUARD="$SB/kit/scripts/hygiene-commit-guard.sh"
 # decision/breadcrumb lines go to a SANDBOX log, never the real kit's .state/guards.log (opus reviewer, Wave D:
 # in-place selfchecks had filled the live record with fixture noise)
-SBLOG="$(mktemp -d)/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
+SBLOG="$SB/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
 fail=0
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (guard fails open by design)"; exit 0; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK" 2>/dev/null || true; }
-trap cleanup EXIT
+OTHER=""; T2=""; T3=""
+cleanup() { rm -rf "$WORK" "$SB" "$OTHER" "$T2" "$T3" 2>/dev/null || true; }
+trap cleanup EXIT   # supersedes the earlier $SB-only trap; cleanup removes both
+trap 'exit 130' INT; trap 'exit 143' TERM
 
 cd "$WORK" || exit 1
 git init -q
@@ -221,6 +237,7 @@ rm -rf "$OTHER"
 # pollute production breadcrumbs.
 T2="$(mktemp -d)"; mkdir -p "$T2/scripts"; cp "$GUARD" "$T2/scripts/hygiene-commit-guard.sh"
 cp "$DIR/guard-cmdpos.sh" "$T2/scripts/" 2>/dev/null || true   # the guard sources the shared splitter
+kitgate_into "$T2"
 if (cd "$T2" && git init -q >/dev/null 2>&1); then
   jq -n '{tool_input: {command: "git commit -m x"}}' | (cd "$T2" && AGENT_TIERS_GUARDS_LOG= sh "$T2/scripts/hygiene-commit-guard.sh") >/dev/null 2>&1
 fi
@@ -281,6 +298,7 @@ rm -f .hygiene-allow
 # about). The copy has no kit-config.md, which also makes leg 3 (no config anywhere) testable at all.
 T3="$(mktemp -d)"; mkdir -p "$T3/scripts"
 cp "$GUARD" "$T3/scripts/hygiene-commit-guard.sh"; cp "$DIR/guard-cmdpos.sh" "$T3/scripts/"
+kitgate_into "$T3"
 GUARD3="$T3/scripts/hygiene-commit-guard.sh"
 run3() { # $1=cmd -> deny|allow, against the isolated kit copy
   out="$(jq -n --arg x "$1" --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}' | AGENT_TIERS_GUARDS_LOG="$T3/guards.log" sh "$GUARD3" 2>/dev/null || true)"
@@ -393,5 +411,18 @@ check allow 'cat > notes.md <<EOF
 git commit -m "should not match"
 EOF'
 rm -f notes.md
+
+# --- kit-gate stand-down: marker <kit>/.state/off/<id> -> silent exit 0 + a kit-gate log line --------
+printf 'a line with an em\342\200\224dash\n' > f.txt; git add f.txt
+sd_in() { jq -n --arg c "$WORK" '{cwd: $c, tool_input: {command: "git commit -m x"}}'; }
+sd_ctl="$(sd_in | sh "$GUARD" 2>/dev/null)"
+printf '%s' "$sd_ctl" | grep -aq '"permissionDecision": *"deny"' || { printf 'FAIL standdown control: no deny without the marker: %s\n' "$sd_ctl"; fail=1; }
+mkdir -p "$SB/kit/.state/off"; : > "$SB/kit/.state/off/hygiene-commit-guard"
+: > "$SBLOG"
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+if [ -z "$sd_out" ] && [ "$sd_rc" = 0 ] && grep -aq 'kit-gate standdown hygiene-commit-guard:' "$SBLOG"; then
+  printf 'ok   [standdown] marker present -> silent exit 0 + log line\n'
+else printf 'FAIL standdown: rc=%s out=%s\n' "$sd_rc" "$sd_out"; fail=1; fi
+rm -f "$SB/kit/.state/off/hygiene-commit-guard"; reset_repo
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

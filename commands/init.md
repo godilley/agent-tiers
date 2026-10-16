@@ -52,7 +52,7 @@ exposes evidence establishing what that label represents. Do not label the panel
 ## 4. Tool enforcement (derivable)
 Confirm `advisor` ships `tools: Read, Grep, Glob` only - record `advisor_readonly_enforced: true`
 (tool-layer enforced, not merely instructed). Also confirm `reviewer` ships `tools: Read, Grep, Glob,
-Write` (read-only on code; writes only its one curated file).
+Write` (read-only on code; returns its findings inline, the Write grant goes unused).
 
 ## 5. Record findings to BOTH places
 **(a)** Write `.claude/agent-tiers.local.md` from `${CLAUDE_PLUGIN_ROOT}/templates/agent-tiers.local.md`,

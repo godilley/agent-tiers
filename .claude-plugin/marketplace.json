@@ -1,0 +1,43 @@
+{
+  "name": "agent-tiers",
+  "owner": {
+    "name": "George Dilley",
+    "url": "https://github.com/godilley"
+  },
+  "description": "The agent-tiers kit, plus two third-party companion plugins it is used alongside. The companions are listed for convenience: each is maintained upstream by its own author, and installing one is a separate choice.",
+  "plugins": [
+    {
+      "name": "agent-tiers",
+      "source": "./",
+      "description": "Lead/Worker/Advisor/Reviewer/Boss sub-agent tiers, workflow skills, and opt-in guard hooks grouped by level (Core by default)."
+    },
+    {
+      "name": "caveman",
+      "source": {
+        "source": "github",
+        "repo": "JuliusBrussee/caveman",
+        "sha": "15581d14007fd01fb3f132016741962f34936ca2"
+      },
+      "description": "Third-party companion, maintained upstream at github.com/JuliusBrussee/caveman: compressed, terse assistant output. Pinned to a known commit. Skip it if you already installed it from its own marketplace: a second copy runs its hooks twice.",
+      "author": {
+        "name": "Julius Brussee",
+        "url": "https://github.com/JuliusBrussee"
+      },
+      "homepage": "https://github.com/JuliusBrussee/caveman"
+    },
+    {
+      "name": "ponytail",
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail",
+        "sha": "2ed6c52c9d7e5e56942508591085fd45dea277d3"
+      },
+      "description": "Third-party companion, maintained upstream at github.com/DietrichGebert/ponytail: pushes toward the simplest solution that works. Pinned to a known commit. Skip it if you already installed it from its own marketplace: a second copy runs its hooks twice.",
+      "author": {
+        "name": "Dietrich Gebert",
+        "url": "https://github.com/DietrichGebert"
+      },
+      "homepage": "https://github.com/DietrichGebert/ponytail"
+    }
+  ]
+}

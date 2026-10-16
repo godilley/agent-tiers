@@ -21,6 +21,14 @@
 #       (shell backgrounding - the same lost-exit-code shape run_in_background covers)
 #   (c) the tool call's timeout is absent or below 600000 (ms)
 #   (d) the command is wrapped in a while/until loop that also mentions sleep
+# and, for ANY Bash call (no long command needed):
+#   (e) a while/until loop runs sleep and either (tier 1) the command names a harness-owned output
+#       (tasks/*.output, subagents/*.jsonl, the session tasks dir), bounded or not: every stranded poll
+#       loop observed watched these, a bounded one still strands the agent until its timeout, and the
+#       harness already sends a completion notification; or (tier 2) the loop has no bound: no
+#       `timeout` wrapper on the shell that runs it, no counter or deadline compared in its condition
+#       (or in its body next to a break/exit/return), and not a `while read` loop (which ends at end
+#       of input). Tier 2's deny text names the Monitor tool first, a bounded loop as the fallback.
 # Everything else - other pnpm/git commands, the same commands foreground/unpiped/timed right, a
 # `||`/`&&` alternative (the exit code is still read, just branched on), or any of these words
 # appearing only inside a quoted string (a commit message's `->`/`|`/`<email>`) - is allowed.
@@ -84,10 +92,34 @@
 # library change with every OTHER guard in this kit as a blast radius, out of scope for a single
 # guard's fix pass. `pnpm --filter X build` where X itself contains a space (`--filter "my pkg"
 # build`) is not recognised - same "value atom cannot span a space" ceiling guard-cmdpos.sh already
-# discloses for its own GITOPTS matching. Self-check: long-run-guard.selfcheck.sh.
+# discloses for its own GITOPTS matching.
+#
+# (e) lives in this guard rather than a new hook: it is the same stranded-polling incident class,
+# shares this guard's consent row and kill switch (shell_footguns group), and costs one process per
+# Bash call instead of two. It reads the heredoc-stripped text (not quote-blanked), turns unquoted
+# newlines into `;`, tokenises with guard_argv and walks the tokens with a loop-frame stack; an
+# `sh -c` script is re-read the same way (3 levels max); under a `timeout` wrapper its loops still
+# count for tier 1 but never as unbounded.
+# ponytail: (e) ceilings in the ALLOW direction (a real unbounded loop passes) - a remote script handed
+# over with no shell word (`ssh host '...'`, `kubectl exec pod -- '...'`) is not inspected; a loop
+# inside `$( )`/backticks is not seen; a script file run by name is not seen; a heredoc body fed to a
+# shell (`sh <<EOF`) is not seen; a busy loop with no sleep is allowed; a counter that is incremented
+# but never compared to anything meaningful still reads as a bound; a `timeout` word anywhere before
+# the shell word counts as the wrapper (`echo timeout 5 sh -c '...'` too); a path built only from
+# variables (`$TMPDIR/claude-$UID/...`) is not recognised by tier 1.
+# Ceilings in the DENY direction (a bounded or harmless loop is denied) - a body `break` counts only
+# with a counter/deadline test in the same body; a spaced compound step (`$(( i += 1 ))`, `(( i -= 1 ))`)
+# is not read as a step (`i=$((i+1))`, `(( i++ ))`, `(( --n ))` are); bash `;&`
+# case fall-through is not read as a pattern start; a shell word anywhere in a simple command (`echo sh
+# -c '...'` too) has its -c script read; a harness path named anywhere in the command (a comment, an
+# unrelated argument) trips tier 1 for any sleep loop in it; a comment glued to a subshell's close
+# (`(cmd)# ...`) is read as words (`)#` is not a comment start, so `$(date)#` stays one word), which can
+# also hide a loop when the comment holds an apostrophe. `#` comments (a word-start `#`) and case
+# patterns are skipped. Self-check: long-run-guard.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"
 logdec() {
@@ -112,6 +144,203 @@ CMD_HD="$(guard_strip_heredocs "$CMD")"
 CMD_NQ="$(guard_strip_quotes "$CMD_HD")"
 CMD_P="$CMD_NQ"
 
+# --- (e) unbounded poll loop -------------------------------------------------------------------------
+# lrg_nl: every UNQUOTED, unescaped newline -> ` ; ` (guard_argv reads an unquoted newline as a plain
+# blank, so a multi-line loop would lose its separators). Quoted newlines and backslash pairs are kept.
+# An unquoted `#` at word start (text start, or after a blank, newline or one of ;&|( ) starts a
+# comment: its text up to the next newline is dropped. A mid-word `#` (`$#`, `a#b`, `${#x}`) is kept.
+lrg_nl() {
+  printf '%s' "$1" | awk '
+    BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
+    {
+      s = $0; n = length(s); st = 0; out = ""
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (st == 1) { out = out c; if (c == SQ) st = 0; continue }
+        if (c == "\\") { out = out c substr(s, i + 1, 1); i++; continue }
+        if (st == 2) { out = out c; if (c == DQ) st = 0; continue }
+        if (c == "#" && (i == 1 || index(" \t\n;&|(", substr(s, i - 1, 1)))) {
+          while (i < n && substr(s, i + 1, 1) != "\n") i++
+          continue
+        }
+        if (c == "\n") out = out " ; "
+        else { out = out c; if (c == SQ) st = 1; else if (c == DQ) st = 2 }
+      }
+      printf "%s", out
+    }'
+}
+
+# lrg_scan: guard_argv token lines in; out: `LOOP` per while/until loop with sleep, `DENY` per such loop
+# with no bound, and `SUB<TAB>0|1<TAB>script` per `sh -c` script (1 = a timeout wraps that shell).
+# Frame stack: kind L (while/until) or F (for/select), mode c (cond/head) or b (body); every token is
+# appended to every open frame's own cond or body text.
+lrg_scan() {
+  awk '
+    BEGIN { SEP = "\034"; cmdpos = 1; sp = 0; tmo = 0; tsk = 0; tval = 0; shm = 0; shc = 0; shv = 0; cdp = 0; cs = 0; pat = 0 }
+    function addnames(tok,    s, e) {
+      s = substr(tok, 2)
+      while (match(s, /\$\{?[A-Za-z_][A-Za-z0-9_]*/)) {
+        m = substr(s, RSTART, RLENGTH); sub(/^\$\{?/, "", m); cand[m] = 1
+        s = substr(s, RSTART + RLENGTH)
+      }
+      s = substr(tok, 2)
+      while (match(s, /\$\(\(/)) {
+        s = substr(s, RSTART + RLENGTH); e = index(s, "))"); if (!e) e = length(s) + 1
+        addids("w" substr(s, 1, e - 1)); s = substr(s, e)
+      }
+    }
+    function addids(tok,    s) {
+      s = substr(tok, 2)
+      while (match(s, /[A-Za-z_][A-Za-z0-9_]*/)) {
+        cand[substr(s, RSTART, RLENGTH)] = 1; s = substr(s, RSTART + RLENGTH)
+      }
+    }
+    function isnumop(t) { return t == "w-lt" || t == "w-le" || t == "w-gt" || t == "w-ge" || t == "w-eq" || t == "w-ne" }
+    # stepped(nm, all): nm is incremented or decremented somewhere in the frame text `all`, or
+    # reassigned from `date +%s`. A pre-op `++nm`/`--nm` counts only at payload start or after `(`/`,`,
+    # or after a blank inside `((`; outside an arithmetic `(( ))` span a token starting `--` is a long
+    # option (`--count`), never a step; inside one (`(( --n > 0 ))`) it is a pre-decrement.
+    function stepped(nm, all,    n, a, i, s, v, ar, pd) {
+      n = split(all, a, SEP); ar = 0; pd = 0
+      for (i = 1; i <= n; i++) {
+        # ar: inside a `(( ))` span; pd counts its parens so an inner `(n)` does not end it early.
+        if (!ar && a[i] == "g(" && i < n && a[i + 1] == "g(") { ar = 1; pd = 0 }
+        if (ar) { if (a[i] == "g(") pd++; else if (a[i] == "g)" && --pd <= 0) ar = 0 }
+        s = substr(a[i], 2)
+        if (!ar && substr(s, 1, 2) == "--") continue
+        if (match(s, "(^|[^A-Za-z0-9_])" nm "(\\+\\+|--|\\+=|-=)")) return 1
+        if (match(s, "(^|[(,])(\\+\\+|--)" nm "([^A-Za-z0-9_]|$)")) return 1
+        if (index(s, "((") && match(s, "[ \t](\\+\\+|--)" nm "([^A-Za-z0-9_]|$)")) return 1
+        if (substr(s, 1, length(nm) + 1) == nm "=") {
+          v = substr(s, length(nm) + 2)
+          if (match(v, "(^|[^A-Za-z0-9_])" nm "([^A-Za-z0-9_]|$)") || index(v, "date +%s")) return 1
+        }
+      }
+      return 0
+    }
+    function bound(T, all,    n, a, i, j, cmp, ar, txt, nm) {
+      split("", cand); cmp = 0
+      n = split(T, a, SEP)
+      for (i = 1; i <= n; i++) {
+        if (isnumop(a[i])) { cmp = 1; if (i > 1) addnames(a[i - 1]); if (i < n) addnames(a[i + 1]) }
+        else if (a[i] == "g(" && i < n && a[i + 1] == "g(") {
+          ar = 0
+          for (j = i + 2; j <= n && !(a[j] == "g)" && j < n && a[j + 1] == "g)"); j++) {
+            if (index(substr(a[j], 2), "<") || index(substr(a[j], 2), ">")) ar = 1
+            addids(a[j])
+          }
+          if (ar) cmp = 1
+          i = j
+        }
+      }
+      txt = T; gsub(SEP, " ", txt)
+      if (cmp && (index(txt, "date +%s") || index(txt, "$" "SECONDS") || index(txt, "$" "{SECONDS}") || index(txt, "EPOCHSECONDS") || ("SECONDS" in cand))) return 1
+      for (nm in cand) if (stepped(nm, all)) return 1
+      return 0
+    }
+    function evalf(k,    all) {
+      all = ct[k] SEP bt[k]
+      if (hs[k]) print "LOOP"
+      if (hs[k] && !(rc[k] || bound(ct[k], all) || (bk[k] && bound(bt[k], all)))) print "DENY"
+    }
+    {
+      tag = substr($0, 1, 1); w = substr($0, 2)
+      if (tag == "u") next
+      for (k = 1; k <= sp; k++) { if (mode[k] == "c") ct[k] = ct[k] SEP $0; else bt[k] = bt[k] SEP $0 }
+      # case patterns (after `in` or `;;`, through the closing `)`) are never commands or keywords.
+      if (pat) {
+        if (tag == "g" && w == ")") { pat = 0; cmdpos = 1 }
+        else if (tag == "w" && w == "esac") { pat = 0; cdp--; cmdpos = 0 }
+        next
+      }
+      if (cs) { if (tag == "w" && w == "in") { cs = 0; pat = 1 }; next }
+      if (tag == "g") { cmdpos = 1; tmo = 0; tsk = 0; tval = 0; shm = 0; shc = 0; shv = 0; if (w == ";;" && cdp) pat = 1; next }
+      if (tag != "w" && tag != "o") next
+      if (shm) {
+        if (shc) { printf "SUB\t%d\t%s\n", tmo, w; shm = 0; shc = 0; next }
+        if (shv) { shv = 0; next }
+        if (w == "-o" || w == "+o") { shv = 1; next }
+        if (w ~ /^--./ || w ~ /^\+./) next
+        if (w ~ /^-[^-]/) { if (index(w, "c")) shc = 1; next }
+        shm = 0
+      }
+      if (tsk) {
+        if (tval) { tval = 0; next }
+        if (w == "-k" || w == "-s" || w == "--signal" || w == "--kill-after") { tval = 1; next }
+        if (w ~ /^-[ks]./ || w == "--foreground" || w == "--preserve-status" || w == "-v" || w ~ /^--signal=/ || w ~ /^--kill-after=/) next
+        tsk = 0; next
+      }
+      # a `timeout` word or a shell word anywhere in a simple command (`sudo -u x sh -c`, `docker
+      # compose exec db timeout 60 sh -c`, `su --shell=/bin/bash -c`); an assignment word
+      # (`SHELL=/bin/bash`) is never a shell word.
+      if (w == "timeout") { tmo = 1; tsk = 1; next }
+      b = w; sub(/.*\//, "", b)
+      if (w !~ /^[A-Za-z_][A-Za-z0-9_]*=/ && (b == "sh" || b == "bash" || b == "dash" || b == "zsh" || b == "ksh")) { shm = 1; shc = 0; shv = 0; cmdpos = 0; next }
+      if (!cmdpos) next
+      if (w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) next
+      if (w == "if" || w == "then" || w == "else" || w == "elif" || w == "!") next
+      if (w == "do") { if (sp) mode[sp] = "b"; next }
+      if (w == "case") { cdp++; cs = 1; cmdpos = 0; next }
+      if (w == "esac" && cdp) { cdp--; cmdpos = 0; next }
+      if (w == "while" || w == "until" || w == "for" || w == "select") {
+        sp++; kind[sp] = (w == "while" || w == "until") ? "L" : "F"; mode[sp] = "c"
+        ct[sp] = ""; bt[sp] = ""; hs[sp] = 0; rc[sp] = 0; bk[sp] = 0
+        if (kind[sp] == "F") cmdpos = 0
+        next
+      }
+      cmdpos = 0
+      if (w == "done") { if (sp) { if (kind[sp] == "L") evalf(sp); sp-- }; next }
+      if (w == "nohup" || w == "env" || w == "command" || w == "time" || w == "exec" || w == "nice" || w == "sudo") { cmdpos = 1; next }
+      if (b == "sleep") { for (k = 1; k <= sp; k++) if (kind[k] == "L") hs[k] = 1; next }
+      if (sp && kind[sp] == "L") {
+        if (w == "read" && mode[sp] == "c") { rc[sp] = 1; next }
+        if ((w == "break" || w == "exit" || w == "return") && mode[sp] == "b") { bk[sp] = 1; next }
+      }
+    }
+    END { while (sp) { if (kind[sp] == "L") evalf(sp); sp-- } }
+  '
+}
+
+# lrg_poll <script> <depth> <wrapped>: prints `LOOP` when the script, or an `sh -c` script inside it
+# (3 levels max, deeper is ignored), holds a while/until loop with sleep, and `DENY` when such a loop
+# is unbounded and no timeout wraps it or any shell above it (wrapped=1). Subshell keeps vars local.
+lrg_poll() (
+  out="$(guard_argv "$(lrg_nl "$(guard_strip_heredocs "$1")")" | lrg_scan)"
+  printf '%s\n' "$out" | grep -qx LOOP && echo LOOP
+  [ "$3" = 1 ] || { printf '%s\n' "$out" | grep -qx DENY && echo DENY; }
+  [ "$2" -lt 3 ] || exit 0
+  printf '%s\n' "$out" | while IFS= read -r l; do
+    case "$l" in SUB*)
+      r="${l#SUB?}"; w="$3"; [ "${r%%[!0-9]*}" = 1 ] && w=1
+      lrg_poll "$(printf '%s' "${r#??}" | tr '\036' '\n')" $(($2 + 1)) "$w" ;;
+    esac
+  done
+)
+
+HAS_POLL_LOOP=0
+POLL_UNBOUNDED=0
+HARNESS_PATH=0
+if command -v guard_argv >/dev/null 2>&1 \
+  && printf '%s' "$CMD_HD" | grep -aEq '(^|[^A-Za-z0-9_])(while|until)([^A-Za-z0-9_]|$)' \
+  && printf '%s' "$CMD_HD" | grep -aEq '(^|[^A-Za-z0-9_])sleep([^A-Za-z0-9_]|$)'; then
+  POLL_OUT="$(lrg_poll "$CMD_HD" 1 0)"
+  case "$POLL_OUT" in *LOOP*) HAS_POLL_LOOP=1 ;; esac
+  case "$POLL_OUT" in *DENY*) POLL_UNBOUNDED=1 ;; esac
+  printf '%s' "$CMD_HD" | grep -aEq "/tasks/[^[:space:]'\"]*\.output|/subagents/[^[:space:]'\"]*\.jsonl|claude-[0-9]+/[^[:space:]'\"]+/tasks([^A-Za-z0-9_.-]|\$)" \
+    && HARNESS_PATH=1
+fi
+POLL_HARNESS_REASON="deny: this loop polls a harness-owned output (a tasks/*.output or subagents/*.jsonl file, or the session tasks dir). The harness sends a completion notification for every subagent and run_in_background command, so end the turn and wait for it; do not poll, bounded or not."
+POLL_REASON="deny: a while/until loop with sleep and no bound never ends when the awaited condition never comes true. To wait on an external condition (a port, a URL, a file another process writes), prefer the Monitor tool. Fallback, a bounded loop: wrap it in timeout (timeout 600 sh -c 'until [ -s f ]; do sleep 10; done'), or put a counter or deadline in the condition (i=0; until [ -s f ] || [ \$i -ge 60 ]; do sleep 10; i=\$((i+1)); done), or loop a fixed count (for i in \$(seq 60); do [ -s f ] && break; sleep 10; done). Then read the exit status."
+POLL_DENY=""
+if [ "$HAS_POLL_LOOP" = 1 ] && [ "$HARNESS_PATH" = 1 ]; then POLL_DENY="$POLL_HARNESS_REASON"
+elif [ "$POLL_UNBOUNDED" = 1 ]; then POLL_DENY="$POLL_REASON"; fi
+deny_out() {
+  logdec "${1%%. *}"
+  jq -n --arg r "$1" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+  exit 0
+}
+
 # Any pnpm flag may sit between `pnpm` and the verb: the named ones, plus a generic `-x` and a generic
 # `--x [value]` (the value branch is optional so `--silent build` still reaches the verb). Before
 # 2026-10-01 only the named flags were known, so `pnpm -s check | tail` slipped past this guard while
@@ -122,7 +351,10 @@ LONGCMD_FRAG="(${PNPM_FRAG}|${CMDPOS_COMMIT_FRAG})"
 
 SEGMENTS="$(guard_split_segments "$CMD_P")"
 FOUND_SEGS="$(guard_segs_at_cmdpos "$SEGMENTS" "$LONGCMD_FRAG")"
-[ -n "$FOUND_SEGS" ] || exit 0
+if [ -z "$FOUND_SEGS" ]; then
+  [ -n "$POLL_DENY" ] && deny_out "$POLL_DENY"
+  exit 0
+fi
 
 # Pipeline CHUNKS: split only on &&/; - a pipe or a trailing background & stays attached to its own
 # chunk, which is exactly the relationship (a) and the background half of (b) need to see.
@@ -209,10 +441,9 @@ elif [ "$LOOP_SLEEP" = 1 ]; then
   REASON="deny: a while/until+sleep loop around a long check/build/commit is exactly the stranded-polling shape this guard exists to prevent. $REMEDY"
 elif [ "$TIMEOUT_APPLIES" = 1 ] && [ "$TIMEOUT_BAD" = 1 ]; then
   REASON="deny: a long check/build/commit needs timeout >= 600000 on the tool call, or the harness auto-backgrounds it at 120000ms with no exit code. $REMEDY"
+elif [ -n "$POLL_DENY" ]; then
+  REASON="$POLL_DENY"
 fi
 
 [ -n "$REASON" ] || exit 0
-logdec "${REASON%%. *}"
-jq -n --arg r "$REASON" \
-  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
-exit 0
+deny_out "$REASON"

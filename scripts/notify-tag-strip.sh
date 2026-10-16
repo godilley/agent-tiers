@@ -38,12 +38,15 @@ note() {
 [ -f "$CLAUDE_DIR/agent-tiers/.state/off/notify" ] && exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 # Cheap bail (opus reviewer, 2026-09-17, MEDIUM/Perf) BEFORE spawning jq: MessageDisplay holds every
 # batch until this hook returns, and the tag can only ever appear as a literal `operator:` line, so
 # a plain substring miss on the raw JSON text rules it out for the overwhelming majority of batches
 # without paying for jq/grep at all.
 case "$INPUT" in *operator:*) ;; *) exit 0 ;; esac
+# kit-gate after the cheap bail, not before it: a batch with no tag exits silently either way, and the
+# gate's child sh would otherwise be paid on every batch MessageDisplay holds.
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 DELTA="$(printf '%s' "$INPUT" | jq -r '.delta // empty' 2>/dev/null || true)"
 [ -n "$DELTA" ] || exit 0
 
@@ -75,15 +78,18 @@ MATCHED="$(printf '%s' "$DELTA" | grep -aE "$TAG_RE" || true)"
 # The glyphs are Nerd Font private-use codepoints: without that font they render as empty boxes, so
 # they are opt-in (AGENT_TIERS_BADGE_GLYPHS=nerd). The plain default keeps the colour and the words,
 # which already differ, and marks the wants-input badge with an ASCII "!" in the triangle's place.
+# NO_COLOR (no-color.org): set and non-empty drops the SGR escapes, the text and glyphs stay.
+C_OR="$(printf '\033[1;38;5;208m')"; C_GR="$(printf '\033[1;32m')"; C_RS="$(printf '\033[0m')"
+[ -n "${NO_COLOR:-}" ] && { C_OR=""; C_GR=""; C_RS=""; }
 if [ "${AGENT_TIERS_BADGE_GLYPHS:-}" = nerd ]; then
-  BADGE_WANT="$(printf '\033[1;38;5;208m[[ \357\201\261  INPUT NEEDED ]]\033[0m')"
-  BADGE_NONE="$(printf '\033[1;32m[[ NO INPUT NEEDED \357\200\214 ]]\033[0m')"
+  BADGE_WANT="$(printf '%s[[ \357\201\261  INPUT NEEDED ]]%s' "$C_OR" "$C_RS")"
+  BADGE_NONE="$(printf '%s[[ NO INPUT NEEDED \357\200\214 ]]%s' "$C_GR" "$C_RS")"
 else
-  BADGE_WANT="$(printf '\033[1;38;5;208m[[ ! INPUT NEEDED ]]\033[0m')"
-  BADGE_NONE="$(printf '\033[1;32m[[ NO INPUT NEEDED ]]\033[0m')"
+  BADGE_WANT="$(printf '%s[[ ! INPUT NEEDED ]]%s' "$C_OR" "$C_RS")"
+  BADGE_NONE="$(printf '%s[[ NO INPUT NEEDED ]]%s' "$C_GR" "$C_RS")"
 fi
 # ask_next: same orange as "wants input" (a question is coming), plain text, no glyph.
-BADGE_ASK="$(printf '\033[1;38;5;208m[[ QUESTION NEXT ]]\033[0m')"
+BADGE_ASK="$(printf '%s[[ QUESTION NEXT ]]%s' "$C_OR" "$C_RS")"
 SEDSCRIPT='s/^operator:want_input$/'"$BADGE_WANT"'/; s/^operator:ask_next$/'"$BADGE_ASK"'/; s/^operator:no_input_required\|reason:.+$/'"$BADGE_NONE"'/'
 STRIPPED="$(printf '%s' "$DELTA" | sed -E "$SEDSCRIPT")"
 # A sed failure (absent from a restricted PATH, no -E support) yields an empty capture with no

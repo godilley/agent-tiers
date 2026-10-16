@@ -121,25 +121,23 @@ if [ -z "$TAG" ]; then
   command -v jq >/dev/null 2>&1 || { echo "preflight: jq is not installed - the guard selfchecks SKIP without it (exit 0, untested), so a share tag would certify a kit that was never tested. Install jq and re-run. Not tagging." >&2; exit 1; }
   echo "preflight: lint-doctrine" >&2
   "$KIT_DIR/scripts/lint-doctrine.sh" >/dev/null || { echo "lint-doctrine FAILED - not tagging." >&2; exit 1; }
-  for sc in "$KIT_DIR"/scripts/*.selfcheck.sh; do
-    [ -e "$sc" ] || continue
-    echo "preflight: $(basename "$sc")" >&2
-    # Capture output rather than discarding it (opus advisor 2026-08-24): a selfcheck can exit 0
-    # while SKIPping one of its own assertions (e.g. a missing `unzip`), and jq being present (step
-    # 2 above) does not guarantee every other tool a selfcheck might need. A green exit code alone
-    # does not mean everything was actually tested - a SKIP line anywhere in the output means it wasn't.
-    # `&& SC_RC=0 || SC_RC=$?`, not a bare `VAR="$(cmd)"; RC=$?` (opus reviewer 2026-08-24, HIGH): this
-    # file runs under `set -e`, and a plain assignment is a simple command whose own failure exits the
-    # SCRIPT right there - the line below never ran, so a red selfcheck aborted with no message at all
-    # and $SC_OUT/$SC_RC were never captured for the check that follows.
-    SC_OUT="$(sh "$sc" 2>&1)" && SC_RC=0 || SC_RC=$?
-    [ "$SC_RC" -eq 0 ] || { echo "$(basename "$sc") FAILED - not tagging." >&2; printf '%s\n' "$SC_OUT" >&2; exit 1; }
-    if printf '%s\n' "$SC_OUT" | grep -q '^SKIP'; then
-      echo "$(basename "$sc") SKIPPED an assertion (untested, not failed) - not tagging:" >&2
-      printf '%s\n' "$SC_OUT" | grep '^SKIP' >&2
-      exit 1
-    fi
-  done
+  # One scorer for every selfcheck: scripts/selfcheck-all.sh (CI scoring: nonzero rc or any line starting
+  # SKIP fails the check, so a green exit that skipped an assertion is not "tested"). It names each
+  # failing check in its own `FAIL scripts/<name>.selfcheck.sh (rc=N)` line followed by that check's output.
+  # `&& SC_RC=0 || SC_RC=$?`, not a bare `VAR="$(cmd)"; RC=$?` (opus reviewer 2026-08-24, HIGH): this
+  # file runs under `set -e`, and a plain assignment is a simple command whose own failure exits the
+  # SCRIPT right there with no message.
+  [ -f "$KIT_DIR/scripts/selfcheck-all.sh" ] || { echo "preflight: scripts/selfcheck-all.sh not present in this kit copy - cannot score the selfchecks. Not tagging." >&2; exit 1; }
+  echo "preflight: selfcheck-all (CI scoring: SKIP fails)" >&2
+  SC_OUT="$(sh "$KIT_DIR/scripts/selfcheck-all.sh" "$KIT_DIR" 2>&1)" && SC_RC=0 || SC_RC=$?
+  if [ "$SC_RC" -ne 0 ]; then
+    echo "selfcheck-all FAILED (exit $SC_RC; a failed or SKIPping check is listed as FAIL) - not tagging:" >&2
+    printf '%s\n' "$SC_OUT" | grep -a -e '^FAIL' -e '^    |' -e '^selfcheck-all' -e '^shell=' -e '^outputs:' >&2 || true
+    exit 1
+  fi
+  # green: selfcheck-all leaves its per-check output dir behind (it prints `outputs: <dir>`); drop it
+  sc_dir="$(printf '%s\n' "$SC_OUT" | sed -n 's/^outputs: //p' | tail -n 1)"
+  case "$sc_dir" in */selfcheck-all.*) [ ! -d "$sc_dir" ] || rm -rf "$sc_dir" ;; esac
   echo "preflight: leak-scan bundle HEAD" >&2
   # leak-scan.sh is KIT-LOCAL (export-ignored, in neither bundle). A recipient re-sharing must see
   # "not present", not "leak-scan FAILED" - the latter reads as "a leak was found" (T1.4, 2026-08-16).

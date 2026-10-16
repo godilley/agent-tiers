@@ -12,8 +12,17 @@ DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"
 cleanup() { rm -rf "$T" 2>/dev/null || true; }
 trap cleanup EXIT
-mkdir -p "$T/scripts"
+mkdir -p "$T/scripts" "$T/install" "$T/managed" "$T/cfg"
 cp "$DIR/framing-guard.sh" "$T/scripts/framing-guard.sh"
+# kit-gate.sh runs from this sandbox too: managed-settings dir pointed at an empty temp dir, user
+# config dir and guards log in the sandbox, every kit-gate input cleared (the user's own options
+# must not stand the guard down mid-check).
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$DIR/kit-gate.sh" > "$T/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$T/install/"
+export AGENT_TIERS_GUARDS_LOG="$T/guards.log" CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 GUARD="$T/scripts/framing-guard.sh"
 LOG="$T/.state/framing.log"
 fail=0
@@ -68,5 +77,20 @@ check nohit '~/.claude/agent-tiers/scripts/hygiene-commit-guard.sh has a bug, go
 check nohit 'read agent-tiers/scripts/guard-cmdpos.sh before you start'
 # but a genuine non-path vocabulary mention still fires
 check hit 'this kit is called agent-tiers, check its doctrine' agent-tiers
+
+# kit-gate stand-down: with the kit-root marker present the guard exits 0, prints nothing, logs the
+# stand-down and writes no hit line for a prompt that otherwise hits.
+# control run, same payload, no marker: it must log a hit, or the silence below proves nothing
+c="$(before_lines)"
+printf '%s\n' 'Check this against agent-tiers doctrine.' | jq -Rs '{tool_input: {prompt: .}}' | sh "$GUARD" >/dev/null 2>&1
+[ "$(before_lines)" -gt "$c" ] || { echo "FAIL standdown control run logged no hit"; fail=1; }
+mkdir -p "$T/.state/off" && : > "$T/.state/off/framing-guard"
+b="$(before_lines)"
+out="$(printf '%s\n' 'Check this against agent-tiers doctrine.' | jq -Rs '{tool_input: {prompt: .}}' | sh "$GUARD" 2>/dev/null)"; rc=$?
+a="$(before_lines)"
+rm -f "$T/.state/off/framing-guard"
+if [ "$rc" = 0 ] && [ -z "$out" ] && [ "$a" = "$b" ] && grep -aq 'kit-gate standdown framing-guard:' "$AGENT_TIERS_GUARDS_LOG" 2>/dev/null; then
+  echo "ok   [standdown] marker present: no output, no hit line, logged"; else
+  echo "FAIL standdown rc=$rc out=$out hitlines $b->$a"; fail=1; fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

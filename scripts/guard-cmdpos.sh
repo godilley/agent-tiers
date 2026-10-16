@@ -96,28 +96,59 @@ guard_has_heredoc() {
 # <cmd> is returned unchanged, not a partial strip - since a body with no known end cannot be safely
 # bounded, and a caller silently mis-scanning past where the real command resumes is worse than the
 # false-negative wide-open heredoc guard_has_heredoc callers already accept.
+# Opener detection is QUOTE-AWARE (2026-10-14; before, any `<<` substring was an opener, so `echo "x
+# <<EOF"` followed by a real command and a line `EOF` dropped that real command from every scan, and a
+# herestring `cat <<< EOF` did the same): a `<<` inside single or double quotes is not an opener, a
+# herestring `<<<` never is (nor at its 2nd/3rd character), and a `#` comment (a `#` at line start or
+# after a blank or `;&|(`) ends the scan of that line. Quote state carries across lines; body lines of
+# an active heredoc are not scanned. A `$(` seen at top level or inside double quotes opens a nested
+# context whose quote state starts at 0; the `)` that closes it (paren depth counted at state 0 inside
+# that context) restores the enclosing state - this is what keeps the default `git commit -m "$(cat
+# <<'EOF'` shape recognised. Ceilings: a `<<` inside arithmetic `$(( ))` followed by a name-shaped word
+# reads as an opener; backticks do not open a nested context; a `)` inside a `case` pattern within
+# `$( )` closes the context early.
 guard_strip_heredocs() {
   cmd="${1:-}"
   case "$cmd" in *'<<'*) : ;; *) printf '%s' "$cmd"; return 0 ;; esac
   out="$(printf '%s\n' "$cmd" | awk '
-    BEGIN { tag = ""; dash = 0 }
+    BEGIN { tag = ""; dash = 0; q = 0; dep = 0; sp = 0; SQ = "\047"; DQ = "\042" }
     {
       line = $0
-      if (tag == "") {
-        print line
-        if (match(line, /<<-?[ \t]*('"'"'[^'"'"']*'"'"'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)/)) {
-          seg = substr(line, RSTART, RLENGTH)
+      if (tag != "") {
+        cand = line
+        if (dash) sub(/^\t+/, "", cand)
+        if (cand == tag) { tag = ""; dash = 0 }
+        next
+      }
+      print line
+      n = length(line); i = 1; found = 0
+      while (i <= n) {
+        c = substr(line, i, 1)
+        if (q == 1) { if (c == SQ) q = 0; i++; continue }
+        if (c == "\\") { i += 2; continue }
+        if (substr(line, i, 2) == "$(") { sp++; sq[sp] = q; sd[sp] = dep; q = 0; dep = 0; i += 2; continue }
+        if (q == 2) { if (c == DQ) q = 0; i++; continue }
+        if (c == SQ) { q = 1; i++; continue }
+        if (c == DQ) { q = 2; i++; continue }
+        if (c == "#" && (i == 1 || index(" \t;&|()", substr(line, i - 1, 1)) > 0)) break
+        if (c == "(") { dep++; i++; continue }
+        if (c == ")") {
+          if (dep > 0) dep--
+          else if (sp > 0) { q = sq[sp]; dep = sd[sp]; sp-- }
+          i++; continue
+        }
+        if (substr(line, i, 3) == "<<<") { i += 3; while (substr(line, i, 1) == "<") i++; continue }
+        if (!found && substr(line, i, 2) == "<<" && match(substr(line, i), /^<<-?[ \t]*('"'"'[^'"'"']*'"'"'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)/)) {
+          seg = substr(line, i, RLENGTH)
           dash = (seg ~ /^<<-/) ? 1 : 0
           rest = seg
           sub(/^<<-?[ \t]*/, "", rest)
           gsub(/^'"'"'|'"'"'$/, "", rest)
           gsub(/^"|"$/, "", rest)
-          tag = rest
+          tag = rest; found = 1
+          i += RLENGTH; continue
         }
-      } else {
-        cand = line
-        if (dash) sub(/^\t+/, "", cand)
-        if (cand == tag) { tag = ""; dash = 0 }
+        i++
       }
     }
     END { if (tag != "") exit 1 }
@@ -312,9 +343,9 @@ GUARD_UNATTENDED_PREFIX="UNATTENDED MODE: this session is flagged unattended (.s
 # same as unattended's: convert ask -> deny, worded at the actor that can actually act (stop, don't
 # retry a variant, report the text back so the Lead sees it). Takes priority over unattended (see
 # guard_ask_prefix below) - a subagent's ask is unanswerable regardless of who's watching the session.
-# FAIL DIRECTION (mirrors guard_unattended's own note above): a MISSING or unrecognised agent_type
-# means the guards keep asking - the attended-Lead status quo. Only a value guard_caller_agent actually
-# recognises as a subagent converts to deny.
+# FAIL DIRECTION (mirrors guard_unattended's own note above): a payload guard_caller_agent does not
+# recognise as a subagent (no agent_id - see its header for the probe) means the guards keep asking -
+# the attended-Lead status quo. Only a call guard_caller_agent reads as a subagent converts to deny.
 GUARD_SUBAGENT_PREFIX="DELEGATED AGENT: this tool call came from a sub-agent, not the session Lead, so a question with no one able to answer it is returned as a deny instead of a halt. This gate is the Lead's to clear, not yours - do not retry a variant or route around it with another tool. Stop, and report this text verbatim in your final message so the Lead can see it and act. "
 
 # Resolution order: the env override (selfchecks point it at a sandbox), then the caller's own $BASE -
@@ -340,25 +371,40 @@ guard_unattended() {
   [ -f "$d/unattended.$1" ]
 }
 
-# guard_caller_agent <input_json> -> stdout: the .agent_type of the tool call, empty when it came from
-# the Lead directly. Same charset guard as every other payload-derived value in this kit (SESSION_ID in
-# review-gate-guard.sh, etc) - an unusable value degrades to "no agent", never a traversal or injection.
-# Probed live 2026-08-27: present on a real PreToolUse payload for a subagent's Bash call ("worker"),
-# absent on the Lead's own. FAIL DIRECTION (opus reviewer, 2026-08-27, MEDIUM): this treats ANY
-# non-empty value as "subagent", so it fails CLOSED on a field this kit does not own - if the CLI ever
-# starts stamping the Lead's own payloads with e.g. "main", every ask-class guard would hard-deny every
-# Lead commit. The kit's other two readers of this field already encode "absent means Lead" the other
-# way (authorship-record.sh, numeric-claim-ledger.sh: `.agent_type // "MAIN"`) - normalise their sentinel
-# here too so a future CLI convention on either side degrades to the same safe "ask", not a wrong deny.
+# guard_caller_agent <input_json> -> stdout: a non-empty name when the tool call came from a SUBAGENT,
+# empty when it came from the session Lead. The test is `.agent_id`, not `.agent_type` (2026-10-14):
+# probed on Claude Code 2.1.296 with PreToolUse(Bash) payload dumps, a plain main session carries
+# neither field, a main session started with `--agent <name>` carries agent_type=<name> and NO
+# agent_id, and a subagent carries agent_type AND a hex agent_id. Reading agent_type alone therefore
+# treated a `--agent` main session as a subagent and converted every one of its asks to a deny.
+# Rule: no (or empty) agent_id -> empty (the Lead), whatever agent_type says. agent_id present ->
+# the agent_type, charset-stripped like every other payload-derived value in this kit (SESSION_ID in
+# review-gate-guard.sh, etc) and with the `main`/`MAIN` sentinel normalised away (authorship-record.sh
+# and numeric-claim-ledger.sh call this and record `MAIN` for an empty answer); when that leaves nothing (agent_type absent,
+# empty, `main`, or failing the charset) the answer is the literal `subagent`, so a subagent is never
+# read as the Lead because of an odd agent_type. Unparsable input -> empty.
+# A plugin-namespaced type (`<plugin>:<agent>`, e.g. `agent-tiers:sublead`) is reduced to the part after
+# the LAST `:` first, so name-keyed consumers see `sublead`; every name-keyed use only ADDS restrictions,
+# so stripping the namespace never grants more.
+# FAIL DIRECTION: a host that sends no agent_id for subagents would have every subagent read as the
+# Lead. For the ask-class consumers that means asks stay asks (the attended status quo). For the
+# DENY-class consumers it fails OPEN to Lead privileges: agent-selfdef-guard lets a subagent write its
+# own definition, sc52a-write-disclosure-guard honours a subagent's own [bash-write:] marker, and
+# task-spawn-guard's depth cap lets a subagent spawn a sublead. The probe above is the only evidence
+# that current hosts send agent_id.
 guard_caller_agent() {
-  agt="$(printf '%s' "${1:-}" | jq -r '.agent_type // empty' 2>/dev/null || true)"
+  agt="$(printf '%s' "${1:-}" | jq -r 'if ((.agent_id // "") | tostring) != "" then "S" + ((.agent_type // "") | tostring) else "" end' 2>/dev/null || true)"
+  case "$agt" in S*) agt="${agt#S}" ;; *) printf '\n'; return 0 ;; esac
+  agt="${agt##*:}"
   case "$agt" in main|MAIN) agt="" ;; esac
   case "$agt" in *[!A-Za-z0-9._-]*) agt="" ;; esac
+  [ -n "$agt" ] || agt="subagent"
   printf '%s\n' "$agt"
 }
 
 # guard_ask_decision <session_id> [agent_type] -> stdout: `ask` normally, `deny` when the session is
-# unattended OR the caller is a subagent (agent_type non-empty - see GUARD_SUBAGENT_PREFIX above).
+# unattended OR the caller is a subagent ($2 non-empty, i.e. guard_caller_agent returned a name - see
+# its header for the agent_id rule, and GUARD_SUBAGENT_PREFIX above).
 # Callers prepend guard_ask_prefix's output to their OWN reason text when this returns deny, and log
 # the decision word they got - so guards.log records these denies like any other (HOST-4: the log is
 # the durable human record of what a guard blocked). Existing single-arg callers are unaffected: a
@@ -415,55 +461,253 @@ guard_split_segments() {
 }
 
 # guard_split_segments_qsafe <cmd> -> stdout, same CONTRACT as guard_split_segments (one segment per
-# line, ALWAYS trailing \n, segment text kept RAW/unquoted-unchanged) but QUOTE-AWARE: a &&/||/|/;/&
-# INSIDE a single- or double-quoted region is never treated as a boundary. guard_split_segments is
-# quote-BLIND (it gsubs the delimiter characters wherever they appear), so a one-line commit message
-# containing its own `;` or `&&` (`git commit -m "docs: WIP; git stash is shared"`) gets sliced mid-
-# string, and the fragment after the accidental split (` git stash is shared"`) can then match a
-# verb-detection regex AT COMMAND POSITION even though it was never a real second command - worktree-
-# guard.sh and git-add-stash-guard.sh both hit this (guards-review-2, 2026-09-23, claim 5/finding).
-# This is the fix: split on the SAME delimiter set, but only when the scanning position is outside
-# both quote kinds (the quote characters themselves are matched by scanning character-by-character,
-# same state machine as guard_strip_quotes - state 0/1/2 for none/single/double). Unlike
-# guard_strip_quotes, this does NOT blank quoted content - the point here is correct SEGMENT
-# BOUNDARIES with the real text intact, so a caller's existing per-segment value extraction (a path,
-# a subcommand) keeps reading real argument values, not blanked ones. A literal newline already
-# embedded in the command (surviving heredoc-stripping puts the resumed command text on its own
-# line) is not specially handled and does not need to be: at quote-state 0 it falls through to "copy
-# the character unchanged" like any other non-delimiter byte, which for a newline IS already the
-# segment-boundary shape this function's own output needs, and at quote-state 1/2 the same fallthrough
-# correctly keeps a real multi-line quoted string content-preserved inside one segment, matching bash's
-# own quoting rules (a newline has no special meaning inside `"..."`/`'...'`). Same "no backslash-
-# escape awareness inside double quotes" ceiling guard_strip_quotes already discloses - not solved
-# twice. A caller that needs to know a metacharacter is ABSENT (not the real value) still calls
-# guard_strip_quotes on the INDIVIDUAL matched segment, same as before; this function only fixes
-# where the boundaries land.
+# line, ALWAYS trailing \n, segment text otherwise RAW) but QUOTE-AWARE: a &&/||/|/;/&/|& INSIDE a single-
+# or double-quoted region is never treated as a boundary. guard_split_segments is quote-BLIND (it gsubs
+# the delimiter characters wherever they appear), so a one-line commit message containing its own `;`
+# or `&&` (`git commit -m "docs: WIP; git stash is shared"`) gets sliced mid-string, and the fragment
+# after the accidental split can then match a verb-detection regex AT COMMAND POSITION even though it
+# was never a real second command - worktree-guard.sh and git-add-stash-guard.sh both hit this
+# (guards-review-2, 2026-09-23, claim 5/finding). Scans character by character with quote state
+# 0/1/2 (none/single/double), same state machine as guard_strip_quotes, and does NOT blank quoted
+# content: callers keep reading real argument values.
+# Rules (2026-10-14 fix pass, each one probed wrong before it):
+# - Every raw newline is a segment boundary, INSIDE quotes too, as before this pass. Keeping a quoted
+#   newline inside its segment (an RS-byte encoding was tried) made any quote mis-track that balances
+#   out again (`echo "$(printf "it's")"`, then a newline, a real command, and a comment holding `'`)
+#   hide whole later lines from every consumer that matches at line start; a split quoted argument
+#   only costs a consumer an unbalanced fragment, which fails toward scanning more, not less. There is
+#   no `#` comment rule here either: a `#` mid-word (`$(x)#`) is not a comment to the shell.
+# - Input is read as whole lines joined with \n, with no in-band record separator byte (an earlier
+#   RS of 0x1A let that byte inside quotes reset the quote state).
+# - Backslash: outside quotes `\X` is copied as both bytes and X is never a separator or a quote
+#   opener (`ls \; rm x` is one segment); backslash-newline outside quotes (a line continuation) is
+#   removed, both bytes. Inside double quotes `\"` and `\\` are copied as a pair and do not end the
+#   quote. Inside single quotes a backslash is literal, as in the shell.
+# - Redirection ampersands are not separators: `&` right after `>`/`<` (`2>&1`, `>&2`, `<&0`) and `&`
+#   right before `>` (`&>f`, `&>>f`). `>|` is a redirect, not a pipe. `|&` is ONE separator.
+# Ceilings (disclosed, not fixed): quote state does NOT reset inside a `$( )` nested in double quotes
+# (`"$(echo ")")"` mis-tracks), and separators inside an UNQUOTED `$( )`/backtick still split, the same
+# as at top level. A caller that needs to know a metacharacter is ABSENT (not the real value) still
+# calls guard_strip_quotes on the INDIVIDUAL matched segment.
 guard_split_segments_qsafe() {
   printf '%s' "${1:-}" | awk '
-    BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
-    {
-      s = $0; n = length(s); state = 0; out = ""; i = 1
+    BEGIN { SQ = "\047"; DQ = "\042"; RSB = "\036" }
+    { s = s (NR > 1 ? "\n" : "") $0 }
+    # scan(rs): rs=1 would map a newline inside quotes to RS; only rs=0 (raw newline) is used, see header.
+    function scan(rs,    n, state, out, i, p, c, c2) {
+      n = length(s); state = 0; out = ""; i = 1; p = ""
       while (i <= n) {
         c = substr(s, i, 1)
         if (state == 0) {
           c2 = substr(s, i, 2)
-          if (c2 == "&&" || c2 == "||") { out = out "\n"; i += 2; continue }
-          if (c == "|" || c == ";" || c == "&") { out = out "\n"; i += 1; continue }
-          out = out c
+          if (c == "\\") {
+            if (c2 != "\\\n") out = out c2
+            i += 2; p = "\\"; continue
+          }
+          if (c2 == "&&" || c2 == "||" || c2 == "|&") { out = out "\n"; i += 2; p = ""; continue }
+          if (c == "&" && (p == ">" || p == "<" || substr(s, i + 1, 1) == ">")) { out = out c; i++; p = c; continue }
+          if (c == "|" && p == ">") { out = out c; i++; p = c; continue }
+          if (c == "|" || c == ";" || c == "&") { out = out "\n"; i += 1; p = ""; continue }
+          out = out c; p = c
           if (c == SQ) state = 1
           else if (c == DQ) state = 2
           i += 1
         } else if (state == 1) {
-          out = out c
+          out = out ((c == "\n" && rs) ? RSB : c)
           if (c == SQ) state = 0
           i += 1
         } else {
-          out = out c
+          c2 = substr(s, i, 2)
+          if (c2 == "\\" DQ || c2 == "\\\\") { out = out c2; i += 2; continue }
+          out = out ((c == "\n" && rs) ? RSB : c)
           if (c == DQ) state = 0
           i += 1
         }
       }
+      endstate = state
+      return out
+    }
+    END {
+      if (NR == 0) exit
+      out = scan(0)
       printf "%s\n", out
+    }
+  '
+}
+
+# guard_argv <segment> -> stdout: the segment as shell WORDS, one token per line, each line = one TAG
+# byte + payload, every line newline-terminated. Payload newlines (a literal newline, or an RS already
+# in the input, inside quotes) are emitted as RS (0x1E). Word rules follow POSIX: blanks (space, tab,
+# newline, RS) outside quotes separate words; quote removal is applied; outside quotes `\X` -> X and
+# backslash-newline is removed; inside double quotes only `\$ \` \" \\` and backslash-newline are
+# escapes, any other `\X` keeps both bytes; inside single quotes a backslash is literal.
+# Tags:
+#   w  plain word, quotes removed (`'ssh'` -> `wssh`, `s\sh` -> `wssh`).
+#   o  opaque word: has, outside single quotes, an unescaped `$` followed by one of
+#      A-Za-z_0-9 { ( @ * # ? $ ! - ' "  or an unescaped backtick. `$(..)`, `${..}`, backticks and a
+#      `<(`/`>(` process substitution at word start are consumed nesting-aware (parens/braces counted,
+#      quotes inside tracked), so the word does not end at a space inside them; their text is kept
+#      verbatim, the rest of the word is quote-removed. `$'..'` is kept verbatim (not decoded).
+#   g  grouping/control: an unquoted `(`/`)` not part of `$(`/`<(`/`>(` (its own token even when
+#      attached: `(ssh` -> `g(` `wssh`); `{`, `}`, `!` only as a whole unquoted word; `;;`. Any other
+#      unquoted control operator left in the input (`;` `&` `|` `&&` `||` `|&`, which a segment from
+#      the splitters should not carry) is also emitted as a `g` token rather than glued to a word.
+#   r  redirection: `[0-9]*` + one of `<<<` `<<-` `<<` `>>` `>&` `<&` `<>` `>|` `>` `<`, or `&>>`/`&>`
+#      (no digits), plus its target word (attached or the next word). Payload = `<op> <target>`, the op
+#      KEEPS its fd digits (`2>&1` -> `r2>& 1`), target quote-removed; empty target -> `<op> ` (trailing
+#      space). The target produces no `w` token of its own.
+#   R  the same, when the target word is opaque (`2>"$log"` -> `R2> $log`).
+#   u  no payload, ALWAYS the last line, when a quote or a `$(`/`${`/backtick/`<(` is still open at end
+#      of input (the unclosed text is still emitted as part of the last token).
+# `VAR=value` words are ordinary w/o tokens (the caller decides). For a heredoc operator the target is
+# the delimiter word; the BODY is not this function's business (strip it first, guard_strip_heredocs).
+# Also `o`: a word holding, unquoted and unescaped, a glob character (`*`, `?`, `[`), a brace span
+# containing `,` or `..` (`{ssh,vps}`, `{a..b}`), or a leading `~` - the shell rewrites those, so the
+# literal text is not the word that runs (`'*'` and `\*` stay `w`). A backslash-newline between words
+# produces no token. Input is read as whole lines joined with \n (no in-band record separator byte).
+# ponytail ceilings: a `#` comment is NOT recognised (its words are tokenised like any others, and an
+# apostrophe in it opens a quote that may end in `u`, the conservative direction); a `)` inside a
+# `case` pattern within `$( )` closes the substitution early; arithmetic `$(( ))` is just a nested
+# `$(`; a brace span is only seen when it has no blank or metacharacter inside. POSIX awk only (no
+# gensub, no 3-arg match).
+guard_argv() {
+  printf '%s' "${1:-}" | awk '
+    BEGIN {
+      SQ = "\047"; DQ = "\042"; RSB = "\036"; NL = "\n"
+      VSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789{(@*#?$!-" SQ DQ
+      META = " \t\n" RSB ";&|<>()"
+    }
+    # sub_end(p, open, close): position of the char closing a substitution whose body starts at p
+    # (depth 1 already open), quotes inside tracked, backslash skips one char; 0 when never closed.
+    function sub_end(p, op, cl,    d, q, ch) {
+      d = 1; q = 0
+      while (p <= n) {
+        ch = substr(s, p, 1)
+        if (q == 1) { if (ch == SQ) q = 0 }
+        else if (ch == "\\") p++
+        else if (q == 2) { if (ch == DQ) q = 0 }
+        else if (ch == SQ) q = 1
+        else if (ch == DQ) q = 2
+        else if (ch == op) d++
+        else if (ch == cl) { d--; if (d == 0) return p }
+        p++
+      }
+      return 0
+    }
+    function bq_end(p,    ch) {
+      while (p <= n) {
+        ch = substr(s, p, 1)
+        if (ch == "\\") p++
+        else if (ch == "`") return p
+        p++
+      }
+      return 0
+    }
+    # take_sub(p): p at `$(`, `${`, `<(`, `>(` or a backtick; appends the verbatim text to W, sets
+    # opaque, returns the position after it (n+1 and unclosed=1 when it never closes).
+    function take_sub(p,    ch, e) {
+      ch = substr(s, p, 1)
+      if (ch == "`") e = bq_end(p + 1)
+      else if (substr(s, p + 1, 1) == "{") e = sub_end(p + 2, "{", "}")
+      else e = sub_end(p + 2, "(", ")")
+      opq = 1
+      if (e == 0) { W = W substr(s, p); unclosed = 1; return n + 1 }
+      W = W substr(s, p, e - p + 1)
+      return e + 1
+    }
+    # word(p): parse one shell word from p into W (quote-removed) / opq; returns the end position.
+    function word(p,    q, ch, d, e) {
+      W = ""; opq = 0; q = 0
+      if (substr(s, p, 1) == "~") opq = 1
+      if ((substr(s, p, 2) == "<(" || substr(s, p, 2) == ">(")) p = take_sub(p)
+      while (p <= n) {
+        ch = substr(s, p, 1)
+        if (q == 1) {
+          if (ch == SQ) q = 0; else W = W ch
+          p++; continue
+        }
+        if (ch == "\\") {
+          d = substr(s, p + 1, 1)
+          if (d == NL) { p += 2; continue }
+          if (q == 2 && index("$`" DQ "\\", d) == 0) { W = W ch; p++; continue }
+          W = W d; p += 2; continue
+        }
+        if (ch == "$") {
+          d = substr(s, p + 1, 1)
+          if (d != "" && index(VSET, d) > 0) {
+            opq = 1
+            if (d == "(" || d == "{") { p = take_sub(p); continue }
+            if (d == SQ && q == 0) {
+              e = p + 2
+              while (e <= n && substr(s, e, 1) != SQ) { if (substr(s, e, 1) == "\\") e++; e++ }
+              if (e > n) { W = W substr(s, p); unclosed = 1; p = n + 1; continue }
+              W = W substr(s, p, e - p + 1); p = e + 1; continue
+            }
+          }
+          W = W ch; p++; continue
+        }
+        if (ch == "`") { p = take_sub(p); continue }
+        if (q == 2) {
+          if (ch == DQ) q = 0; else W = W ch
+          p++; continue
+        }
+        if (index(META, ch) > 0) break
+        if (ch == "*" || ch == "?" || ch == "[") opq = 1
+        else if (ch == "{") {
+          e = p + 1
+          while (e <= n && index(META, substr(s, e, 1)) == 0 && substr(s, e, 1) != "}") e++
+          if (substr(s, e, 1) == "}" && (index(substr(s, p, e - p), ",") > 0 || index(substr(s, p, e - p), "..") > 0)) opq = 1
+        }
+        if (ch == SQ) q = 1
+        else if (ch == DQ) q = 2
+        else W = W ch
+        p++
+      }
+      if (q != 0) unclosed = 1
+      return p
+    }
+    function emit(t, pl) { gsub(/\n/, RSB, pl); printf "%s%s\n", t, pl }
+    { s = s (NR > 1 ? "\n" : "") $0 }
+    END {
+      n = length(s); i = 1; unclosed = 0
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == " " || c == "\t" || c == NL || c == RSB) { i++; continue }
+        if (substr(s, i, 2) == "\\" NL) { i += 2; continue }
+        # redirection: [0-9]* then an operator (process substitution `<(`/`>(` excluded)
+        j = i
+        while (j <= n && index("0123456789", substr(s, j, 1)) > 0) j++
+        rop = ""
+        if (j == i && (substr(s, j, 3) == "&>>")) rop = "&>>"
+        else if (j == i && substr(s, j, 2) == "&>") rop = "&>"
+        else if (substr(s, j, 3) == "<<<" || substr(s, j, 3) == "<<-") rop = substr(s, j, 3)
+        else if ((c2 = substr(s, j, 2)) == "<<" || c2 == ">>" || c2 == ">&" || c2 == "<&" || c2 == "<>" || c2 == ">|") rop = c2
+        else if ((substr(s, j, 1) == "<" || substr(s, j, 1) == ">") && !(j == i && substr(s, j + 1, 1) == "(")) rop = substr(s, j, 1)
+        if (rop != "") {
+          op = substr(s, i, j - i) rop
+          k = j + length(rop)
+          while (k <= n && (substr(s, k, 1) == " " || substr(s, k, 1) == "\t")) k++
+          tc = substr(s, k, 1)
+          if (k <= n && (index(META, tc) == 0 || substr(s, k, 2) == "<(" || substr(s, k, 2) == ">(")) {
+            i = word(k)
+            emit(opq ? "R" : "r", op " " W)
+          } else { emit("r", op " "); i = k }
+          continue
+        }
+        if (c == "(" || c == ")") { emit("g", c); i++; continue }
+        if (c == ";" || c == "&" || c == "|") {
+          c2 = substr(s, i, 2)
+          if (c2 == ";;" || c2 == "&&" || c2 == "||" || c2 == "|&") { emit("g", c2); i += 2 }
+          else { emit("g", c); i++ }
+          continue
+        }
+        st = i
+        i = word(i)
+        raw = substr(s, st, i - st)
+        if (raw == "{" || raw == "}" || raw == "!") emit("g", raw)
+        else emit(opq ? "o" : "w", W)
+      }
+      if (unclosed) print "u"
     }
   '
 }

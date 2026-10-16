@@ -71,16 +71,7 @@ jobs:
           # cross-OS evidence F-16's CI gate leans on - was still scoring exit code alone, so a tool
           # missing on one runner (e.g. macOS lacking a GNU-only flag) would silently read as pass here
           # exactly where the divergence this workflow exists to catch is most likely to show up.
-          set +e; pass=0; fail=0
-          for sc in scripts/*.selfcheck.sh; do
-            if ${{ matrix.shell }} "$sc" >/tmp/sc.out 2>&1 && ! grep -q '^SKIP' /tmp/sc.out; then
-              pass=$((pass+1)); echo "ok   $sc"
-            else
-              fail=$((fail+1)); echo "FAIL $sc"; cat /tmp/sc.out
-            fi
-          done
-          echo "pass=$pass fail=$fail"
-          [ "$fail" = 0 ]
+          sh scripts/selfcheck-all.sh -j 4 -s ${{ matrix.shell }}
 
   # Opt-in only (see workflow header). `if: inputs.run_macos` on a workflow_dispatch boolean input
   # skips this job entirely when false - it is never queued, never billed, not just fast-failed.
@@ -136,16 +127,5 @@ jobs:
         run: bash scripts/lint-doctrine.sh
       - name: selfchecks
         run: |
-          # duplicated from selfcheck-linux (SKIP-counts-as-fail rationale, opus reviewer 2026-08-24,
-          # lives there - a tool missing on this runner, e.g. a GNU-only flag, is exactly the case
-          # this job exists to catch) - keep both copies in step.
-          set +e; pass=0; fail=0
-          for sc in scripts/*.selfcheck.sh; do
-            if ${{ matrix.shell }} "$sc" >/tmp/sc.out 2>&1 && ! grep -q '^SKIP' /tmp/sc.out; then
-              pass=$((pass+1)); echo "ok   $sc"
-            else
-              fail=$((fail+1)); echo "FAIL $sc"; cat /tmp/sc.out
-            fi
-          done
-          echo "pass=$pass fail=$fail"
-          [ "$fail" = 0 ]
+          # scoring (incl. SKIP counts as fail) lives in scripts/selfcheck-all.sh, shared by both jobs
+          sh scripts/selfcheck-all.sh -j 4 -s ${{ matrix.shell }}

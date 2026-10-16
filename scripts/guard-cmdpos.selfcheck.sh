@@ -290,11 +290,12 @@ HOME="$HOME_SAVE"
 command -v guard_caller_agent >/dev/null 2>&1 || fail "guard_caller_agent undefined after source"
 command -v guard_ask_prefix >/dev/null 2>&1 || fail "guard_ask_prefix undefined after source"
 
-# 9a. guard_caller_agent: extracts .agent_type, empty when absent, charset-stripped when unusable,
-#     empty (not a failure) on unparsable input.
-[ "$(guard_caller_agent '{"agent_type":"worker"}')" = "worker" ] || fail "guard_caller_agent missed a real agent_type"
+# 9a. guard_caller_agent: with an agent_id present, returns .agent_type (charset-stripped when
+#     unusable, `subagent` when that leaves nothing); empty with no agent_id and on unparsable input.
+[ "$(guard_caller_agent '{"agent_type":"worker","agent_id":"a0test"}')" = "worker" ] || fail "guard_caller_agent missed a real agent_type"
 [ -z "$(guard_caller_agent '{"session_id":"abc"}')" ] || fail "guard_caller_agent should be empty with no agent_type field"
 [ -z "$(guard_caller_agent '{"agent_type":"bad; rm -rf /"}')" ] || fail "guard_caller_agent did not strip an unusable agent_type"
+[ "$(guard_caller_agent '{"agent_type":"bad; rm -rf /","agent_id":"a0test"}')" = "subagent" ] || fail "guard_caller_agent: an unusable agent_type on a subagent must still read as a subagent"
 [ -z "$(guard_caller_agent 'not json')" ] || fail "guard_caller_agent should be empty on unparsable input, not fail closed"
 # Fail-direction regression (opus reviewer, 2026-08-27, MEDIUM): a future CLI convention stamping the
 # Lead's own payload with "main"/"MAIN" must not fail CLOSED (every ask-class guard hard-denying every
@@ -302,6 +303,18 @@ command -v guard_ask_prefix >/dev/null 2>&1 || fail "guard_ask_prefix undefined 
 # already use the other direction (`.agent_type // "MAIN"`).
 [ -z "$(guard_caller_agent '{"agent_type":"main"}')" ] || fail "guard_caller_agent should treat main as no-agent (fail-open direction)"
 [ -z "$(guard_caller_agent '{"agent_type":"MAIN"}')" ] || fail "guard_caller_agent should treat MAIN as no-agent (fail-open direction)"
+
+# 9a2. agent_id is the subagent test (2026-10-14, probed: a `--agent <name>` MAIN session sends
+#      agent_type without agent_id; only a subagent sends both).
+[ -z "$(guard_caller_agent '{"agent_type":"probeagent"}')" ] || fail "guard_caller_agent: agent_type without agent_id is the Lead (a --agent main session), must be empty"
+[ "$(guard_caller_agent '{"agent_type":"worker","agent_id":"a1b2c3"}')" = "worker" ] || fail "guard_caller_agent: agent_id with agent_type worker must return worker"
+[ "$(guard_caller_agent '{"agent_id":"a1b2c3"}')" = "subagent" ] || fail "guard_caller_agent: agent_id alone must return subagent"
+# 9a3. plugin-namespaced types: the part after the LAST colon is the name.
+[ "$(guard_caller_agent '{"agent_type":"agent-tiers:sublead","agent_id":"a1b2"}')" = "sublead" ] || fail "guard_caller_agent: agent-tiers:sublead must read as sublead"
+[ "$(guard_caller_agent '{"agent_type":"caveman:cavecrew-builder","agent_id":"a1b2"}')" = "cavecrew-builder" ] || fail "guard_caller_agent: caveman:cavecrew-builder must read as cavecrew-builder"
+[ -z "$(guard_caller_agent '{"agent_type":"agent-tiers:sublead"}')" ] || fail "guard_caller_agent: namespaced type without agent_id is the Lead"
+[ "$(guard_caller_agent '{"agent_type":"x:main","agent_id":"a1b2"}')" = "subagent" ] || fail "guard_caller_agent: x:main with agent_id must read as subagent"
+[ "$(guard_caller_agent '{"agent_type":"agent-tiers:","agent_id":"a1b2"}')" = "subagent" ] || fail "guard_caller_agent: trailing colon must read as subagent"
 
 # 9b. guard_ask_decision: unchanged single-arg behaviour (attended/unattended, regression-pinned since
 #     it never had coverage) plus the new second arg (agent present -> deny regardless of attended state).
@@ -428,6 +441,66 @@ printf '%s' "$GQ" | grep -aq '<x@y>' && fail "guard_strip_quotes: quoted content
 [ "$GQ" = "git commit -m \"\" --author=${SQ}${SQ}" ] \
   || fail "guard_strip_quotes: unquoted structure not preserved: [$GQ]"
 printf 'ok   guard_strip_quotes: quote chars kept, content blanked, unquoted text untouched\n'
+
+# --- 2026-10-14 fix pass: qsafe splitter (backslash, redirect ampersands),
+# quote-aware heredoc openers, guard_argv. One assertion per case; every case below was probed wrong
+# against the previous library unless its comment says it is a regression pin.
+RS_B="$(printf '\036')"
+qn() { guard_split_segments_qsafe "$1" | wc -l | tr -d ' '; }
+# A raw newline is a boundary even inside quotes (see the qsafe header for why the RS encoding was dropped).
+[ "$(qn "ssh vps 'ls${NL}cat x'; ls")" -eq 3 ] || fail "qsafe: a newline inside quotes must still be a segment boundary (want 3 segments)"
+[ "$(qn 'ssh vps ls \; rm x')" -eq 1 ] || fail "qsafe: an escaped ; must not split"
+[ "$(qn 'cat x 2>&1')" -eq 1 ] || fail "qsafe: 2>&1 must not split"
+[ "$(qn 'echo x >&2')" -eq 1 ] || fail "qsafe: >&2 must not split"
+[ "$(qn 'cmd &> f')" -eq 1 ] || fail "qsafe: &> must not split"
+[ "$(qn 'a >| f')" -eq 1 ] || fail "qsafe: >| must not split"
+[ "$(qn 'a |& b')" -eq 2 ] || fail "qsafe: |& must be ONE separator (2 segments)"
+printf 'ok   guard_split_segments_qsafe: newline always a boundary, escaped ;, redirect ampersands, >|, |&\n'
+
+GOT="$(guard_strip_heredocs "echo \"x <<EOF\"${NL}ssh vps rm x${NL}EOF")"
+case "$GOT" in *"ssh vps rm x"*) true ;; *) false ;; esac || fail "guard_strip_heredocs: a quoted <<EOF is not an opener, the ssh line must survive: [$GOT]"
+GOT="$(guard_strip_heredocs "cat <<< EOF${NL}ssh vps rm x${NL}EOF")"
+case "$GOT" in *"ssh vps rm x"*) true ;; *) false ;; esac || fail "guard_strip_heredocs: a herestring <<< is not an opener, the ssh line must survive: [$GOT]"
+[ "$(guard_strip_heredocs "$HD1")" = "$EXP1" ] || fail "guard_strip_heredocs: default commit shape regressed under quote-aware openers (regression pin)"
+printf 'ok   guard_strip_heredocs: quoted << and herestring are not openers; default commit shape still strips\n'
+
+argv_is() { # $1=segment $2=expected tokens joined by |, RS shown as ~
+  got="$(guard_argv "$1" | tr "${RS_B}" '~' | tr '\n' '|')"
+  [ "$got" = "$2" ] || fail "guard_argv [$1]: want [$2] got [$got]"
+}
+command -v guard_argv >/dev/null 2>&1 || fail "guard_argv undefined after source"
+argv_is "ssh vps 'ls /x'" 'wssh|wvps|wls /x|'
+argv_is 's\sh vps' 'wssh|wvps|'
+argv_is 'ssh "$h" uptime' 'wssh|o$h|wuptime|'
+argv_is '> /dev/null ssh vps x' 'r> /dev/null|wssh|wvps|wx|'
+argv_is 'cat x 2>&1' 'wcat|wx|r2>& 1|'
+argv_is '(ssh vps)' 'g(|wssh|wvps|g)|'
+argv_is 'f(){ ssh x; }' 'wf|g(|g)|g{|wssh|wx|g;|g}|'
+argv_is 'echo $(ssh vps hostname)' 'wecho|o$(ssh vps hostname)|'
+argv_is 'diff <(ssh a cat x) y' 'wdiff|o<(ssh a cat x)|wy|'
+argv_is "echo 'unclosed" 'wecho|wunclosed|u|'
+argv_is "\$'a\\nb'" "o\$'a\\nb'|"
+argv_is "echo \"a${NL}b\" 2>\"\$log\"" 'wecho|wa~b|R2> $log|'
+printf 'ok   guard_argv: w/o/g/r/R/u tokens on the contract cases\n'
+
+# 2026-10-14 review round: comment apostrophes, unbalanced quotes, 0x1A, glob/brace/tilde opacity.
+[ "$(qn "# it's gone${NL}git worktree remove x")" -eq 2 ] || fail "qsafe: an apostrophe in a # comment must not merge the next line (want 2 segments)"
+[ "$(guard_split_segments_qsafe "echo 'oops${NL}git add -A" | sed -n 2p)" = "git add -A" ] || fail "qsafe: after an unbalanced quote, a later line must be its own segment"
+# Review round 2 (claim adjudication): quote mis-tracks that balance out, mid-word `#`, comment after a
+# line continuation - each merged a real later command into an earlier segment under the RS encoding.
+[ "$(guard_split_segments_qsafe "echo \"\$(printf \"it's\")\"${NL}git add -A${NL}# it's" | sed -n 2p)" = "git add -A" ] || fail "qsafe: a balanced-out quote mis-track must not merge the next line"
+[ "$(qn 'echo $(echo x)#; git add -A')" -eq 2 ] || fail "qsafe: a mid-word # is not a comment (want 2 segments)"
+[ "$(guard_split_segments_qsafe "true \\${NL}# it's${NL}git add -A${NL}# it's" | sed -n 2p)" = "git add -A" ] || fail "qsafe: a comment after a line continuation must not merge the next line"
+SUB_B="$(printf '\032')"
+[ "$(qn "echo '${SUB_B};x'; y")" -eq 2 ] || fail "qsafe: a 0x1A byte inside quotes must not reset quote state (want 2 segments)"
+argv_is "echo '${SUB_B}' x" "wecho|w${SUB_B}|wx|"
+argv_is '{ssh,vps} x' 'o{ssh,vps}|wx|'
+argv_is '/usr/bin/ss[h] vps' 'o/usr/bin/ss[h]|wvps|'
+argv_is '~/bin/x' 'o~/bin/x|'
+argv_is "'*'" 'w*|'
+argv_is '\*' 'w*|'
+argv_is "ssh vps \\${NL}  'ls /x'" 'wssh|wvps|wls /x|'
+printf 'ok   review round: comment apostrophe, unbalanced-quote fail-safe, 0x1A, glob/brace/tilde opaque, backslash-newline\n'
 
 # --- ship-guards wave (2026-10-06, repaired 2026-10-06): main-top, guard_local_scalar, ship detector ---
 # guard_linked_worktree and guard_merge_seg were REMOVED after independent review (worktree carve-out

@@ -8,7 +8,7 @@ checkout; if freshness matters, ask the sender to diff it against their current 
 Follow THIS workflow - it mirrors how the kit itself works (audit first, plan, confirm, then act):
 
 1. AUDIT (read-only). Note my OS + shell FIRST. Unzip the archive to a TEMP inspection dir (NOT its
-   final home), list what it contains, and read its README.md. Work out what it installs, WHERE
+   final home), list what it contains, and read its README.md and docs/install.md. Work out what it installs, WHERE
    (`~/.claude/agent-tiers/` is the canonical home; it then flattens into `~/.claude/{skills,agents,
    commands}`, wires a handful of hooks into `~/.claude/settings.json` - backed up first - and writes a
    small `kit-config.md`; a second Claude profile via `CLAUDE_CONFIG_DIR` installs there instead), and

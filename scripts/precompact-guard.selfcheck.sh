@@ -19,9 +19,17 @@ T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
 trap 'rm -rf "$T"' EXIT
 
-mkdir -p "$T/kit/scripts"
+mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
 cp "$SRC_DIR/precompact-guard.sh" "$T/kit/scripts/" || fail "cannot copy guard into sandbox"
-cp "$SRC_DIR/authorship-record.sh" "$T/kit/scripts/" 2>/dev/null || true   # only case 11 needs it
+# kit-gate runs as a child of the guard: sandbox copy with an empty managed dir, every input cleared, so
+# neither the live kit's state nor the user's real options can stand the guard down mid-check.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
+cp "$SRC_DIR/authorship-record.sh" "$T/kit/scripts/" 2>/dev/null || true
+cp "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" 2>/dev/null || true   # only case 11 needs it
 H="$T/kit/scripts/precompact-guard.sh"
 AR="$T/kit/scripts/authorship-record.sh"
 LEDGER_DIR="$T/kit/.state/authorship"     # BASE-relative: exactly where authorship-record.sh writes
@@ -92,6 +100,15 @@ rc="$(run "$S1" manual "")"
 [ "$rc" = 2 ] || fail "a stale RESUME_SESSION.md against a fresher in-project authorship line must block (got rc=$rc)"
 grep -q '/compact force' "$T/stderr" || fail "block stderr must name the /compact force escape"
 grep -q 'off/precompact-guard' "$T/stderr" || fail "block stderr must name the kill-switch path"
+
+# 5b. kit-gate stand-down: the same would-block setup passes silently with <kit>/.state/off/precompact-guard
+#     (the marker kit-gate.sh enforces, distinct from the CLAUDE_CONFIG_DIR one above), and logs it.
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/precompact-guard"
+rc="$(run "$S1" manual "")"; rm -f "$T/kit/.state/off/precompact-guard"
+[ "$rc" = 0 ] && [ ! -s "$T/stderr" ] || fail "kit-gate stand-down must be silent exit 0 on a would-block setup (got rc=$rc)"
+grep -qF 'kit-gate standdown precompact-guard:' "$T/guards.log" || fail "kit-gate stand-down must be logged"
+rc="$(run "$S1" manual "")"
+[ "$rc" = 2 ] || fail "guard must block again once the kit-gate marker is removed (got rc=$rc)"
 
 # 6. THE PASS: touch RESUME_SESSION.md fresh - now it postdates the ledger line.
 touch "$RESUME"
@@ -247,5 +264,13 @@ before_files="$(find "$LEDGER_DIR" -type f | sort)"
 printf 'not read anyway' | KIT_PROBE_WITH="authorship-record" sh "$H" --probe >/dev/null 2>&1
 after_files="$(find "$LEDGER_DIR" -type f | sort)"
 [ "$before_files" = "$after_files" ] || fail "--probe must not write to the ledger dir"
+
+# 12f. --probe answers the same with the kit-gate marker present as without (it runs before the gate).
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/precompact-guard"
+probe_out="$(printf '%s' | KIT_PROBE_WITH="authorship-record" sh "$H" --probe 2>&1)"; probe_rc=$?
+[ "$probe_rc" = 0 ] && [ -z "$probe_out" ] || fail "--probe (supported) must be unchanged by the kit-gate marker (rc=$probe_rc: $probe_out)"
+probe_out="$(printf '%s' | sh "$H" --probe 2>&1)"; probe_rc=$?
+rm -f "$T/kit/.state/off/precompact-guard"
+[ "$probe_rc" = 3 ] && case "$probe_out" in *authorship-record*) true ;; *) false ;; esac || fail "--probe (unsupported) must be unchanged by the kit-gate marker (rc=$probe_rc: $probe_out)"
 
 echo "OK precompact-guard: kill switch, manual-only, force escape, RESUME-vs-authorship mtime block/pass (RESUME's own row excluded), the BASE-relative ledger path shared with the real recorder, and every tooling gap failing open all hold"

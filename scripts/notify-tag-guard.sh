@@ -73,6 +73,7 @@ note() {
 # would otherwise get blocked mid-script on machine-consumed output). Only the exact value `cli`
 # is proven native-interactive (HOST.md HOST-1); everything else skips.
 [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "cli" ] || exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0   # fail open, silently - nothing to log to yet without jq
 # A missing tail/grep must fail OPEN (exit 0), not fall through to the block below - the header's
@@ -87,7 +88,7 @@ if [ -n "$SELFDIR" ] && [ -f "$LIB" ] && sh -n "$LIB" >/dev/null 2>&1; then
 fi
 command -v notify_tag_classify >/dev/null 2>&1 || { note "fail-open: lib/notify-tag.sh missing/stale/unparseable"; exit 0; }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 LAST_MSG="$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null || true)"
 [ -n "$LAST_MSG" ] || exit 0   # nothing to tag
 

@@ -14,6 +14,10 @@
 #      Was a recorded "0 hits, 2026-08-16"; a recorded number is not a check (MASTER B5).
 #   9. M1 meta-gate (two halves): a script named in doctrine must exist, and a stated enforcement gap
 #      must carry a `no-hook: <reason>` marker rather than freehand prose. Detail at the check itself.
+#  10. no script in scripts/ or scripts/lib/ reads stdin with a bare `cat`: a hook run by hand from a
+#      terminal would wait on the TTY; the kit form skips the read there (`[ -t 0 ] || cat`).
+#  11. plugin.json userConfig and hooks/hooks.json match what gen-plugin-manifests.sh generates from
+#      install/options.tsv (drift = edited by hand or options.tsv changed without a --write).
 #   7. agents/*.md: every `def-v<M>` quoted in prose (the check-in line) equals the file's `def-version: N` -
 #      the cksum stamp catches edit-without-bump; this catches bump-without-updating-the-check-in (MASTER B6).
 #      Deliberately strict: an agent file may quote NO def-v number but its own (keep examples version-free).
@@ -297,5 +301,32 @@ if [ -n "$unmarked" ]; then
   echo "FAIL doctrine states a rule is unenforced without the marker - write 'no-hook: <reason>' on that line so the judgement-only lane stays greppable:"
   printf '%s\n' "$unmarked" | grep -av '^$'; rc=1
 else echo "ok  every stated enforcement gap carries a no-hook: marker"; fi
+
+# --- 10. hook stdin read must not wait on a terminal -------------------------------------------------
+# A hook reads its JSON with `$(cat)`. Under the host stdin is a pipe; run by hand from a terminal it is
+# the TTY, so a bare `cat` waits for Ctrl-D and the script looks hung. The kit form skips the read on a
+# TTY: INPUT="$([ -t 0 ] || cat 2>/dev/null || true)" (empty input, the same path as </dev/null).
+# Matches a cat with no file operand (only `-` or stderr redirects) inside $( ). Ceiling: backtick
+# substitution, a `read` or a `cat | jq` stdin reader is not caught, and the `[ -t 0 ]` exemption is per line.
+bare_cat="$(grep -anE '\$\( *cat( +(-|2>[^ )]*))*( *\|\| *true)? *\)' "$KIT_ROOT"/scripts/*.sh "$KIT_ROOT"/scripts/lib/*.sh 2>/dev/null \
+  | grep -av '\.selfcheck\.sh:' | grep -av '/lint-doctrine\.sh:' | grep -av '\[ -t 0 \] *|| *cat' || true)"
+if [ -n "$bare_cat" ]; then
+  echo "FAIL bare stdin read in a script (hangs when run from a terminal) - use INPUT=\"\$([ -t 0 ] || cat 2>/dev/null || true)\":"
+  printf '%s\n' "$bare_cat"; rc=1
+else echo "ok  every stdin read skips a terminal"; fi
+
+# --- 11. plugin manifests generated from install/options.tsv ------------------------------------------
+if ! command -v jq >/dev/null 2>&1; then echo "SKIP plugin manifests check: jq not found"
+else
+  gen_rc=0
+  gen_out="$(sh "$KIT_ROOT/scripts/gen-plugin-manifests.sh" --check 2>&1)" || gen_rc=$?
+  if [ "$gen_rc" -eq 2 ]; then
+    echo "FAIL plugin manifest generator refused the input:"
+    printf '%s\n' "$gen_out"; rc=1
+  elif [ "$gen_rc" -ne 0 ]; then
+    echo "FAIL plugin manifests drifted from install/options.tsv (run: sh scripts/gen-plugin-manifests.sh --write):"
+    printf '%s\n' "$gen_out"; rc=1
+  else echo "ok  plugin manifests match install/options.tsv"; fi
+fi
 
 exit $rc

@@ -23,7 +23,8 @@
 # known wrappers to the prefix. Self-check: grep-footgun-guard.selfcheck.sh.
 set -u
 
-INPUT="$(cat 2>/dev/null || true)"
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 # Decision line (Wave D, 2026-08-16): guards.log is THE durable human record of blocks (HOST-4 - under

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # kit-scope: shared
 # Self-check for selfcontainment-check.sh. Runnable: `sh selfcontainment-check.selfcheck.sh`.
-# Builds a throwaway git repo shaped like a minimal kit (install-flat.sh's HOOK_ROWS block, one
+# Builds a throwaway git repo shaped like a minimal kit (an install/options.tsv hook row, one
 # wired guard, one helper) and plants a violation of each rule in turn.
 #
 # Disclosed ceiling: no jq dependency, so this does NOT skip - it always runs (unlike selfchecks
@@ -19,11 +19,9 @@ cp "$DIR/selfcontainment-check.sh" "$W/scripts/"
 cd "$W" || exit 1
 git init -q -b master; git config user.email t@t.local; git config user.name t
 
-cat > scripts/install-flat.sh <<'EOF'
-#!/usr/bin/env sh
-# kit-scope: shared
-HOOK_ROWS='wired-guard;consent;PreToolUse;Bash;5'
-EOF
+mkdir -p install
+printf '# kind\tid\tgroup\tevent\tmatcher\ttimeout\n' > install/options.tsv
+printf 'hook\twired-guard\tsafety\tPreToolUse\tBash\t5\n' >> install/options.tsv
 cat > scripts/wired-guard.sh <<'EOF'
 #!/usr/bin/env sh
 # kit-scope: shared
@@ -85,6 +83,27 @@ exit 0
 EOF
 git add -A; git commit -qm c3-revert
 
+# --- Rule 2, real assignments only: `VAR=1` in a comment or inside echo/printf text is NOT an assignment
+# (it used to mask a genuine origin-only dependency); a real assignment still is. ----------------
+plant2() { # $1=commit label, rest = body lines of wired-guard.sh (written as given)
+  lbl="$1"; shift
+  { printf '#!/usr/bin/env sh\n# kit-scope: shared\n'; printf '%s\n' "$@"; printf 'exit 0\n'; } > scripts/wired-guard.sh
+  git add -A; git commit -qm "$lbl"
+}
+plant2 c3c '# usage: SOME_VAR_X=1 run it' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 1 ] && grep -q 'RULE 2' "$W/out" && ok 'VAR=1 in a comment is not an assignment' || bad 'VAR=1 in a comment must not count as an assignment (rule 2 should fire)'
+plant2 c3e 'echo "SOME_VAR_X=1 is set" ; printf "SOME_VAR_X=2\n"' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 1 ] && grep -q 'RULE 2' "$W/out" && ok 'VAR=1 inside echo/printf text is not an assignment' || bad 'VAR=1 in echo/printf text must not count as an assignment (rule 2 should fire)'
+plant2 c3a1 'SOME_VAR_X=1 sh -c :' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 0 ] && ok 'VAR=1 cmd counts as an assignment' || { bad 'VAR=1 cmd should count as an assignment'; cat "$W/out" >&2; }
+plant2 c3a2 'SOME_VAR_X=1; export SOME_VAR_X' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 0 ] && ok 'VAR=1; export VAR counts as an assignment' || { bad 'VAR=1; export VAR should count'; cat "$W/out" >&2; }
+plant2 c3a3 'export SOME_VAR_X=1' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 0 ] && ok 'export VAR=1 counts as an assignment' || { bad 'export VAR=1 should count'; cat "$W/out" >&2; }
+plant2 c3a4 'SOME_VAR_X="a b"' 'echo "$SOME_VAR_X"'
+[ "$(run)" = 0 ] && ok 'VAR="quoted" counts as an assignment' || { bad 'VAR="quoted" should count'; cat "$W/out" >&2; }
+plant2 c3-clean2
+
 # --- Rule 3a: kit-scope local but NOT export-ignored -> fails -------------------------------
 # The case this check exists to catch (brief's core scenario): a script that self-declares
 # local scope but isn't excluded from the bundle still ships to a recipient who can't run it.
@@ -113,5 +132,10 @@ git add -A; git commit -qm c6
 [ "$(run)" = 1 ] && ok 'missing marker fails' || bad 'a script with no kit-scope marker at all should fail (rule 3)'
 grep -q 'RULE 3' "$W/out" && ok 'missing-marker failure names RULE 3' || bad 'missing-marker failure should name RULE 3'
 
+
+# --- no install/options.tsv -> refuses to run blind (exit 2) ---
+mv install/options.tsv "$W/options.tsv.bak"
+[ "$(run)" = 2 ] && ok 'missing install/options.tsv exits 2' || bad 'missing install/options.tsv should exit 2'
+mv "$W/options.tsv.bak" install/options.tsv
 [ "$fail" -eq 0 ] && echo "OK selfcontainment-check: reachability, origin-only env vars, scope-marker/export-ignore mismatch, and marker absence all caught; clean tree passes"
 exit $fail

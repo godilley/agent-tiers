@@ -11,6 +11,9 @@
 #   - Source-gate: RESUME CONTENT restores on compact|resume|clear|startup (any other/unknown source
 #     gets the version stamp + manifest only, fail-closed) - the body is byte-capped (see
 #     RESUME_CAP_BYTES below) so the whole inject stays under the host's inline limit.
+#   - Band line: on startup|resume|compact|clear, one ASCII line naming the capability band of the payload's
+#     `model` (map in lib/model-band.sh, texts in lib/band-lines.default, per-machine override in
+#     .state/band-lines, kill switch .state/off/band-line). A payload with no model gets its own line.
 #   - Structured hookSpecificOutput JSON when jq is present; raw-stdout fallback otherwise.
 #   - Disclosure: a headless `claude -p` run started in a project directory is indistinguishable from an
 #     interactive startup at this hook's level (both report source=startup), so it also gets the body on
@@ -42,6 +45,11 @@ trap 'exit 143' TERM
 # A project that wants to own resume-injection drops its own .claude/hooks/load-resume.sh;
 # the global hook then stands down so it doesn't double-inject over the project's richer hook.
 [ -f "$DIR/.claude/hooks/load-resume.sh" ] && exit 0
+KG_SUMMARY="$(sh "$(dirname "$0")/kit-gate.sh" --summary </dev/null 2>/dev/null || true)"
+if [ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ]; then
+  [ -n "$KG_SUMMARY" ] && printf '%s\n' "$KG_SUMMARY"
+  exit 0
+fi
 GUARD_TRACE_OPEN=1; note "start [pid=$$]"
 
 # Claude Code slugs projects/ dirs with replace(/[^a-zA-Z0-9]/g,"-") - verified against the CLI
@@ -109,7 +117,7 @@ mf_add './RESUME_SESSION.md' "$DIR/RESUME_SESSION.md"
 # skill, not project-controlled, so no charset/length/count cap applies (see the globbed blocks below
 # for why THOSE need one - a project-shipped filename lands verbatim in model context, these do not).
 mf_add '~/.claude/agent-tiers/skills/agent-tiers/SKILL.md' "$KIT/skills/agent-tiers/SKILL.md"
-for _c in BOSS HOST MAINT ROUTE XLAB MEMORY; do
+for _c in BOSS HOST MAINT ROUTE XLAB MEMORY CONTRACT; do
   mf_add "~/.claude/agent-tiers/skills/agent-tiers/cards/$_c.md" "$KIT/skills/agent-tiers/cards/$_c.md"
 done
 unset _c
@@ -420,11 +428,12 @@ P_EOF
   [ "$p_hits" -gt 0 ] && adv_add "agent-tiers: the host saved this hook's own restore to a file $p_hits time(s) since resume-inject.sh last changed (e.g. $p_last, $(wc -c < "$p_last" | tr -d ' ') bytes), so that session saw only a preview of it. HOST_CTX_MAX in resume-inject.sh is above the host's real inline limit: lower it."
 fi
 
+[ -n "$KG_SUMMARY" ] && adv_add "$KG_SUMMARY"
 STAMP_LINE="$STAMP"
 STAMP_LINE="${STAMP_LINE:+$STAMP_LINE$NL}$MANIFEST"
 STAMP_LINE="${STAMP_LINE}${ADVISORY:+$NL$ADVISORY}"
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 
 # SESSION_ID parsed here (not just before the session-prefs block below) because it now has a SECOND
 # consumer that must see the plain-startup path too: an observed session (the arrival-advisory swallow
@@ -492,10 +501,35 @@ days="${AGENT_TIERS_STATE_DAYS:-7}"; case "$days" in ''|*[!0-9]*) days=7 ;; esac
 [ "$days" -gt 0 ] 2>/dev/null && [ "$days" -le 3650 ] 2>/dev/null || days=7
 { [ -d "$PREFS_DIR" ] && find "$PREFS_DIR" -type f -mtime "+$days" -delete; } 2>/dev/null || true
 
+# --- band line (2026-10): one line naming the capability band of the session's model, so a Lead that
+#     starts, compacts or clears gets its HOST-2 routing posture at the arrival point, not only when it
+#     remembers to map its own model line. Source:
+#     the SessionStart payload's `model` string (Claude Code hooks docs). The field is OPTIONAL: the docs
+#     say it can be omitted, e.g. after /clear or on a session restored through conversation recovery,
+#     so absence gets its own band line instead of a guess. An object is read as `.id`, anything else as
+#     absent. The map lives in lib/model-band.sh (shared with a future act-time hook); the id is
+#     charset-capped there because it comes from a payload and lands in model context. Kill switch:
+#     .state/off/band-line. Fail-open: a missing library logs and emits no band line. Unknown sources
+#     exit above and never reach this block.
+BAND_LINE=""
+if [ ! -f "$CLAUDE_DIR/agent-tiers/.state/off/band-line" ]; then
+  _MB="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/lib/model-band.sh"
+  if [ ! -r "$_MB" ]; then
+    note "fail-open: lib/model-band.sh missing - no band line"
+  elif ! command . "$_MB" 2>/dev/null; then
+    note "fail-open: lib/model-band.sh failed to load - no band line"
+  else
+    MODEL="$(printf '%s' "$INPUT" | jq -r '.model | if type=="string" then . elif type=="object" then (.id // "") else "" end' 2>/dev/null || true)"
+    BAND="$(model_band "$MODEL")"
+    btxt="$(model_band_line "$BAND" "${_MB%/*}/band-lines.default" "$CLAUDE_DIR/agent-tiers/.state/band-lines")"
+    [ -n "$btxt" ] && BAND_LINE="agent-tiers band (model=$(model_band_shown "$MODEL"), source=$SOURCE): $btxt"
+  fi
+fi
+
 F="$DIR/RESUME_SESSION.md"
 if [ ! -f "$F" ]; then
-  # no handoff file, but a session pref and/or the version stamp may still need re-injecting
-  NOPREF="${PREF}${PREF:+$NL}${STAMP_LINE}"
+  # no handoff file, but a band line, session pref and/or the version stamp may still need re-injecting
+  NOPREF="${BAND_LINE}${BAND_LINE:+$NL}${PREF}${PREF:+$NL}${STAMP_LINE}"
   GUARD_TRACE_OPEN=0; note "end [pid=$$] done=1"
   [ -n "$NOPREF" ] || exit 0
   if command -v jq >/dev/null 2>&1; then
@@ -509,7 +543,7 @@ fi
 # characters to a file and puts only a ~2000-byte preview in context (found in the CLI bundle as the
 # hook-output persist threshold, 1e4, 2026-10-11; a 13.4 KB startup inject here arrived as the preview).
 # So the cap is a BUDGET for this hook's whole output, not a fixed size for the handoff: HOST_CTX_MAX
-# minus the session prefs and stamp/manifest/advisory lines that ride along, minus RESUME_RESERVE for the
+# minus the band line, session prefs and stamp/manifest/advisory lines that ride along, minus RESUME_RESERVE for the
 # header, truncation note, lifecycle line and vcs line (the vcs line alone is row- and length-capped
 # to well under 1 KB). Bytes are counted, and the host counts UTF-16 units, so the byte budget is never
 # under-counted. Past the cap: inject the head, cut at the last whole line that fits, followed by one
@@ -521,7 +555,7 @@ fi
 # truncation note names $F, the vcs line names its source file), so the path length is reserved twice
 # plus slack, rather than assuming a short path.
 RESUME_RESERVE=$((1536 + 3 * ${#DIR}))
-extra_b="$(printf '%s%s' "$PREF" "$STAMP_LINE" | LC_ALL=C wc -c | tr -d ' ')"
+extra_b="$(printf '%s%s%s' "$BAND_LINE" "$PREF" "$STAMP_LINE" | LC_ALL=C wc -c | tr -d ' ')"
 RESUME_CAP_BYTES=$((HOST_CTX_MAX - RESUME_RESERVE - ${extra_b:-0}))
 [ "$RESUME_CAP_BYTES" -gt 0 ] 2>/dev/null || RESUME_CAP_BYTES=0
 rb="$(wc -c < "$F" 2>/dev/null | tr -d ' ')"
@@ -534,7 +568,7 @@ cap_rc=$?
 if [ "$cap_rc" = 3 ] && [ "$RESUME_CAP_BYTES" -lt 1024 ]; then
   # Starved: the prefs, stamp, manifest and advisory lines left too little room for a useful head. Say
   # so, rather than blaming the handoff's first line. A handoff that fits whole still goes in whole.
-  CONTENT="[handoff not injected: the session prefs, stamp, manifest and advisory lines already use ${extra_b:-?} bytes of this hook's ${HOST_CTX_MAX}-character budget. Read $F.]"
+  CONTENT="[handoff not injected: the band line, session prefs, stamp, manifest and advisory lines already use ${extra_b:-?} bytes of this hook's ${HOST_CTX_MAX}-character budget. Read $F.]"
 elif [ "$cap_rc" = 3 ]; then
   if [ -n "$CONTENT" ]; then
     CONTENT="${CONTENT}${NL}${NL}[handoff truncated: RESUME_SESSION.md is ${rb} bytes, over this hook's ${RESUME_CAP_BYTES}-byte cap, so only the head above (whole lines) was injected. Read $F for the rest.]"
@@ -628,6 +662,7 @@ if [ "$suppress" = 1 ]; then
   # The vcs line rides the pointer too: a compact inside the window discards the context that already
   # had it, which is exactly the moment the policy needs to re-arrive.
   [ -n "$VCS_LINE" ] && PTR="${PTR}${NL}${VCS_LINE}"
+  [ -n "$BAND_LINE" ] && PTR="${PTR}${NL}${BAND_LINE}"
   [ -n "$PREF" ] && PTR="${PTR}${NL}${PREF}"
   [ -n "$STAMP_LINE" ] && PTR="${PTR}${NL}${STAMP_LINE}"
   if command -v jq >/dev/null 2>&1; then
@@ -644,6 +679,7 @@ fi
 # handoff from context, so it needs the FULL inject again, not an "already injected" pointer that
 # assumes the context still has it.
 [ "$SOURCE" = "startup" ] || printf '%s %s %s\n' "$HASH" "$NOW" "${SESSION_ID:-none}" > "$STATE" 2>/dev/null || true
+[ -n "$BAND_LINE" ] && CONTENT="${CONTENT}${NL}${NL}${BAND_LINE}"
 [ -n "$PREF" ] && CONTENT="${CONTENT}${NL}${NL}${PREF}"
 [ -n "$STAMP_LINE" ] && CONTENT="${CONTENT}${NL}${NL}${STAMP_LINE}"
 

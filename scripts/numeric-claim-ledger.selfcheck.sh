@@ -17,8 +17,21 @@ TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"   # macOS TMPDIR ends in "/" -
 T="${TMPBASE}/at-numclaim-selfcheck.$$"
 rm -rf "$T"; mkdir -p "$T/kit/scripts" || fail "cannot build sandbox"
 cp "$SRC" "$T/kit/scripts/" || fail "cannot copy guard"
+cp "$(dirname "$0")/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard-cmdpos.sh"
+trap 'rm -rf "$T"' EXIT
+SCRIPTS="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 GUARD="$T/kit/scripts/numeric-claim-ledger.sh"
 STATE="$T/kit/.state/numeric-claims"
+LOG="$T/guards.log"
+# kit-gate.sh runs as a child of the guard: the fixture gets a rewritten copy (empty managed dir) and
+# options.tsv, and every input the user's own options could reach it through is cleared.
+mkdir -p "$T/kit/install" "$T/managed" "$T/cfg"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SCRIPTS/../install/options.tsv" "$T/kit/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg" AGENT_TIERS_GUARDS_LOG="$LOG"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 pay() { jq -n --arg s "$1" --arg c "$2" '{session_id:$s, hook_event_name:"PostToolUse", tool_name:"Bash", tool_input:{command:$c}}'; }
 run() { printf '%s' "$1" | sh "$GUARD" 2>/dev/null || true; }
@@ -82,6 +95,26 @@ grep -q CANARY-MUST-NOT-LEAK "$CANARY" || fail "canary was clobbered"
 # 5. Unparseable payload is a silent fail-open, not a crash.
 out="$(printf '%s' 'garbage {{{' | sh "$GUARD" 2>/dev/null || true)"
 [ -z "$out" ] || fail "unparseable payload must produce no output"
+
+# 6. Stand-down via kit-gate.sh: the ledger write is skipped entirely, exit 0, one kit-gate log line.
+S6C=sess-standdown-ctl
+run "$(pay "$S6C" 'awk "{sum+=\$1} END{print sum}" data.txt')" >/dev/null   # control: no marker, same payload must record
+[ -s "$STATE/$S6C.tsv" ] || fail "stand-down: control run (no marker) recorded nothing, fixture drifted"
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/numeric-claim-ledger"
+S6=sess-standdown-6666
+out="$(printf '%s' "$(pay "$S6" 'awk "{sum+=\$1} END{print sum}" data.txt')" | sh "$GUARD" 2>/dev/null)"; rc=$?
+rm -f "$T/kit/.state/off/numeric-claim-ledger"
+[ -z "$out" ] && [ "$rc" = 0 ] || fail "stand-down: want empty stdout and exit 0 (rc=$rc out=$out)"
+[ ! -e "$STATE/$S6.tsv" ] || fail "stand-down: ledger was written despite the marker"
+grep -aq 'kit-gate standdown numeric-claim-ledger:' "$LOG" 2>/dev/null || fail "stand-down: no kit-gate log line"
+
+# 10. Caller identity comes from guard_caller_agent: a `--agent` main (agent_type, NO agent_id) is MAIN;
+# a plugin-namespaced subagent (agent_type + agent_id) is its bare name.
+S10=sess-agent-1010
+run "$(pay "$S10" 'echo x | bc -l' | jq -c '. + {agent_type:"foo"}')" >/dev/null
+[ "$(tail -n 1 "$STATE/$S10.tsv" | cut -f2)" = MAIN ] || fail "--agent main (no agent_id) must be recorded as MAIN"
+run "$(pay "$S10" 'echo x | bc -l' | jq -c '. + {agent_type:"agent-tiers:worker", agent_id:"a1b2"}')" >/dev/null
+[ "$(tail -n 1 "$STATE/$S10.tsv" | cut -f2)" = worker ] || fail "namespaced subagent must be recorded as worker"
 
 rm -rf "$T"
 echo "OK numeric-claim-ledger: derivation idioms recorded, bare counts excluded, log-only (zero output), traversal-safe"

@@ -23,7 +23,7 @@ Follow THIS workflow - it mirrors how the kit itself works (audit first, plan, c
 
 1. AUDIT (read-only). Note my OS + shell FIRST. Clone the repo to a TEMP inspection dir (NOT its
    final home; ask me if I already have a checkout), list what it contains, and read its
-   README.md. Work out what it installs, WHERE (`~/.claude/agent-tiers/` is the canonical home; it
+   README.md and docs/install.md. Work out what it installs, WHERE (`~/.claude/agent-tiers/` is the canonical home; it
    then flattens into `~/.claude/{skills,agents,commands}`, wires a handful of hooks into
    `~/.claude/settings.json` - backed up first - and writes a small `kit-config.md`; a second
    Claude profile via `CLAUDE_CONFIG_DIR` installs there instead), and HOW for my host: a
@@ -33,13 +33,18 @@ Follow THIS workflow - it mirrors how the kit itself works (audit first, plan, c
    copies. Check if it's already installed (does `~/.claude/agent-tiers/` exist?).
 
 2. CHECK TOOLS (don't install anything). Verify what the install needs ON MY OS: `git`, and for a
-   flat install `bash` (+ optional `jq`). If anything is MISSING, TELL me the exact install
+   flat install `bash`. Also `jq`: without it the `agent-tiers` CLI refuses to run, the flat
+   installer wires no hooks, and every guard hook silently does nothing. If anything is MISSING,
+   TELL me the exact install
    command for my OS and let ME run it - NEVER install a tool for me.
 
 3. PLAN. Tell me: my detected OS/host, the MOST PORTABLE install path for it, fresh-install vs
    update, the exact steps, and anything that writes outside the temp dir. It must NOT pin my main
    (Lead) model/effort - those stay mine; it only configures the sub-agents. Guards are opt-in
-   (`--with-<id>`); list the ones you'd suggest and why, but wire none I don't pick.
+   and come in groups, turned on by a level (core, recommended, full) or one group option
+   (plugin dialog or `/config` on the plugin route; `sh ~/.claude/agent-tiers/scripts/agent-tiers
+   install --level LEVEL` or `configure --set group_<name>=true` on either route); list the level or
+   groups you'd suggest and why, but turn on none I don't pick.
 
 4. PRESENT + WAIT. Show me the plan and STOP. Let me say proceed / edit / hold. Do not install,
    run any kit script, or write into `~/.claude/` until I confirm.

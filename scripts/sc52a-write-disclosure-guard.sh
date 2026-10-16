@@ -46,6 +46,7 @@
 # Fail-open on any tooling gap (no jq, no git, cwd missing/unreadable, not a git repo). Self-check:
 # sc52a-write-disclosure-guard.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"
@@ -53,7 +54,7 @@ note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s sc52a-write-disclosure-guard %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "fail-open: jq missing - cannot parse payload"; exit 0; }
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)"
 sid() { printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true; }

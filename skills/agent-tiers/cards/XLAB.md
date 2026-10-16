@@ -1,5 +1,5 @@
 # XLAB card - cross-provider (Codex) handoff
-*card-v8 c=1578298095-25940 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v11 c=4040958299-26114 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the cross-provider machinery.** Load this card before authorizing or executing any
 > pass that invokes a non-Claude provider (dispatched from the Spawn Contract: `SC-3.1` spend, `SC-3.2`
@@ -56,8 +56,8 @@ disclosure-set` so a resume is unambiguous.
 TWO distinct failure modes, ONE rule - the ban is on the Lead invoking codex directly, foreground or
 background, briefed or throwaway.
 
-**Mechanically enforced since 2026-08-04:** the `codex-guard` PreToolUse(Bash) hook (consent row,
-`install-flat.sh --with-codex-guard`) DENIES any command-position bare `codex` - probes included - and
+**Mechanically enforced since 2026-08-04:** the `codex-guard` PreToolUse(Bash) hook (opt-in, Delegation
+group; flat install: `install-flat.sh --with-codex-guard`) DENIES any command-position bare `codex` - probes included - and
 points at the ONE sanctioned entrypoint, `scripts/codex-run.sh`: non-exec subcommands (login status,
 --version) pass through unscanned; `exec` runs a HARD-FAIL secrets scan of the `-C` tree (SC-5.3 step 3,
 exit 3, deliberately no bypass flag; resolution = relocate per SC-5.3a). The brokers route through the
@@ -130,8 +130,10 @@ codex INVOCATION, not the wrapper:
 ## XLAB-10 Data-disclosure guardrail
 A cross-provider call discloses repo content to the other lab; the categorical per-send gate is the hot egress
 preflight (`see SC-5.3`, fail-closed - secrets present means do not send, regardless of repo). The cross-lab
-guardrail this card adds on top: do not cross-lab-review a shared or sensitive tree; a solo local repo with
-your own authed account and no secrets stays lightweight (SC-5.3 owns what that means: the steps still run, fast).
+guardrail this card adds on top: do not cross-lab-review a shared or sensitive tree; a solo local repo of the
+user's own code, with their own authed account and no secrets, stays lightweight (SC-5.3 owns what that means:
+the steps still run, fast, and code the user does not own - a client's or anyone else's - still stops at
+its step 5 without the owner's permission).
 
 **Redaction shape when you relocate (`SC-5.3a`): SOFTEN the payload in place, never remove STRUCTURE.** Keep
 every heading, number and cross-reference target verbatim and replace only the sensitive value

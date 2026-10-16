@@ -3,10 +3,23 @@
 # Self-check for codex-guard.sh: synthetic PreToolUse(Bash) payloads; assert the deny fires ONLY for
 # command-position bare `codex` and the wrapper/mentions pass. Exits non-zero on first failure.
 set -u
-GUARD="$(dirname "$0")/codex-guard.sh"
+DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 # decision/breadcrumb lines go to a SANDBOX log, never the real kit's .state/guards.log (opus reviewer, Wave D:
 # in-place selfchecks had filled the live record with fixture noise)
-SBLOG="$(mktemp -d)/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
+# Run from a SANDBOX kit copy with a temp config dir and guards log, never the real kit's .state/, and
+# with every kit-gate input cleared so the user's own options cannot stand the hook down mid-check.
+SB="$(mktemp -d)" || { echo "SELF-CHECK FAILED: mktemp"; exit 1; }
+trap 'rm -rf "$SB"' EXIT
+mkdir -p "$SB/kit/install" "$SB/cfg" "$SB/managed"
+cp -R "$DIR" "$SB/kit/scripts"
+# Managed settings dir pointed at an empty temp dir, so a machine's real one cannot change the result.
+sed "s|^_kg_managed=.*|_kg_managed='$SB/managed'|" "$DIR/kit-gate.sh" > "$SB/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$SB/managed'" "$SB/kit/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$SB/kit/install/"
+GUARD="$SB/kit/scripts/codex-guard.sh"
+SBLOG="$SB/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG" CLAUDE_CONFIG_DIR="$SB/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (guard fails CLOSED by design without it)"; exit 0; }
@@ -86,4 +99,17 @@ raw() { out="$(printf '%s' "$1" | sh "$GUARD" 2>/dev/null || true)"; if printf '
 # Wave D: a deny writes a decision line with the sid
 jq -n '{tool_name:"Bash", session_id:"sess-cg", tool_input:{command:"codex exec hello"}}' | sh "$GUARD" >/dev/null 2>&1 || true
 grep -aqE '^[^ ]+ codex-guard deny: .*\[sid=sess-cg\]$' "$SBLOG" || fail "no decision line in sandbox log"
+# kit-gate stand-down: a marker under the sandbox kit's .state/off/ silences the hook (no output, exit 0,
+# one guards.log line); the control run without the marker proves the payload does emit.
+SD_PAYLOAD="$(jq -n '{tool_name:"Bash", session_id:"sess-sd", tool_input:{command:"codex exec hello"}}')"
+mkdir -p "$SB/kit/.state/off"
+sd_ctl="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null || true)"
+: > "$SB/kit/.state/off/codex-guard"
+sd_out="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+rm -f "$SB/kit/.state/off/codex-guard"
+if [ -n "$sd_ctl" ] && [ -z "$sd_out" ] && [ "$sd_rc" = 0 ] && grep -aq 'kit-gate standdown codex-guard:' "$SBLOG"; then
+  printf 'ok   kill-switch marker stands the hook down (empty stdout, exit 0, log line)\n'
+else
+  fail "kill-switch marker did not stand the hook down"
+fi
 echo "OK codex-guard: deny fires only for command-position bare codex; decision line logged with sid"

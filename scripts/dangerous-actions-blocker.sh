@@ -71,6 +71,7 @@
 # rather than DENY-MISSING. Rule for this file and every guard: NO apostrophes in comments inside a
 # command substitution. The macOS CI job (.github/workflows/selfcheck.yml) is what catches it now.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
@@ -101,7 +102,7 @@ LIB="$(dirname "$0")/guard-cmdpos.sh"
 . "$LIB" 2>/dev/null || { note "guard-cmdpos.sh failed to source"; exit 0; }
 command -v guard_at_command_position >/dev/null 2>&1 || { note "guard-cmdpos.sh sourced but guard_at_command_position undefined"; exit 0; }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 [ -n "$TOOL" ] || { note "no tool_name in payload"; exit 0; }

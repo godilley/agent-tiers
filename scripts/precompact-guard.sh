@@ -65,8 +65,9 @@ note() {
 
 # 1. Kill switch first, before any side effect or read.
 [ -f "$CLAUDE_DIR/agent-tiers/.state/off/precompact-guard" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 
 # 2. Only a manual /compact is in scope - see header for why auto is never blocked.

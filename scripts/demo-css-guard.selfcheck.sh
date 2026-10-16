@@ -38,6 +38,15 @@ mkdir -p "$KIT/scripts" "$KIT/.state"
 cp "$SRC" "$KIT/scripts/"
 GUARD="$KIT/scripts/demo-css-guard.sh"
 LOG="$T/guards.log"
+# kit-gate.sh runs as a child of the guard: the fixture gets a rewritten copy (empty managed dir) and
+# options.tsv, and every input the user's own options could reach it through is cleared.
+mkdir -p "$KIT/install" "$T/managed" "$T/cfg"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$KIT/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg" AGENT_TIERS_GUARDS_LOG="$LOG"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 run() {  # run <content> [file-path]
   jq -n --arg p "${2:-$T/style.css}" --arg c "$1" '{tool_name: "Write", tool_input: {file_path: $p, content: $c}}' \
@@ -90,6 +99,16 @@ out="$(run '.callout { outline: 2px solid red !important; }')"
 [ -z "$out" ] || fail "case 10: kill switch did not silence the guard: $out"
 rm -f "$KIT/.state/off/demo-css-guard"
 
+# --- case 10b: stand-down via kit-gate.sh: exit 0, empty stdout, kit-gate log line --------------------
+ctl="$(run '.callout { outline: 2px solid red !important; }')"   # control: no marker, same payload must deny
+[ "$(decision "$ctl")" = deny ] || fail "case 10b: control run (no marker) did not deny, fixture drifted: $ctl"
+touch "$KIT/.state/off/demo-css-guard"
+out="$(jq -n --arg p "$T/style.css" --arg c '.callout { outline: 2px solid red !important; }' \
+  '{tool_name: "Write", tool_input: {file_path: $p, content: $c}}' | sh "$GUARD" 2>/dev/null)"; rc=$?
+rm -f "$KIT/.state/off/demo-css-guard"
+[ -z "$out" ] && [ "$rc" = 0 ] || fail "case 10b: stand-down did not silence the guard (rc=$rc out=$out)"
+grep -aq 'kit-gate standdown demo-css-guard:' "$LOG" 2>/dev/null || fail "case 10b: no kit-gate log line"
+
 # --- case 11: jq missing fails open, with a breadcrumb ----------------------------------------------
 FAKEBIN="$T/fakebin"
 mkdir -p "$FAKEBIN"
@@ -105,7 +124,7 @@ out="$(jq -n --arg p "$T/style.css" --arg c '.callout { outline: 2px solid red !
 grep -aq 'fail-open: jq missing' "$LOG" 2>/dev/null || fail "case 11: the jq-missing fail-open left no breadcrumb"
 
 if [ "$fails" -eq 0 ]; then
-  echo "PASS demo-css-guard: 11/11 cases"
+  echo "PASS demo-css-guard: 12/12 cases"
   exit 0
 fi
 printf 'demo-css-guard: %s case(s) failed\n' "$fails"

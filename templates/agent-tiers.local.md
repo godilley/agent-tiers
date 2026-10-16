@@ -41,7 +41,7 @@ Boss / fable gated. Full doctrine -> the `agent-tiers` skill.
 
 | Task shape | Who | Model | Effort |
 |---|---|---|---|
-| Route, brief, verify, light synthesis | Lead | sonnet (GUI) | high |
+| Route, brief, verify, light synthesis | Lead | any (GUI) | high |
 | Rote scripted procedure | L3 task agent | haiku | low |
 | Mechanical with some judgment | Worker / L3 task agent | sonnet | low-medium |
 | Fan-out research / audit first pass | worker / auditor | sonnet | low-medium |

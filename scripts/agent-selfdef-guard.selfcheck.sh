@@ -27,8 +27,15 @@ fail() { printf 'FAIL: %s\n' "$1"; fails=$((fails + 1)); }
 
 # --- fixture kit tree: agents/ with two tiers, plus a flat-install-style symlink -------------------
 KIT="$T/kit"
-mkdir -p "$KIT/agents" "$KIT/.state" "$KIT/scripts"
+mkdir -p "$KIT/agents" "$KIT/.state" "$KIT/scripts" "$KIT/install" "$T/managed"
 cp "$GUARD" "$KIT/scripts/"
+# kit-gate.sh enforces the kit-root kill switch and runs from this fixture kit: managed dir pointed at an
+# empty temp dir, every kit-gate input cleared so the user's own options cannot stand the guard down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "FAIL: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$KIT/install/"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 cp "$SCRIPTS/guard-cmdpos.sh" "$KIT/scripts/"
 printf '# worker definition\n' > "$KIT/agents/worker.md"
 printf '# advisor definition\n' > "$KIT/agents/advisor.md"
@@ -64,7 +71,7 @@ decision() { printf '%s' "$1" | jq -r '.hookSpecificOutput.permissionDecision //
 payload() {  # payload <file_path> [agent_type]
   jq -n --arg p "$1" --arg a "${2:-}" \
     '{tool_name: "Write", tool_input: {file_path: $p}, session_id: "sess1"}
-     + (if $a == "" then {} else {agent_type: $a} end)'
+     + (if $a == "" then {} else {agent_type: $a} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)'
 }
 
 # --- case 1: the Lead (no agent_type) writing a definition file -> allow ---------------------------
@@ -107,10 +114,17 @@ out="$(run "$(payload "$PROJECT/.claude/agents/advisor.md" worker)" "$CDIR" "$PR
 [ -z "$out" ] || fail "case 8: worker writing a different tier's project-scope definition was denied: $out"
 
 # --- case 9: the kill switch is honoured before anything else, resolved from KIT_ROOT -----------------
+# control run, same payload, no marker: it must deny, or the silence below proves nothing
+out="$(run "$(payload "$KIT/agents/worker.md" worker)")"
+[ "$(decision "$out")" = "deny" ] || fail "case 9: control run without the marker did not deny (got: ${out:-<silence>})"
 mkdir -p "$KIT/.state/off"
 touch "$KIT/.state/off/agent-selfdef-guard"
 out="$(run "$(payload "$KIT/agents/worker.md" worker)")"
 [ -z "$out" ] || fail "case 9: the kill switch did not silence the guard: $out"
+# kit-gate stand-down: exit 0 and logged in the sandbox guards log.
+printf '%s' "$(payload "$KIT/agents/worker.md" worker)" | CLAUDE_CONFIG_DIR="$CDIR" AGENT_TIERS_GUARDS_LOG="$LOG" AGENT_TIERS_KIT_ROOT="$KIT" sh "$KIT/scripts/agent-selfdef-guard.sh" >/dev/null 2>&1 \
+  || fail "case 9: stand-down exit status was not 0"
+grep -aq 'kit-gate standdown agent-selfdef-guard:' "$LOG" 2>/dev/null || fail "case 9: kit-gate stand-down was not logged"
 rm -rf "$KIT/.state/off"
 
 # --- case 10: fail-open when the agents/ directory is missing, with a breadcrumb ---------------------

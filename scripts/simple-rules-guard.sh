@@ -35,8 +35,9 @@
 # finished agent resumes it from its transcript, so an unlabelled mid-flight message can restart work
 # that was done. The body must carry NOOP-IF-DONE (if your task already finished, reply NOOP and stop)
 # or RESUME-OK (a deliberate resume with new work). Exempt: any send whose CALLER is a subagent
-# (payload agent_type set and not "main"): a subagent reports to its launcher by "main" or by the
-# launcher's agentId, and the launcher is never finished. Also exempt: an empty message (a pure
+# (as guard_caller_agent reads it: agent_id present; a `--agent` Lead has agent_type but no agent_id):
+# a subagent reports to its launcher by "main" or by the launcher's agentId, and the launcher is never
+# finished. Also exempt: an empty message (a pure
 # notify_when_idle subscription). Ceiling: a subagent messaging a finished sibling is not caught.
 #
 # RULE G - a SendMessage to a peer session that has sat idle too long wakes it, and its next turn
@@ -61,7 +62,7 @@
 # long-run-guard.sh covers that shape and more, so it is the one copy now.
 #
 # Fail-open on every tooling gap (no jq, no library, unparseable git remote, missing namespace file),
-# breadcrumbed to .state/guards.log. Kill switch: .state/off/simple-rules-guard, checked before any
+# breadcrumbed to .state/guards.log. Kill switch: .state/off/simple-rules-guard (enforced by kit-gate.sh), checked before any
 # side effect. Self-check: simple-rules-guard.selfcheck.sh.
 #
 # KIT_ROOT below is resolved from $0, not from CLAUDE_CONFIG_DIR: the kill switch and own-namespaces
@@ -84,9 +85,9 @@ deny() { # $1 = reason
   exit 0
 }
 
-[ -f "${KIT_ROOT:-}/.state/off/simple-rules-guard" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "fail-open: jq missing - cannot parse payload"; exit 0; }
 
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
@@ -327,12 +328,19 @@ rule_g() { # $1 = to, $2 = message, $3 = agent_type -> stdout: deny reason, empt
 if [ "$TOOL" = "SendMessage" ]; then
   TO="$(printf '%s' "$INPUT" | jq -r '.tool_input.to // empty' 2>/dev/null || true)"
   MSG="$(printf '%s' "$INPUT" | jq -r '.tool_input.message // empty' 2>/dev/null || true)"
-  AGT="$(printf '%s' "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null || true)"
+  # Rule G needs no caller identity, so a missing/stale library only skips Rule F (fail open), not G.
+  LIB="$(dirname "$0")/guard-cmdpos.sh" AGT="" NOLIB=""
+  if [ ! -r "$LIB" ]; then note "fail-open: guard-cmdpos.sh missing/unreadable at $LIB"; NOLIB=1
+  elif ! . "$LIB" 2>/dev/null; then note "fail-open: guard-cmdpos.sh failed to source"; NOLIB=1
+  elif ! command -v guard_caller_agent >/dev/null 2>&1; then note "fail-open: guard-cmdpos.sh sourced but stale (guard_caller_agent undefined)"; NOLIB=1
+  else AGT="$(guard_caller_agent "$INPUT")"
+  fi
 
   REASON="$(rule_g "$TO" "$MSG" "$AGT")"
   [ -n "$REASON" ] && deny "$REASON"
 
-  case "$AGT" in ''|main|MAIN) ;; *) exit 0 ;; esac
+  [ -n "$NOLIB" ] && exit 0
+  [ -n "$AGT" ] && exit 0
   [ "$TO" = "main" ] && exit 0
   [ -n "$MSG" ] || exit 0
   case "$MSG" in

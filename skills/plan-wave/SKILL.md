@@ -61,9 +61,14 @@ an ignored notes dir needs none.
 4. Per row: `sh "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/scripts/worktree.sh" up <id>`, run
    inside the repo the row edits; the worktree is `<that repo>/.claude/worktrees/<id>` on branch
    `<id>`. The merge and the teardown below happen in that repo too. When a row edits a repo other
-   than the session's own, the Lead clears peer-guard per worktree before spawning (a subagent's
-   write there is denied and sets no marker): read the worktree's docs, make one no-op Write in it
-   (the first is denied and sets the marker, the retry lands) and remove that file again.
+   than the session's own, `up` also pre-clears peer-guard's first-write deny for that worktree,
+   for this session, and prints `peer-guard: marked <path>`. `peer-guard: off` means nothing will
+   deny. Any other outcome (a WARN, or no peer-guard line at all) means a subagent's first write
+   there will be denied: clear it by hand before spawning (one no-op Write in the worktree, denied
+   once, then the retry lands; remove the file). The mark does not cover a worktree where another
+   live session is working: there a subagent's write is denied until the Lead makes one Write in
+   it and the human answers the ask (either answer clears it for the session; an unattended Lead
+   cannot clear it).
 5. Per row, a self-contained brief (the agent starts blind): from `wave_kickoff` if set, else:
    - the row's section of the plan, copied in, and the absolute worktree path, with "run every
      command and every edit inside this path; a relative path or a bare git command elsewhere
@@ -80,6 +85,8 @@ an ignored notes dir needs none.
      (the default), do NOT commit: leave the change in the worktree, the Lead commits after review
      (a subagent's commit is checked against the Lead's transcript and is denied until the Lead has
      a review spawn). Never push, never touch the default branch.
+   - "write scratch files under `<scratchpad>/<row id>/`, never the scratchpad root: sibling
+     subleads in one wave share one session scratchpad, and a root-level file gets overwritten";
    No attributed quotes and no "the human wants": the plan is the authority.
 
 ## Spawning

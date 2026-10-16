@@ -20,8 +20,17 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (guard fails open by de
 TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
 T="${TMPBASE}/at-advisoryack-selfcheck.$$"
 rm -rf "$T"; mkdir -p "$T/cfg" || fail "cannot build sandbox"
-GUARD="$SRC_DIR/advisory-ack-guard.sh"
 trap 'rm -rf "$T"' EXIT
+# Run the guard from a SANDBOX kit copy, with every kit-gate input cleared, so the live kit's state and the
+# user's real options can never stand it down (or be touched) mid-check.
+mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
+cp "$SRC_DIR/advisory-ack-guard.sh" "$T/kit/scripts/"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+GUARD="$T/kit/scripts/advisory-ack-guard.sh"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 # CLAUDE_CONFIG_DIR sandboxes pending/nagged/seen (this guard's producer-paired state root); LOG is
 # BASE-derived (dirname("$0")), matching every sibling guard - see L7 in the guard's own header - so it
@@ -158,5 +167,17 @@ run '../../evil' "$HIT_LAST_T"
 [ "$RC" = 0 ] || fail "case 8b: traversal-shaped session id must fail open, got $RC"
 [ ! -e "$T/cfg/agent-tiers/.state/advisory-pending/../../evil" ] || fail "case 8b: traversal session id escaped the pending dir"
 printf 'ok   case 8: garbage stdin and a traversal-shaped session id both fail open, no traversal\n'
+
+# 9. kit-gate stand-down: with the marker present, the same miss transcript that blocked in case 1 produces
+#    no stderr block, no stdout, exit 0, nothing consumed from pending, and a logged stand-down line.
+seed_pending s9 "$TOK"
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/advisory-ack-guard"
+run s9 "$MISS_T"; rm -f "$T/kit/.state/off/advisory-ack-guard"
+[ "$RC" = 0 ] && [ -z "$out" ] && [ -z "$STDERR" ] || fail "case 9: stand-down must be silent exit 0, got rc=$RC out=$out err=$STDERR"
+[ ! -f "$NAGGED_DIR/s9" ] || fail "case 9: stood-down guard must not touch nagged state"
+grep -qF "kit-gate standdown advisory-ack-guard:" "$GUARDS_LOG" || fail "case 9: stand-down not logged"
+run s9 "$MISS_T"
+[ "$RC" = 2 ] || fail "case 9: guard must block again once the marker is removed, got $RC"
+printf 'ok   case 9: kit-gate stands the guard down (silent, exit 0, state untouched, logged)\n'
 
 echo "OK advisory-ack-guard: block-at-most-once-per-token (no stop_hook_active dependency), correct ack/miss resolution across multi-block turns (M1 regression covered), near-zero overhead when nothing pending, and fail-open all hold"

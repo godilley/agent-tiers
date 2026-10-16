@@ -7,12 +7,23 @@
 # guards.log, a non-cli entrypoint (headless/claude -p/unproven host) never blocking even with no
 # tag at all, and the kill switch standing the whole guard down.
 set -u
-H="$(cd "$(dirname "$0")" && pwd)/notify-tag-guard.sh"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP notify-tag-guard: jq absent (guard fails open by design)"; exit 0; }
 
 T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
 trap 'rm -rf "$T"' EXIT
+# Run from a SANDBOX kit copy (guard, lib/, kit-gate.sh pointed at an empty managed dir, options.tsv) with
+# every kit-gate input cleared, so the live kit's state and the user's real options cannot reach this check.
+mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
+cp "$SRC_DIR/notify-tag-guard.sh" "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard into sandbox"
+cp -R "$SRC_DIR/lib" "$T/kit/scripts/" || fail "cannot copy lib into sandbox"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+H="$T/kit/scripts/notify-tag-guard.sh"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 export AGENT_TIERS_GUARDS_LOG="$T/guards.log"
 export CLAUDE_CONFIG_DIR="$T/cfg"
 mkdir -p "$CLAUDE_CONFIG_DIR/agent-tiers/.state"
@@ -80,6 +91,15 @@ touch "$CLAUDE_CONFIG_DIR/agent-tiers/.state/off/notify"
 rc="$(run "Just some prose, no tag at all.")"
 rm -f "$CLAUDE_CONFIG_DIR/agent-tiers/.state/off/notify"
 [ "$rc" = 0 ] || fail "the kill switch should stand the guard down entirely (got rc=$rc)"
+
+# kit-gate stand-down: the same missing-tag reply that blocks above passes silently with the kit-root
+# marker present (distinct from the CLAUDE_CONFIG_DIR marker above), logs it, and blocks again without it.
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/notify-tag-guard"
+rc="$(run "Just some prose, no tag at all.")"
+rm -f "$T/kit/.state/off/notify-tag-guard"
+[ "$rc" = 0 ] && [ ! -s "$T/stdout" ] && [ ! -s "$T/stderr" ] || fail "kit-gate stand-down must be silent exit 0 (rc=$rc)"
+grep -qF 'kit-gate standdown notify-tag-guard:' "$AGENT_TIERS_GUARDS_LOG" || fail "kit-gate stand-down must be logged"
+[ "$(run "Just some prose, no tag at all.")" = 2 ] || fail "guard must block again once the kit-gate marker is removed"
 
 # Missing library (broken install, not a normal runtime state) must fail OPEN, not abort or block -
 # opus reviewer, 2026-09-17, MEDIUM/test-gap: this exact branch was asserted in the header and never

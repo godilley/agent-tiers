@@ -31,6 +31,15 @@ cp "$SRC" "$KIT/scripts/"
 cp "$SCRIPTS/guard-cmdpos.sh" "$KIT/scripts/"
 G="$KIT/scripts/simple-rules-guard.sh"
 LOG="$T/guards.log"
+# kit-gate.sh runs as a child of the guard: the fixture gets a rewritten copy (empty managed dir) and
+# options.tsv, and every input the user's own options could reach it through is cleared.
+mkdir -p "$KIT/install" "$T/managed" "$T/cfg"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$KIT/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg" AGENT_TIERS_GUARDS_LOG="$LOG"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 run() { # run <payload-json> -> stdout: the guard's own stdout
   # CLAUDE_CONFIG_DIR is pinned at $T for every case here (not just Rule G's) so a Rule F case can
@@ -195,7 +204,7 @@ send_payload() { # send_payload <to> <message>
   jq -n --arg t "$1" --arg m "$2" '{tool_name: "SendMessage", tool_input: {to: $t, message: $m}, session_id: "sess1"}'
 }
 send_payload_agt() { # send_payload_agt <to> <message> <agent_type>
-  jq -n --arg t "$1" --arg m "$2" --arg a "$3" '{tool_name: "SendMessage", tool_input: {to: $t, message: $m}, agent_type: $a, session_id: "sess1"}'
+  jq -n --arg t "$1" --arg m "$2" --arg a "$3" '{tool_name: "SendMessage", tool_input: {to: $t, message: $m}, agent_type: $a, session_id: "sess1"} + (if $a == "" then {} else {agent_id: "a0test"} end)'
 }
 out="$(run "$(send_payload worker 'check if tests pass over there')")"
 [ "$(decision "$out")" = "deny" ] || fail "F1: an unlabelled SendMessage was not denied (got: ${out:-<silence>})"
@@ -208,10 +217,16 @@ out="$(run "$(send_payload main 'done, report attached')")"
 [ -z "$out" ] || fail "F4: a subagent send to main was denied (exempt): $out"
 out="$(run '{"tool_name": "SendMessage", "tool_input": {"to": "worker", "notify_when_idle": true}, "session_id": "sess1"}')"
 [ -z "$out" ] || fail "F5: a pure notify_when_idle subscription (no message) was denied (exempt): $out"
-out="$(run "$(jq -n '{tool_name: "SendMessage", tool_input: {to: "a31003a0673e9caa1", message: "report attached"}, agent_type: "worker", session_id: "sess1"}')")"
+out="$(run "$(jq -n '{tool_name: "SendMessage", tool_input: {to: "a31003a0673e9caa1", message: "report attached"}, agent_type: "worker", agent_id: "a0test", session_id: "sess1"}')")"
 [ -z "$out" ] || fail "F7: a subagent reporting to its launcher by agentId was denied (subagent callers exempt): $out"
 out="$(run "$(jq -n '{tool_name: "SendMessage", tool_input: {to: "worker", message: "check this"}, agent_type: "main", session_id: "sess1"}')")"
 [ "$(decision "$out")" = "deny" ] || fail "F8: agent_type main was treated as a subagent (it is the Lead)"
+# F9: a `--agent` main session (agent_type, NO agent_id) is the Lead, not exempt.
+out="$(run "$(jq -n '{tool_name: "SendMessage", tool_input: {to: "worker", message: "check this"}, agent_type: "foo", session_id: "sess1"}')")"
+[ "$(decision "$out")" = "deny" ] || fail "F9: a --agent main session (no agent_id) was exempted as a subagent (got: ${out:-<silence>})"
+# F10: a real subagent (agent_type + agent_id), namespaced, is exempt.
+out="$(run "$(jq -n '{tool_name: "SendMessage", tool_input: {to: "worker", message: "check this"}, agent_type: "agent-tiers:worker", agent_id: "a1b2", session_id: "sess1"}')")"
+[ -z "$out" ] || fail "F10: a namespaced subagent send was denied (exempt): $out"
 out="$(run "$(send_payload worker 'noop-if-done lower case')")"
 [ "$(decision "$out")" = "deny" ] || fail "F6: a lower-case token was accepted (token is literal, upper case)"
 
@@ -280,6 +295,14 @@ out="$(run "$(send_payload 'peer-busy-2h' 'NOOP-IF-DONE: ping')")"
 out="$(run "$(send_payload 'peer-idle-2h [ab12cd]' 'NOOP-IF-DONE: ping')")"
 [ "$(decision "$out")" = "deny" ] || fail "G6: a to with a ref suffix did not match the peer by stripped name"
 
+# G9: library absent -> Rule G still denies the idle-peer wake; Rule F fails open (no caller identity).
+mv "$KIT/scripts/guard-cmdpos.sh" "$T/guard-cmdpos.sh.away"
+out="$(run "$(send_payload 'peer-idle-2h' 'NOOP-IF-DONE: ping')")"
+[ "$(decision "$out")" = "deny" ] || fail "G9: Rule G did not deny with guard-cmdpos.sh absent (got: ${out:-<silence>})"
+out="$(run "$(send_payload worker 'unlabelled note')")"
+[ -z "$out" ] || fail "G9: Rule F denied with guard-cmdpos.sh absent (should fail open): $out"
+mv "$T/guard-cmdpos.sh.away" "$KIT/scripts/guard-cmdpos.sh"
+
 out="$(run "$(send_payload 'a31003a0673e9caa1' 'NOOP-IF-DONE: ping')")"
 [ -z "$out" ] || fail "G7: an unknown name (no session record) was denied (false positive): $out"
 
@@ -335,8 +358,17 @@ out="$(run "$(bash_payload 'codex exec resume --last')")"
 [ -z "$out" ] || fail "kill-switch: .state/off/simple-rules-guard did not silence an otherwise-denied command: $out"
 rm -f "$KIT/.state/off/simple-rules-guard"
 
+# --- Stand-down via kit-gate.sh: marker -> empty stdout, exit 0, a kit-gate log line --------------------
+ctl="$(run "$(bash_payload 'codex exec resume --last')")"   # control: no marker, same payload must deny
+[ "$(decision "$ctl")" = deny ] || fail "stand-down: control run (no marker) did not deny, fixture drifted: $ctl"
+: > "$KIT/.state/off/simple-rules-guard"
+out="$(printf '%s' "$(bash_payload 'codex exec resume --last')" | CLAUDE_CODE_SESSION_ID=sess-sd sh "$G" 2>/dev/null)"; rc=$?
+rm -f "$KIT/.state/off/simple-rules-guard"
+[ -z "$out" ] && [ "$rc" = 0 ] || fail "stand-down: marker did not silence an otherwise-denied command (rc=$rc out=$out)"
+grep -aq 'kit-gate standdown simple-rules-guard:' "$LOG" 2>/dev/null || fail "stand-down: no kit-gate log line"
+
 if [ "$fails" -eq 0 ]; then
-  echo "PASS simple-rules-guard: 73/73 cases"
+  echo "PASS simple-rules-guard: 77/77 cases"
   exit 0
 fi
 printf 'simple-rules-guard: %s case(s) failed\n' "$fails"

@@ -50,7 +50,8 @@ note_hit() { # $1 = message - framing hits, own log, own rotation budget
   { mkdir -p "$(dirname "$FRAMING_LOG")" 2>/dev/null && printf '%s framing-guard hit: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$FRAMING_LOG"; } 2>/dev/null || true
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 PROMPT="$(printf '%s' "$INPUT" | jq -r '.tool_input.prompt // empty' 2>/dev/null || true)"
 [ -n "$PROMPT" ] || exit 0

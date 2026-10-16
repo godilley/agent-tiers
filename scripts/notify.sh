@@ -207,8 +207,9 @@ terminal_pid_from() {
 
 # Kill switch first, before any side effect or read.
 [ -f "$CLAUDE_DIR/agent-tiers/.state/off/notify" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 
 HOOK_EVENT="$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
@@ -247,7 +248,7 @@ if [ "$HOOK_EVENT" = "Stop" ]; then
   # valid one at the end - but this script's copy still only looked at the last line, so a reply
   # the guard blocked for showing two badges still fired a ping anyway). Anything the guard would
   # also reject (mixed or invalid) stays SILENT here: that relies on the guard actually being wired
-  # alongside this script, both from the same HOOK_ROWS rows installed together - a non-compliant
+  # alongside this script, both from the same install/options.tsv rows installed together - a non-compliant
   # Stop means "the guard is about to force a retry", not "nothing is enforcing this". Disclosed
   # ceiling (opus reviewer, 2026-09-17, LOW, not chased): that premise is false at Claude Code's
   # documented 8-consecutive-block ceiling - if the model is STILL non-compliant on the 8th attempt,

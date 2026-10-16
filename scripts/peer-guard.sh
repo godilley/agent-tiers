@@ -27,7 +27,10 @@
 # a decision is never left standing on a marker that may not actually be there. A converted deny
 # (subagent, or unattended Lead) and a subagent's no-peer deny never write a marker, so the identical
 # retry that caused them hits the same deny again, and the Lead's own first ask/deny in that repo is
-# never pre-spent by a subagent's call. A subagent's deny also carries a remedy telling the Lead how
+# never pre-spent by a subagent's call. CLI `--mark-worktree <dir>` (called by worktree.sh up) writes
+# the same .nopeer marker for the calling session (CLAUDE_CODE_SESSION_ID) in a linked worktree under
+# .claude/worktrees/, so a subagent's first write there is not denied; it never writes .peer. A
+# subagent's deny also carries a remedy telling the Lead how
 # to clear the gate (one Write/Edit into the target repo) and re-dispatch. The session id plus repo
 # slug that keys every marker/state file is capped at 200 chars combined (falls back to a checksum
 # slug, `h<cksum of the repo path>`) so a very long repo path cannot produce an unusable filename.
@@ -37,6 +40,10 @@
 #    advisory, never arm 2's foreign-repo ask/deny - this guard does not resolve a Bash command's
 #    effective target directory. Upgrade path: reuse guard-cmdpos.sh's cwd resolution (guard_resolve_cwd
 #    and friends) if this bites in practice.
+#  - --mark-worktree writes into the state dir of the peer-guard.sh next to the worktree.sh that ran, so a
+#    worktree.sh run from a different kit copy (a plugin cache, or a worktree's own scripts/) marks a
+#    state dir the wired hook never reads; also, any Bash caller holding the session id can run this mode
+#    (Bash writes are already outside this guard, see the first bullet).
 #  - pg_is_claude splits /proc/<pid>/cmdline on NUL only; an argv0 containing an embedded newline
 #    followed by the literal text "claude" on its own line would pass the basename check - this needs a
 #    stale socket, pid reuse, and a crafted argv0 all at once to matter.
@@ -78,7 +85,7 @@
 # same-repo-peer match, and pg_scan's target filter, deliberately keep --show-toplevel equality instead
 # (a worktree session is still not a same-repo PEER of the main tree, by design).
 #
-# Kill switch: .state/off/peer-guard, checked before any side effect. Fail-open (jq missing, sock dir
+# Kill switch: .state/off/peer-guard (enforced by kit-gate.sh), checked before any side effect. Fail-open (jq missing, sock dir
 # missing/unreadable, /proc unreadable, empty session_id, guard-cmdpos.sh missing or stale) breadcrumbed
 # to guards.log.
 # Self-check: peer-guard.selfcheck.sh.
@@ -253,10 +260,52 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 
-# --- hook mode: PreToolUse JSON on stdin ----------------------------------------------------------
-[ -f "${KIT_ROOT:-}/.state/off/peer-guard" ] && exit 0
+# --- CLI mode: peer-guard.sh --mark-worktree <dir> -------------------------------------------------
+# Pre-clears arm 2's first-foreign-write NO-PEER deny for the calling session in a linked worktree it
+# just created (worktree.sh up calls this): writes the same .nopeer marker a Lead's first deny writes.
+# Never writes .peer, so a live peer in that worktree still asks/denies.
+if [ "${1:-}" = "--mark-worktree" ]; then
+  if [ -f "${KIT_ROOT:-}/.state/off/peer-guard" ]; then
+    echo "peer-guard: off (kill switch), nothing marked"
+    exit 0
+  fi
+  MDIR="${2:-}"
+  SID="${CLAUDE_CODE_SESSION_ID:-}"
+  case "${SID:-}" in *[!A-Za-z0-9._-]* | '.' | '..') SID="" ;; esac
+  [ "${#SID}" -gt 128 ] && SID=""
+  if [ -z "$SID" ]; then
+    echo "peer-guard: not marked (no valid CLAUDE_CODE_SESSION_ID)" >&2
+    exit 3
+  fi
+  TARGET_REPO=""; MGIT=""; MCOMMON=""
+  if [ -n "$MDIR" ] && [ -d "$MDIR" ]; then
+    TARGET_REPO="$(CDPATH= cd "$MDIR" >/dev/null 2>&1 && git rev-parse --show-toplevel 2>/dev/null || true)"
+    MGIT="$(CDPATH= cd "$MDIR" >/dev/null 2>&1 && CDPATH= cd "$(git rev-parse --absolute-git-dir 2>/dev/null)" >/dev/null 2>&1 && pwd -P || true)"
+    MCOMMON="$(pg_common_dir "$MDIR")"
+  fi
+  case "$TARGET_REPO" in
+    */.claude/worktrees/*) MOK=1 ;;
+    *) MOK=0 ;;
+  esac
+  if [ "$MOK" != 1 ] || [ -z "$MGIT" ] || [ -z "$MCOMMON" ] || [ "$MGIT" = "$MCOMMON" ]; then
+    echo "peer-guard: not marked ($MDIR is not a linked worktree under .claude/worktrees/)" >&2
+    exit 4
+  fi
+  STATE_DIR="${PEER_GUARD_STATE_DIR:-${KIT_ROOT:-${TMPDIR:-/tmp}}/.state/peer-guard}"
+  SLUG="$(pg_slug "$TARGET_REPO")"
+  if { mkdir -p "$STATE_DIR/foreign" 2>/dev/null && : > "$STATE_DIR/foreign/${SID}__${SLUG}.nopeer"; } 2>/dev/null; then
+    pg_gc
+    echo "peer-guard: marked $TARGET_REPO for this session (first-write deny pre-cleared; a live peer there still asks the Lead and blocks subagents)"
+    exit 0
+  fi
+  echo "peer-guard: not marked (could not write marker under $STATE_DIR/foreign)" >&2
+  exit 1
+fi
 
-INPUT="$(cat 2>/dev/null || true)"
+# --- hook mode: PreToolUse JSON on stdin ----------------------------------------------------------
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "fail-open: jq missing - cannot parse payload"; exit 0; }
 
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"

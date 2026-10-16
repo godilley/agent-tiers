@@ -25,6 +25,16 @@ cp "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard-cmdpo
 GUARD="$T/kit/scripts/sc52a-write-disclosure-guard.sh"
 WORK="$T/work"
 trap 'rm -rf "$T"' EXIT
+# kit-gate sandbox: the guard now reads live kit state and the user's settings through kit-gate.sh, so the
+# sandbox kit gets a rewritten gate (managed dir -> an empty temp dir) + options table, and every
+# kit-gate input is cleared. Guards log stays the sandbox kit's own .state/guards.log.
+mkdir -p "$T/kit/install" "$T/cfg" "$T/managed"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID AGENT_TIERS_GUARDS_LOG
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 git -C "$WORK" init -q
 git -C "$WORK" config user.email test@test.local
@@ -103,7 +113,7 @@ out="$(run "ls -la")"
 
 # 6. A subagent caller denies (this guard has no ask state - it always denies, for every caller).
 cmd="sed -i 's/a/b/' tracked.txt"
-out="$(jq -n --arg x "$cmd" --arg c "$WORK" --arg a "worker" '{cwd: $c, tool_input: {command: $x}, session_id: "sc52a-test", agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x "$cmd" --arg c "$WORK" --arg a "worker" '{cwd: $c, tool_input: {command: $x}, session_id: "sc52a-test", agent_type: $a, agent_id: "a0test"}' | sh "$GUARD" 2>/dev/null || true)"
 [ "$(decision "$out")" = "deny" ] || fail "6: expected deny for a subagent caller, got: $out"
 case "$out" in *"You cannot judge whether this exception is warranted"*) ;; *) fail "6: subagent deny must carry the subagent-specific closing sentence, got: $out" ;; esac
 case "$out" in *"UNATTENDED MODE"*|*"DELEGATED AGENT"*) fail "6: this deny is unconditional for every caller - it must not carry the misleading ask-was-converted framing text, got: $out" ;; esac
@@ -112,7 +122,7 @@ case "$out" in *"UNATTENDED MODE"*|*"DELEGATED AGENT"*) fail "6: this deny is un
 #     marker either - the marker check runs AFTER AGENT_TYPE is known now, and only a Lead's marker
 #     allows. A subagent's marker is logged as ignored and the command still denies.
 cmd="sed -i 's/a/b/' tracked.txt  # [bash-write:worker self-declared, should not clear]"
-out="$(AGENT_TIERS_GUARDS_LOG="$LOGDIR/guards.log" jq -n --arg x "$cmd" --arg c "$WORK" --arg a "worker" '{cwd: $c, tool_input: {command: $x}, session_id: "sc52a-test", agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(AGENT_TIERS_GUARDS_LOG="$LOGDIR/guards.log" jq -n --arg x "$cmd" --arg c "$WORK" --arg a "worker" '{cwd: $c, tool_input: {command: $x}, session_id: "sc52a-test", agent_type: $a, agent_id: "a0test"}' | sh "$GUARD" 2>/dev/null || true)"
 [ "$(decision "$out")" = "deny" ] || fail "6b: a subagent's own [bash-write:] marker must not clear the gate, got: $out"
 grep -aq 'ignored: \[bash-write:worker self-declared' "$LOGDIR/guards.log" || fail "6b: the ignored-subagent-marker breadcrumb was not logged"
 
@@ -124,5 +134,17 @@ out="$(jq -n --arg x "sed -i 's/a/b/' f.txt" --arg c "$NOGIT" '{cwd: $c, tool_in
 # 8. Edit/Write-shaped commands (the normal path) never trip this guard - only sed -i / tee do.
 out="$(run "cat tracked.txt")"
 [ -z "$out" ] || fail "8: a plain read must never trip this guard, got: $out"
+
+# kit-gate stand-down: marker <kit>/.state/off/sc52a-write-disclosure-guard -> silent exit 0 + a kit-gate log line.
+
+sd_in() { jq -n --arg x "sed -i 's/a/b/' tracked.txt" --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}, session_id: "sc52a-test"}'; }
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"
+case "$sd_out" in *'"permissionDecision"'*) ;; *) fail "standdown control: expected a decision without the marker, got: $sd_out" ;; esac
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/sc52a-write-disclosure-guard"; rm -f "$T/kit/.state/guards.log"
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+[ -z "$sd_out" ] && [ "$sd_rc" = 0 ] || fail "standdown: expected empty stdout + exit 0, got rc=$sd_rc out=$sd_out"
+grep -aq 'kit-gate standdown sc52a-write-disclosure-guard:' "$T/kit/.state/guards.log" || fail "standdown: no kit-gate log line"
+rm -f "$T/kit/.state/off/sc52a-write-disclosure-guard"
+printf 'ok   [standdown] marker present -> silent exit 0 + log line\n'
 
 echo "OK sc52a-write-disclosure-guard: deny with the [bash-write:] escape hatch (a trailing shell comment, proven to not interfere with the real sed/tee write) on a tracked sed-i/tee write, silent on untracked/marked/unrelated, a subagent cannot self-clear with its own marker, fails open outside a repo"

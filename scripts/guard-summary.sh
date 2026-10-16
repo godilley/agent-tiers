@@ -12,8 +12,12 @@
 # terminal is the candidate, and until the native-terminal probe (MASTER A5) says so, this is NOT to be
 # written up as working. `doctor` reads the same log and needs no channel at all.
 #
-# Counts only lines carrying THIS session's id (`[sid=<id>]`, appended by every guard's decision line
-# since Wave D); a selfcheck run writes `[sid=]` lines, which never match a real session. A payload with
+# Counts only lines carrying THIS session's id: a line ending `[sid=<id>]` (every guard's decision line
+# since Wave D; a writer that logs the caller as `agent=<type> [sid=<id>]` before the tag ends the same
+# way) or `[sid=<id> agent=<type>]` (the form review-gate-guard, vcs-commit-guard, kit-leak-guard,
+# sc52a-write-disclosure-guard and memory-write-gate write; before 2026-10-14 this parser missed those
+# lines entirely). A selfcheck run writes `[sid=]` or `[sid= agent=...]`, which never match a real
+# session. The excerpt strip below (`[sid=[^]]*]`) removes either bracketed form. A payload with
 # no session_id gets the all-time count with that said. Fail-open on any tooling gap (no jq, no log):
 # silent exit 0 - a summary line must never break a session end.
 # Probed live 2026-08-23: a sub-agent's PreToolUse payload carries the SAME session_id the SessionEnd
@@ -43,8 +47,9 @@ rotate_if_large() {
   mv "$f" "$dest" 2>/dev/null
 }
 
-[ -f "$LOG" ] || { rotate_if_large "$FRAMING_LOG"; exit 0; }   # framing.log's rotation must not depend on guards.log existing
-INPUT="$(cat 2>/dev/null || true)"
+# Housekeeping (stdin read, unattended-flag clear, log rotation) still runs when the kit is off; only the report is skipped.
+KG_OFF=0; [ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && KG_OFF=1
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 SID=""
 command -v jq >/dev/null 2>&1 && SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 BADSID=0
@@ -55,11 +60,11 @@ DEC='^[^ ]+ [^ ]+ (deny|ask): '
 if [ -n "$SID" ]; then
   # `.` is the only regex metachar the charset lets through - escape it (a real id is uuid-shaped).
   SIDRE="$(printf '%s' "$SID" | sed 's/\./\\./g')"
-  HITS="$(grep -aE "$DEC"'.*\[sid='"$SIDRE"'\]$' "$LOG" 2>/dev/null || true)"
+  HITS="$(grep -aE "$DEC"'.*\[sid='"$SIDRE"'( agent=[A-Za-z0-9._-]*)?\]$' "$LOG" 2>/dev/null || true)"
   SCOPE="this session"
 else
-  # all-time: real sessions only - `[sid=]` lines are selfcheck runs, never a session
-  HITS="$(grep -aE "$DEC" "$LOG" 2>/dev/null | grep -avE '\[sid=\]$' || true)"
+  # all-time: real sessions only - `[sid=]` / `[sid= agent=...]` lines are selfcheck runs, never a session
+  HITS="$(grep -aE "$DEC" "$LOG" 2>/dev/null | grep -avE '\[sid=( agent=[A-Za-z0-9._-]*)?\]$' || true)"
   if [ "$BADSID" = 1 ]; then SCOPE="all sessions (session_id in payload was not id-shaped)"; else SCOPE="all sessions (no session_id in payload)"; fi
 fi
 N=0; D=0; A=0
@@ -78,9 +83,16 @@ if [ -n "$SID" ]; then
     rm -f "$STATE_DIR/unattended.$SID" 2>/dev/null \
       && printf 'agent-tiers: unattended flag cleared for this session (set it again with /agent-tiers:unattended on)\n' >&2
   }
+  # reach-guard browser state is per run for the same reason: a resumed session starts with no grants.
+  # Its dir is derived the way guard_state_dir (guard-cmdpos.sh) derives it, where reach-guard wrote it.
+  RGS="${AGENT_TIERS_STATE_DIR:-${BASE:+$BASE/.state}}"
+  case "$RGS" in '' | /.state) RGS="" ;; */.state) ;; *) RGS="$RGS/.state" ;; esac
+  [ -n "$RGS" ] && rm -f "$RGS/reach-guard/grant.$SID" "$RGS/reach-guard/pages.$SID" "$RGS/reach-guard/pending/$SID."* 2>/dev/null
 fi
+[ -f "$LOG" ] || { rotate_if_large "$FRAMING_LOG"; exit 0; }   # framing.log's rotation must not depend on guards.log existing
 
-if [ "$N" = 0 ]; then
+if [ "$KG_OFF" = 1 ]; then :
+elif [ "$N" = 0 ]; then
   printf 'agent-tiers: 0 guard blocks %s (record: %s)\n' "$SCOPE" "$LOG" >&2
 else
   LAST="$(printf '%s\n' "$HITS" | tail -1 | sed -E 's/ \[sid=[^]]*\]$//' | cut -c1-160)"
@@ -105,7 +117,7 @@ INCOMPLETE="$(awk '
   END { n=0; for (p in starts) if (!(p in ends) || ends[p]=="0") n++; print n }
 ' "$LOG" 2>/dev/null || true)"
 case "$INCOMPLETE" in ''|*[!0-9]*) INCOMPLETE=0 ;; esac
-[ "$INCOMPLETE" -gt 0 ] 2>/dev/null && printf 'agent-tiers: %s guard run(s) did not complete (timeout/kill); see %s\n' "$INCOMPLETE" "$LOG" >&2
+[ "$KG_OFF" = 0 ] && [ "$INCOMPLETE" -gt 0 ] 2>/dev/null && printf 'agent-tiers: %s guard run(s) did not complete (timeout/kill); see %s\n' "$INCOMPLETE" "$LOG" >&2
 
 rotate_if_large "$LOG"
 rotate_if_large "$FRAMING_LOG"

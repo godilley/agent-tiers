@@ -37,7 +37,7 @@
 # - Only resume-inject.sh's advisory A uses this today (SC-6.3/SC-6.1a, advisory B/C's disjunctive
 #   branches all need a DIFFERENT compliance check - no natural token, or an OR/ordering claim
 #   text-presence can't express - not folded in, see the findings doc).
-# - Wired via install-flat.sh's HOOK_ROWS (id `advisory-ack-guard`, class `consent`, `Stop`). This
+# - Wired via install/options.tsv (id `advisory-ack-guard`, group `attention`, `Stop`). This
 #   comment previously claimed the opposite (stale from before the HOOK_ROWS row was added in the same
 #   commit that wrote it) - corrected 2026-08-23 per install-flat.sh:67, not hooks/hooks.json yet.
 # - TODO: the "transcript is flushed before Stop fires" assumption is inherited from
@@ -63,6 +63,8 @@
 # for the overwhelming majority of turns. Self-check: advisory-ack-guard.selfcheck.sh.
 set -u
 
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+
 # STATE (pending/nagged/seen) is CLAUDE_CONFIG_DIR-aware, matching resume-inject.sh's producer-side write
 # - not dirname("$0")-derived, or a relocated config dir (2nd account) would write pending tokens one
 # place and read them from another, silently no-op'ing the whole guard. LOG stays dirname("$0")-derived
@@ -83,7 +85,7 @@ note() {
 }
 
 command -v jq >/dev/null 2>&1 || exit 0   # fail open, silently - nothing to log to yet without jq
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 case "${SESSION_ID:-}" in
   ''|*[!A-Za-z0-9._-]* | '.' | '..') exit 0 ;;   # unusable id: same F-12 charset guard as resume-inject.sh/review-gate-guard.sh

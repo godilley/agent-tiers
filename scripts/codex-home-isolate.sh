@@ -33,11 +33,13 @@ note() {
 # the exact $HOME noise a non-Codex consumer of this core-wired hook should never see).
 [ -d "$HOME/.codex" ] || command -v codex >/dev/null 2>&1 || exit 0
 
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+
 # Must have the session env-file to export into; absent -> not a context we can affect -> no-op.
 # (This hook only ever runs at a Claude SessionStart, so a MISSING env-file here is an anomaly worth noting.)
 [ -n "${CLAUDE_ENV_FILE:-}" ] || { note "no CLAUDE_ENV_FILE (harness did not provide one) -> shared ~/.codex"; exit 0; }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 [ -n "${SID:-}" ] || SID="${CLAUDE_CODE_SESSION_ID:-}"
 [ -n "${SID:-}" ] || { note "no session id -> cannot key a home -> shared ~/.codex"; exit 0; }

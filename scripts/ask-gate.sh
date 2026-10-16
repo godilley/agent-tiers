@@ -24,8 +24,8 @@
 # entry differently or flushes the transcript earlier. Ceiling, disclosed: a model that simply
 # retries the question after one deny gets through on the retry; guards.log shows it.
 #
-# Fail-open: kill switch (.state/off/ask-gate), notify-tag-guard switched off (.state/off/notify -
-# without it nothing ever sends the turn back), an unattended session (unattended-guard owns
+# Fail-open: kill switch (.state/off/ask-gate), notify-tag-guard switched off (.state/off/notify, or
+# kit-gate standing notify-tag-guard down - without it nothing ever sends the turn back), an unattended session (unattended-guard owns
 # AskUserQuestion there and denies it with its own remedy - two opposite deny reasons would
 # contradict each other), a non-cli entrypoint (other hosts have no proven Stop-hook round trip),
 # no jq, no readable transcript, or no user/assistant entry in its tail.
@@ -59,10 +59,13 @@ note() {
 
 [ -f "$STATE/off/ask-gate" ] && exit 0
 [ -f "$STATE/off/notify" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+# ask-gate depends on notify-tag-guard's send-back, so it stands down whenever that hook does.
+[ "$(sh "$(dirname "$0")/kit-gate.sh" notify-tag-guard </dev/null 2>/dev/null)" = standdown ] && exit 0
 [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "cli" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
 [ "$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)" = "AskUserQuestion" ] || exit 0
 

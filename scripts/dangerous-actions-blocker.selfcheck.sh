@@ -3,10 +3,23 @@
 # Self-check for dangerous-actions-blocker.sh. Runnable: `sh dangerous-actions-blocker.selfcheck.sh`.
 set -u
 DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
-GUARD="$DIR/dangerous-actions-blocker.sh"
 # decision/breadcrumb lines go to a SANDBOX log, never the real kit's .state/guards.log (opus reviewer, Wave D:
 # in-place selfchecks had filled the live record with fixture noise)
-SBLOG="$(mktemp -d)/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
+# Run from a SANDBOX kit copy with a temp config dir and guards log, never the real kit's .state/, and
+# with every kit-gate input cleared so the user's own options cannot stand the hook down mid-check.
+SB="$(mktemp -d)" || { echo "SELF-CHECK FAILED: mktemp"; exit 1; }
+trap 'rm -rf "$SB"' EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM
+mkdir -p "$SB/kit/install" "$SB/cfg" "$SB/managed"
+cp -R "$DIR" "$SB/kit/scripts"
+# Managed settings dir pointed at an empty temp dir, so a machine's real one cannot change the result.
+sed "s|^_kg_managed=.*|_kg_managed='$SB/managed'|" "$DIR/kit-gate.sh" > "$SB/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$SB/managed'" "$SB/kit/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$SB/kit/install/"
+GUARD="$SB/kit/scripts/dangerous-actions-blocker.sh"
+SBLOG="$SB/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG" CLAUDE_CONFIG_DIR="$SB/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 # A value inherited from the calling shell must never leak into cases that assume the knob is unset.
 unset AGENT_TIERS_PROTECTED_BRANCHES
 fail=0
@@ -97,20 +110,20 @@ check_bash deny 'rm -rf --no-preserve-root /tmp/x'
 
 # regression (round 3, MEDIUM): force-push with NO refspec force-pushes the CURRENT branch - needs a
 # real repo to resolve HEAD against.
-FPW="$(mktemp -d)"
+FPW="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$FPW" && git init -q && git symbolic-ref HEAD refs/heads/master && git config user.email t@t.local && git config user.name t \
   && git commit -q --allow-empty -m init)
 check_bash_cwd deny "$FPW" 'git push -f'                         # no refspec at all, current branch is master
 check_bash_cwd deny "$FPW" 'git push --force origin'              # remote name only, still no branch
 check_bash_cwd deny "$FPW" 'git push origin +master'               # +ref refspec form, no --force/-f flag
 # checkout directories NAMED main / master, on a feature branch - the false-deny regression pair
-MAINDIR="$(mktemp -d)/main"; MASTERDIR="$(mktemp -d)/master"
+MAINDIR="$(mktemp -d "$SB/t.XXXXXX")/main"; MASTERDIR="$(mktemp -d "$SB/t.XXXXXX")/master"
 for d in "$MAINDIR" "$MASTERDIR"; do
   mkdir -p "$d"
   (cd "$d" && git init -q && git symbolic-ref HEAD refs/heads/feature/foo && git config user.email t@t.local \
     && git config user.name t && git commit -q --allow-empty -m init)
 done
-FPW2="$(mktemp -d)"
+FPW2="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$FPW2" && git init -q && git symbolic-ref HEAD refs/heads/feature/foo && git config user.email t@t.local && git config user.name t \
   && git commit -q --allow-empty -m init)
 check_bash_cwd allow "$FPW2" 'git push -f'                        # no refspec, but current branch is NOT main/master
@@ -171,7 +184,7 @@ check_bash_cwd deny "$FPW2" "cd $(dirname "$FPW") && git -C $(basename "$FPW") p
 # Dynamic protected names: remote default branch + AGENT_TIERS_PROTECTED_BRANCHES.
 # Checked out on develop, with origin/HEAD also pointing at develop, so both the explicit-ref leg
 # and the no-refspec/current-branch leg get exercised against the SAME resolved name.
-DEVW="$(mktemp -d)"
+DEVW="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$DEVW" && git init -q && git symbolic-ref HEAD refs/heads/develop && git config user.email t@t.local && git config user.name t \
   && git commit -q --allow-empty -m init && git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop)
 check_bash_cwd deny "$DEVW" 'git push --force origin develop'   # explicit ref naming the remote default
@@ -183,7 +196,7 @@ AGENT_TIERS_PROTECTED_BRANCHES=unrelated-name check_bash_cwd deny "$FPW2" 'git p
 AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd allow "$FPW2" 'git push -f origin feature/foo'          # no regression on an unrelated feature branch
 AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd deny "$FPW2" 'git push origin +release'                 # "+ref" shorthand, no --force/-f flag at all, env-protected name
 # a no-refspec force-push whose CURRENT branch (not the remote default) is only protected via env
-RELW="$(mktemp -d)"
+RELW="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$RELW" && git init -q && git symbolic-ref HEAD refs/heads/release && git config user.email t@t.local && git config user.name t \
   && git commit -q --allow-empty -m init)
 AGENT_TIERS_PROTECTED_BRANCHES=release check_bash_cwd deny "$RELW" 'git push -f'
@@ -191,21 +204,21 @@ rm -rf "$RELW"
 # a glob metachar in the env value must not expand against the hook's cwd (noglob regression): a
 # "release/*" value run from a cwd that actually HAS a matching release/ dir+file must still treat
 # it as one literal (rejected) string, not glob-expand into real filenames mid-loop.
-GLOBDIR="$(mktemp -d)"
+GLOBDIR="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$GLOBDIR" && git init -q && git symbolic-ref HEAD refs/heads/feature/foo && git config user.email t@t.local && git config user.name t \
   && git commit -q --allow-empty -m init && mkdir -p release && echo x > release/afile.txt)
 AGENT_TIERS_PROTECTED_BRANCHES='release/*' check_bash_cwd allow "$GLOBDIR" 'git push -f origin feature/foo'
 rm -rf "$GLOBDIR"
 # regex metachar in env is rejected outright, not injected into the pattern - from a FIXED empty
 # cwd (no repo, no files) so the result cannot depend on anything else living in that directory.
-EMPTYCWD="$(mktemp -d)"
+EMPTYCWD="$(mktemp -d "$SB/t.XXXXXX")"
 AGENT_TIERS_PROTECTED_BRANCHES='.*' check_bash_cwd allow "$EMPTYCWD" 'git push -f origin feature/foo'
 rm -rf "$EMPTYCWD"
 
 # Regression: a remote default branch name containing an ERE metachar (git itself allows ( ) + { | in
 # a branch name) must be REJECTED rather than escaped - an invalid ERE makes grep exit 2, which the
 # caller reads as no-match, silently dropping main/master protection too (found in review).
-XPAREN="$(mktemp -d)"
+XPAREN="$(mktemp -d "$SB/t.XXXXXX")"
 (cd "$XPAREN" && git init -q && git config user.email t@t.local && git config user.name t && git commit -q --allow-empty -m init \
   && git update-ref 'refs/remotes/origin/x(' HEAD && git symbolic-ref refs/remotes/origin/HEAD 'refs/remotes/origin/x(')
 check_bash_cwd deny "$XPAREN" 'git push --force origin master'   # origin default name has a bad char - main/master still denied
@@ -241,11 +254,11 @@ check_write allow MultiEdit '/home/user/project/src/main.ts'
 # Symlink resolution (2026-08-29 portability fix): a Write to a symlink whose TARGET is a
 # protected file must resolve and deny, on the normal path AND on the macOS-shaped fallback where
 # `readlink -f` (GNU-only, no `-f` flag on BSD/macOS) is unavailable.
-SYMDIR="$(mktemp -d)"
+SYMDIR="$(mktemp -d "$SB/t.XXXXXX")"
 ln -s "$SYMDIR/.env" "$SYMDIR/innocent-name" 2>/dev/null
 check_write deny Write "$SYMDIR/innocent-name"
 if command -v python3 >/dev/null 2>&1; then
-  SHIMDIR="$(mktemp -d)"
+  SHIMDIR="$(mktemp -d "$SB/t.XXXXXX")"
   printf '#!/bin/sh\nexit 1\n' > "$SHIMDIR/readlink"; chmod +x "$SHIMDIR/readlink"
   out="$(PATH="$SHIMDIR:$PATH" sh -c "jq -n --arg p '$SYMDIR/innocent-name' '{tool_name:\"Write\", tool_input:{file_path:\$p, content:\"x\"}}' | sh '$GUARD'" 2>/dev/null || true)"
   if printf '%s' "$out" | grep -aq '"permissionDecision": *"deny"'; then
@@ -262,4 +275,18 @@ rm -rf "$SYMDIR"
 # Wave D: a deny writes a decision line with the sid
 jq -n '{tool_name:"Bash", session_id:"sess-dab", tool_input:{command:"mkfs.ext4 /dev/sda1"}}' | sh "$GUARD" >/dev/null 2>&1 || true
 grep -aqE '^[^ ]+ dangerous-actions-blocker deny: Bash .*\[sid=sess-dab\]$' "$SBLOG" && printf 'ok   decision line written to guards.log with sid\n' || { printf 'FAIL no decision line in sandbox log\n'; fail=1; }
+# kit-gate stand-down: a marker under the sandbox kit's .state/off/ silences the hook (no output, exit 0,
+# one guards.log line); the control run without the marker proves the payload does emit.
+SD_PAYLOAD="$(jq -n '{tool_name:"Bash", session_id:"sess-sd", tool_input:{command:"mkfs.ext4 /dev/sda1"}}')"
+mkdir -p "$SB/kit/.state/off"
+sd_ctl="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null || true)"
+: > "$SB/kit/.state/off/dangerous-actions-blocker"
+sd_out="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+rm -f "$SB/kit/.state/off/dangerous-actions-blocker"
+if [ -n "$sd_ctl" ] && [ -z "$sd_out" ] && [ "$sd_rc" = 0 ] && grep -aq 'kit-gate standdown dangerous-actions-blocker:' "$SBLOG"; then
+  printf 'ok   kill-switch marker stands the hook down (empty stdout, exit 0, log line)\n'
+else
+  printf 'FAIL kill-switch marker did not stand the hook down\n'; fail=1
+fi
+
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

@@ -19,7 +19,7 @@ tight result. You do not decide; if the brief is ambiguous or a step needs judgm
 it back to the Lead rather than guessing.
 
 **Check-in - the FIRST line of your FINAL reply:**
-`Hi, I'm worker - Worker tier, def-v8. <the task in one clause>`
+`Hi, I'm worker - Worker tier, def-v9. <the task in one clause>`
 
 Keep model and effort out of this greeting. Follow the shared identity-evidence contract
 in agent-tiers, "The check-in line" (SC-6.4): brief values and frontmatter are declarations,
@@ -41,6 +41,8 @@ Workflow:
    notice names an output file), your next call reads that file once; never re-run the same command,
    never poll it with a shell loop. Still running after that one read: return `STOPPED (b)` naming
    the shell id and the output path. A result you have not read is not a PASS.
+   **Verification snippets** go in a saved scratch script with literal absolute paths, run as one line
+   (`sh /abs/path/check.sh`): reach-guard denies a multi-line inline `-c` that uses shell variables.
 4. **Stopping.** Stop before the brief is done ONLY when (a) a step needs a decision, permission or
    context the brief does not settle, including a guard deny whose text says to stop and report (a
    deny that names a mechanical re-spelling is a step to fix, not a stop; a deny that says both is a stop); or (b) a check fails and
@@ -76,5 +78,5 @@ avoid write races when several workers run at once.
 > `/agent-tiers:init` scaffolds. Repeated project procedures become prefixed `.claude/agents/<prefix>-*`
 > task agents that hook the same brief.
 
-**def-version: 8 c=52494434-5191** - bump on every behavior-changing edit to this file; the check-in must quote `def-v<this number>`.
+**def-version: 9 c=2638231770-5395** - bump on every behavior-changing edit to this file; the check-in must quote `def-v<this number>`.
 A spawn whose check-in shows an older number is running a STALE cached definition - do not trust its behavior-dependent results (see the agent-tiers Lifecycle protocol).

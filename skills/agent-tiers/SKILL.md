@@ -1,9 +1,9 @@
 ---
 name: agent-tiers
 description: >-
-  v4 delegation doctrine: the Lead/Worker/Advisor/Reviewer/Boss tier vocabulary, driven by a CHEAP
-  interface-layer Lead that routes, briefs and verifies while intelligence is METERED - bought per call
-  at the cheapest tier that clears the job. Owns the every-spawn Spawn Contract, the Lead capability-band
+  v4 delegation doctrine: the Lead/Worker/Advisor/Reviewer/Boss tier vocabulary, driven by a Lead on
+  any model (its capability band sets how it delegates) that routes, briefs and verifies while
+  intelligence is METERED - bought per call at the cheapest tier that clears the job. Owns the every-spawn Spawn Contract, the Lead capability-band
   dial, the scope matrix and per-spawn model override, the escalation ladder, cross-provider handoff with
   the generate-vs-verdict split, review modes and planted controls, and the agent check-in line. Use when
   delegating to a sub-agent, deciding which tier or model fits a task, briefing a review or fan-out
@@ -11,12 +11,12 @@ description: >-
 ---
 
 # Agent tiers v4 - Lead / Sublead / Worker / Advisor / Reviewer / Boss
-*doctrine-v28 c=2687619049-67907 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
+*doctrine-v32 c=4027606369-45092 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
 
-**v4 doctrine: the standing cost is a cheap INTERFACE-LAYER Lead; intelligence is metered.** The Lead
-converses, routes, writes tight briefs, verifies returns, and gates; deep reasoning is bought per
-call from a thinking tier instead of ground out in the Lead's own (context-heavy, every-turn-billed)
-context. The Lead still owns project knowledge, synthesis, and every final decision - never delegated.
+**v4 doctrine: the Lead routes and decides; intelligence is metered.** The Lead converses, routes,
+writes tight briefs, verifies returns, and gates; work it need not hold itself is bought per call from
+the tier that fits it (for an interface-band Lead that includes deep reasoning) instead of ground out in
+the Lead's own (context-heavy, every-turn-billed) context. The Lead still owns project knowledge, synthesis, and every final decision - never delegated.
 
 ## The Spawn Contract - the every-spawn checklist (READ THIS; everything after is cold reference)
 Six steps, every spawn, in order. Route by task SHAPE, never a self-judged "hardness" gut-call (a weak
@@ -88,7 +88,7 @@ deviation - state it and get approval first, `see ROUTE-3`):
 
 | Task shape | Who | Model | Effort |
 |---|---|---|---|
-| Converse, route, brief-write, verify, light synthesis | Lead | sonnet (GUI-set, never file-pinned) | high |
+| Converse, route, brief-write, verify, light synthesis | Lead | any (GUI-set, never file-pinned; band per Lead capability-band) | high |
 | Rote scripted procedure (log scrape, db query, scripted deploy) | L3 task agent | **haiku** | low |
 | Mechanical with some judgment (build+verify, refactor-by-rote, gates, PR-prep) | Worker / L3 task agent | sonnet | low-medium |
 | Fan-out research / audit first pass | worker / auditor / Explore | sonnet | low-medium |
@@ -196,14 +196,10 @@ Escalation briefs.)
   Claude only: (i) the Lead's own whitelist-qualified trivial edit in the live checkout (step 1); (ii) a single
   signed-off Worker on a well-specified live-tree slice (no parallel writer, revert-on-failure per step 6
   quarantine). No deploy / external action from a writer; the Claude gate runs before any merge or production execution.
-  **A worktree is NOT whole-repo isolation, and `git stash` is the leak that bit us:** worktrees share one `.git`,
-  so `refs/stash` is repo-wide (`git -C <any-worktree> rev-parse --git-path refs/stash` resolves to the SAME
-  file). Observed 2026-08-18: two independent worker transcripts, content swapped between worktrees, and one of the
-  two confirmed using `git stash`/`stash pop`; "both stashed concurrently" is the inferred mechanism, the
-  shared `refs/stash` path is the verified half. So: **ban `git stash`
-  in a parallel-worker brief** (not git generally - `add`/`commit`/`diff`/`status`/`log` are properly
-  worktree-scoped). For the "compare against the unmodified version" need it was being used for, brief
-  `git show HEAD -- <file>` or a plain file copy instead.
+  **A worktree is NOT whole-repo isolation:** worktrees share one `.git`, so `refs/stash` is repo-wide
+  (`git -C <any-worktree> rev-parse --git-path refs/stash` resolves to the SAME file). **Ban `git stash` in a
+  parallel-worker brief** (not git generally - `add`/`commit`/`diff`/`status`/`log` are worktree-scoped); for
+  "compare against the unmodified version" brief `git show HEAD -- <file>` or a plain file copy (unpacked below).
 - `SC-5.1a` **Use the harness-NATIVE sandbox first, worktree isolation second - they answer different
   questions.** A worktree contains WRITES (a bad edit lands on a disposable branch); it does nothing about a
   process reading credentials, hitting the network, or touching the host outside the repo. Claude Code ships
@@ -217,34 +213,23 @@ Escalation briefs.)
   authored itself.** The step-5 "writer" framing is not a loophole: **authorship**, not delegation, is what creates
   the blind spot, so a Lead-authored diff is in scope exactly as a delegated one is. Top-stakes ALWAYS takes the
   independent pass per SC-1.6, at every band. Only for an explicitly ROUTINE class may a reasoning-band Lead run
-  the pass at its own depth; an interface-band Lead never may (the cheap Lead cannot grade a deep call).
+  the pass at its own depth; an interface-band Lead never may (it cannot grade a deep call at its own depth).
   **The argument that will occur to you and is wrong:** "another pass is low marginal value here" is a statement
   about the diff you have ALREADY reviewed, never about the diff you are about to author - a review obligation is
   discharged against an artifact, and does not carry to the next one. Codex output is never solely Codex-reviewed.
   Measured, not asserted: across 140 sessions and 6 weeks this rule fired in **2.1%** of sessions and did not move
   as the doctrine grew, which is why `authorship-record` exists as a hook rather than a seventh restatement here.
-  Arrival event (2026-08-16; ship point per repo since 2026-10-06): `review-gate-guard` (PreToolUse `ask`,
-  once per session per repo, when the transcript holds no reviewer / advisor / codex-read spawn). The ship
-  point is where a diff leaves the place only this session uses, set per repo by `review_gate:` in
-  `.claude/agent-tiers.local.md`: `commit` (default) gates `git commit` plus `git push` / `gh pr
-  create|merge`, so a worker there does not commit (the Lead commits after the review); `push` (a
-  commit-first repo, where the pre-commit hook is the check run) lets every caller commit and gates push
-  and PR only (a commit spelled with `--git-dir`/`--work-tree` still asks, and an unresolvable `cd`/`-C`
-  target still denies, in either mode). A command that both commits and pushes is gated as a push. Never set `push` in a repo that
-  does not push (it would gate nothing); `/agent-tiers:doctor` prints the effective mode. Ungated,
-  disclosed: `merge`, `cherry-pick`, `rebase`, `am`, `pull`, `revert`, `git subtree push`, git aliases,
-  any env-assignment prefix, and script wrappers (`worktree.sh down --merge` merges and pushes inside a
-  script). Consent-class: wired only via
-  `install-flat.sh --with-review-gate-guard`; an install without it has only this prose, which measured
-  at roughly one violation in four commit-bearing sessions over two reviewed corpora (2026-08-10, 2026-08-15).
-  In a session flagged by `/unattended on`, that `ask` arrives as a DENY carrying the same remedy (spawn a
-  reviewer, retry the commit) rather than a halt nobody is present to clear - the gate is enforced either
-  way, and no hard deny is ever converted (HOST card, unattended mode). Same conversion, independently
-  (2026-08-27): when the CALLER is a subagent (a delegated worker's own commit, or any push), the ask
-  also arrives as a deny - a delegated agent has no standing to judge triviality or spawn a reviewer
-  either, and there is no channel back to the Lead for a real `ask` to reach. Worded at the worker (stop,
-  report it back) rather than at a human. See `guard_caller_agent`/`guard_ask_decision` in
-  `guard-cmdpos.sh`.
+  Arrival event: `review-gate-guard` (PreToolUse `ask`, once per session per repo, when the transcript holds no
+  reviewer / advisor / codex-read spawn) at the ship point set per repo by `review_gate:` in
+  `.claude/agent-tiers.local.md`: `commit` (default) gates commit plus push / PR, so a worker there does not
+  commit; `push` lets every caller commit and gates push and PR only. Never set `push` in a repo that does not
+  push (it would gate nothing). Under `/unattended on` the ask arrives as a deny carrying its remedy (spawn a
+  reviewer, retry). A subagent caller (a worker's own commit, or any push) gets that deny whether or not
+  the session is unattended, worded at the subagent: stop and report it to the top Lead (a Sublead passes it
+  up unresolved), never spawn and retry. Ungated: merge / rebase / cherry-pick / pull, aliases, env prefixes
+  and script wrappers (`worktree.sh down --merge` pushes inside a script), so a silent guard is not proof of
+  a review. Opt-in (the Commit review group; flat install: `install-flat.sh --with-review-gate-guard`); the full ungated list
+  and the measured prose-only violation rate are unpacked below.
 - `SC-5.2a` **Writes stay on the instrumented path.** File edits go through `Edit`/`Write`/`NotebookEdit`,
   which the write-path guards observe in full (`MultiEdit` gets the path check and the authorship row but NOT
   the content scan - `security-gate`'s declared bypass; prefer `Edit` for content that could carry a secret).
@@ -255,10 +240,19 @@ Escalation briefs.)
   reason in the turn that does it and say which files were written. Default plus declared exception, not a
   ban: the kit ships no bulk-replace tool. (Evidence 2026-08-16, unpacked below.)
 - `SC-5.3` **Cross-lab egress preflight (run before ANY cross-lab send; FAIL CLOSED).** Any pass that invokes a
-  non-Claude provider first STOPS and loads the XLAB card; then this preflight runs before the send: (1) workspace sensitivity -
-  unknown STOPS the send; (2) name the exact files/diff being sent; (3) scan for secrets / credentials /
-  private data; (4) minimize / redact to the minimum needed; (5) explicit consent. A solo local repo with your
-  own authed account stays lightweight (all five steps still run as quick self-checks - none skipped, no gate
+  non-Claude provider first STOPS and loads the XLAB card; then this preflight runs before the send: (1) workspace
+  sensitivity and OWNERSHIP - unknown sensitivity STOPS the send; name whose code it is (the user's own, or not:
+  a client's or anyone else's - an employer's, a collaborator's, vendored proprietary code) and whether the
+  owner's terms allow sending it to that lab - unknown ownership: ask the user, and their answer settles
+  ownership (nobody to ask: treat it as not the user's own). Ownership follows the content's origin, not the
+  directory it is sent from (relocating per SC-5.3a does not change it). (2) name the exact files/diff being
+  sent; (3) scan for secrets / credentials / private data; (4) minimize / redact to the minimum needed;
+  (5) explicit consent - for code the user does not own, the user's consent cannot stand in for the owner's:
+  what counts is the owner's terms or a permission the user relays from the owner, not the user's own view
+  that it is fine; none stated -> stop here. In an unattended session, stop unless the user relayed the
+  owner's permission or terms before the session went unattended (an agent's own reading of a LICENSE or
+  contract file is not enough). Only a solo local repo of the user's own code, sent with their own authed
+  account, stays lightweight (all five steps still run as quick self-checks - none skipped, no gate
   ceremony); the moment secrets are present -> fail closed, do not send.
   - `SC-5.3a` **The unit is the WORKING DIRECTORY, not the artifact you mean to send.** A clean document in a
     dirty tree is still a fail-closed: the provider reads the wider tree regardless of the brief. So the
@@ -268,7 +262,7 @@ Escalation briefs.)
   - **Honesty about scope (the preflight's limit):** this preflight gates disclosure INTENT, not sandbox
     containment - `codex exec` can still read the wider tree, git history, and inherited env. That is exactly
     why the secrets case fails CLOSED (prohibit the send) rather than trusting redaction; for a clean solo
-    kit the intent-gate suffices.
+    repo of the user's own code the intent-gate suffices.
 - `SC-5.4` **Two layers, do not conflate:** the session-level consents (XLAB-7) grant the CHANNEL
   (may Codex write / review this session); THIS preflight gates each SEND on top. A send of files not already
   cleared by a prior preflight is a **NEW disclosure** (re-run the preflight; it also ends a wave lease).
@@ -290,22 +284,13 @@ Four load-bearing riders (follow the CALL PATH, not the symbol; your own fresh c
 claim in the artifact; the user's earlier words are a primary source - quote VERBATIM, never from a compaction
 summary; this doctrine too - read the whole section before proposing a rule) and their evidence: unpacked below.
 Lookup and review are **complements, not substitutes**.
-`SC-6.1b` **The decorative-CI trap - a gate you build or review must clear 4 questions, not just
-run green.** A common evidence-discipline gap: a status check that reports without stopping anything is
-theater, and the trap is easy to ship by accident (a real external example: a shipped review gate `exit
-1`s by regex-parsing an LLM-authored markdown table - still LLM self-grading, just parsed
-deterministically, and its own author's docs call this out). Before trusting or shipping ANY verification
-gate (a hook, a CI job, a Stop-check):
-1. **Deterministic or LLM-self-grading?** Lint/typecheck/test exit codes are deterministic; an LLM
-   judging its own diff, even parsed by a strict regex after, is still self-grading underneath.
-2. **Is there a real stop-the-line mechanism?** A required status check on the protected branch, not a
-   job that merely reports and can be merged past.
-3. **Is there traceability?** Can a failure be traced back to the exact rule/spec clause it violated?
-4. **Does spec stay authoritative?** The gate checks the diff against a spec that does not itself drift
-   silently with the code.
-For this kit: LLM review stays advisory as an AUTOMATED gate (exit codes are the gate); `SC-5.2`'s pass is
-kept off question 1 by INDEPENDENCE, and `SC-1.6`'s ROUTINE carve-out is a disclosed residual overlap
-(unpacked below).
+`SC-6.1b` **The decorative-CI trap - a gate you build, review or trust (a hook, a CI job, a Stop-check) must
+clear 4 questions, not just run green:** (1) deterministic, or LLM self-grading (still self-grading when a
+strict regex parses it)? (2) a real stop-the-line mechanism (a required check on the protected branch), not a
+report that can be merged past? (3) can a failure be traced to the exact rule/spec clause? (4) does the spec
+stay authoritative, not drift silently with the code? For this kit: LLM review stays advisory as an AUTOMATED
+gate (exit codes are the gate); `SC-5.2`'s pass is kept off question 1 by INDEPENDENCE, and `SC-1.6`'s ROUTINE
+carve-out is a disclosed residual overlap (the external example and the kit reading: unpacked below).
 `SC-6.3` **Recovery ladder (the daily failed-worker case; track each move as you go):**
 - **Accept** - return verifies clean -> done.
 - **Repair** - small, well-understood gap -> resume the SAME agent ONCE with a corrective note.
@@ -337,239 +322,69 @@ results (staleness protocol: see MAINT-2). A matching stamp does not verify mode
 rules), the tier vocabulary, the capability-band dial, routing rationale (ROUTE card), cross-provider handoff,
 lifecycle/gc. Read it when designing or changing the system, not on every spawn.*
 
-## The Spawn Contract, unpacked (moved out of the hot path 2026-08-16, T3.1 - nothing deleted)
-Each block below is the long form of a hot rule above; the hot line carries the id, the rule and the
-headline measurement, this carries the mechanism and the evidence. Read on dispatch, not on every spawn.
+## The Spawn Contract, unpacked - load cards/CONTRACT.md
+Every "unpacked below" and "evidence below" in the hot rules above is in `cards/CONTRACT.md`: the long form,
+mechanism and evidence of each hot rule, in sections keyed by rule id. Load it when a hot rule's mechanism or
+evidence is in question, or to seed a recall review (SC-4.2c's mutation list lives there); not on every spawn.
 
-### SC-1.3 - the hunt counter, unpacked
-- **The hunt counter, unpacked.** It is the hypothesis twin of SC-6.3's execution counter, which only
-  fires on spawns: a solo Lead can loop through evidence-grounded reversals forever without tripping
-  anything, because each one is individually exempt above. Their COUNT is not exempt. **The unit is the
-  HUNT** (one open question plus the theories about it): re-framing the question does not
-  reset the count, only a primary-source finding that changes the GOAL does. On the 2nd, stop theorizing
-  and route the QUESTION out to a second mind with a distilled brief (`see SC-4.1`) BEFORE the next claim
-    - who that is follows the band, not this rule: interface-band, an Advisor (announce-only, `see SC-3.1`);
-  reasoning-band, at minimum a fresh-context Advisor, and fable or cross-lab when your own opus reasoning
-  produced the falsified theories (`see SC-1.6`, `see BOSS-3`). An execution attempt that also falsifies a
-  theory ticks BOTH counters and this one fires first: it is the cheaper move and it does not spend the
-  human's gate. One dispatch resets the count once; a 2nd trip on the same hunt after a return is BOSS-1's
-  "keeps reversing its own conclusion" row - stop + ask (`see SC-6.3`). **The count is tracked in the Lead's
-  own working notes as it goes** (a corpus-wide sweep found the count held this way in every real instance,
-  never via a separate ledger file - a persistent-file requirement here was aspirational, not observed), and
-  the same tracking IS the material the distilled brief draws from. (Evidenced 2026-08-06: four falsified
-  theories and four user catches in one session, every escalation user-triggered, and the one Advisor
-  dispatch resolved what solo theorizing could not. Same trap as the delegation skill's solo-hunt
-  check-stop (a hunt not cracked in ~2-3 probes) - that one hands the CHURN to a read-only agent,
-  this one hands the QUESTION.)
+## Policy cards - one owner per mechanism
+Each card is the one owner of its rules; this table points, it never restates. Load a card on its trigger.
 
-### SC-1.6 - evidence
-Evidenced 2026-08-04: on a code-grounded diff a same-model fresh-context opus Reviewer returned 12 real
-defects that two READING passes, one of them cross-lab, had both missed.
+| Card | Owns | Load when |
+|---|---|---|
+| XLAB | cross-provider (Codex) handoff, XLAB-1 to XLAB-14 | before authorizing or running any cross-lab call (SC-3.1, SC-3.2, SC-5.3) |
+| BOSS | the stuck circuit-breaker, BOSS-1, BOSS-3 | before a Boss spawn (SC-6.3 stop + ask, SC-3.1 rung 3) |
+| MAINT | project layer, def-version staleness, gc, add/remove/promote, MAINT-1 to MAINT-10 | wiring the project layer, editing a definition, doctor/gc (SC-6.4) |
+| HOST | per-host model/effort resolution and the model -> band map, HOST-1 to HOST-4 | resolving how a spawn's model/effort resolves; `/agent-tiers:init` records it |
+| ROUTE | routing rationale and the Lead's own model, ROUTE-1, ROUTE-3 to ROUTE-6 | a non-obvious route, a fan-out's model/effort, who owns a verdict (from SC-2.1 via ROUTE-3) |
+| MEMORY | deltas on the system prompt's memory spec, MEMORY-1 to MEMORY-5 | reference card, not dispatched: consult before writing or auditing durable memory |
+| CONTRACT | no rule ids: the hot rules' long forms and evidence | a hot rule's "unpacked below" (stub above) |
 
-### SC-3.4 - scope change outside a lease, evidence
-2026-08-16: a leak-scanner fix surfaced while moving files for an unrelated item; it was gated as its own
-question, approved, and shipped as its own commit - the alternative was a silent scope change inside a
-"move five files" task.
-
-### SC-4.1a - evidence
-(Evidenced 2026-08-06: a 5-agent fan-out briefed with our own rule ids plus the tier names returned findings only
-inside that taxonomy; a 3-agent corrective pass over dirs it never opened - 2 unprimed, 1 adversarial -
-returned three findings with no bucket in our vocabulary and a stronger validation of the ladder, stronger
-because it survived an adversarial argument instead of a friendly comparison.)
-
-### SC-4.2a / SC-4.2b / SC-4.2c - liveness vs recall, unpacked
-- `SC-4.2a` **"Discounted" means: re-verify its evidence-bearing claims against the primary source, and drop
-  its unevidenced judgments.** NOT "disregard the return". Missing a control proves it did not read the source
-  for THAT claim; it says nothing about a claim that cites file:line, and a control-failing reviewer may still
-  have earned its evidenced findings. Throwing the whole return away is both wrong and unusable.
-- `SC-4.2b` **A caught control proves liveness, not recall.** The classes planted so far - a false claim about
-  a readable file, a fabricated `file:line`, a real defect at the wrong severity, a correct claim asserted as
-  already-fixed - are each disproved by one read. A defect planted only in a materialised diff also mismatches
-  the real files read beside it (mechanism inferred, not measured). Evidence: on 2026-08-04 two read-only
-  review layers each caught their control and six real defects survived both, found only by execution. The
-  recorded misses were not one-read classes: a missing prohibition and a surface the docs never name
-  (2026-09-14), and two real defects in a directory the reviewer syntax-checked instead of read (2026-08-24).
-  Scaling the count or varying among one-read classes does not turn liveness into recall.
-- `SC-4.2c` **Recall, the method details.** A held-back real defect is free and realistic, but it was found
-  by the Lead, so it leans easy. Mutation seeding picks by list order (the first class not used in the
-  previous seeded review), never by taste; single hunk each; a seed counts only once the seeding Worker
-  shows one real input whose output differs between original and mutant (on 2026-10-10 two seeds in a row
-  were equivalent: the remaining conditions already covered the deleted check, and the seeder's own account
-  of the effect was wrong); recorded in chat with the copy's path before the spawn; diff via plain `git diff`, never a form that carries commit messages. A git worktree carries
-  only committed state, so seed uncommitted work in a `cp -a` copy instead. The list, weighted to omission
-  because that is where the misses were:
-  1. **Delete a check** - an early return, a validation, a deny branch, a `--` end-of-options.
-  2. **Loosen a boundary** - `<` to `<=`, drop one arm of a regex alternation or `case`, widen a glob.
-  3. **Drop a semantics flag** - `rg --text`, `grep -a`, a quoting pair, `set -u`.
-  4. **Swallow an error** - append `|| true`, discard a return code, send a check's stderr to `/dev/null`.
-  5. **Scope slip** - fix one call site and leave its sibling; key on the wrong event, variable or path.
-  6. **Drift a claim** (prose targets) - change behaviour and leave the line describing it, or widen a
-     claim's scope, or drop an "inferred".
-  One to three seeds is an alarm, not a rate: record seeded/caught with the finding count so a rate builds up
-  across reviews. **Capture-recapture** (readers find `a` and `b` verified defects, `m` shared): Chapman
-  `(a+1)(b+1)/(m+1) - 1`, which survives `m = 0`. It assumes independent captures; readers sharing a model,
-  brief or read-only access miss the same defects, inflating `m` and driving the estimate down (the 2026-08-04
-  pair would have estimated near zero). Compute it free on a dual-lab pass that already ran (XLAB-12), read it
-  as a lower bound, never as the sole recall check. Dedupe and verify before counting: synthesis, Lead-owned.
-
-### SC-4.1b - evidence
-
-What is directly verified (2026-08-23): `agents/advisor.md` grants `Read, Grep, Glob` and no Bash, so a ref,
-a range or a command's output cannot be materialised by that tier. What is REPORTED, across sessions, by the
-operator rather than counted: that such a brief comes back as a fluent review of the working tree with no
-signal that the artifact was swapped. The causal step between the two has not been reproduced under control -
-the cheap experiment is to brief an Advisor against a ref that differs from the working tree and see whether
-the return admits it. The rule holds on the verified half alone: the brief names something the tier cannot
-open, which is a defect in the brief regardless of how the tier then behaves.
-
-### SC-5.1a - the three sandbox traps
- Three traps to
-carry, not assume the sandbox self-documents: (1) `permissions.deny` READ rules do **not** reach a Bash
-subprocess - only `sandbox.credentials.files` protects `~/.npmrc`/`~/.aws/credentials` from a spawned
-shell; (2) a bare `"docker"` in `excludedCommands` unsandboxes the WHOLE invocation, not just the docker
-call - scope any exclusion to the exact command, never the bare name; (3) a broad CDN wildcard in the
-domain allowlist enables exfil via that allowed domain - allowlist the specific host, not a wildcard.
-(Sourced from the shipped harness's own sandbox docs, cross-checked 2026-08-06 against known external
-sandbox-escape findings - closed for free where it applies; worktree isolation still owns the
-write-containment half SC-5.1 states.)
-
-### SC-5.2a - evidence
-2026-08-16: the author of the Bash write-scan wrote every patch to the kit that day via `python3
-/tmp/fixtures/*.py`, because the guards false-fired on its test literals - a full day of kit edits with no
-authorship row, by the person who knew best why the row exists.
-
-### SC-6.1a - the four riders, unpacked
-- **A lookup is complete only when you have followed the CALL PATH, not the symbol.** Reading the callee
-without the caller produces a confident inversion, which is **worse than no lookup** - it arrives with
-authority attached and displaces the review that would have caught it.
-- **A correction you have just made to your own conclusion is the highest-risk statement in the artifact.** It
-enters the next review pass as a CLAIM to be adjudicated, never as settled fact.
-- **The user's own earlier words are a primary source too.** Before asserting "you said X", or building a
-correction on a position the user took earlier in the session, pull the VERBATIM quote - a paraphrase from
-memory is the confident inversion above, aimed at the user. **If the session was compacted, the earlier
-turns are a SUMMARY and not the source:** read the transcript file, or quote nothing and ask the user to
-confirm your reading. Never quote from a summary - a fabricated quote attributed to the user is worse than
-the paraphrase it replaced. (Evidenced 2026-08-06: a Lead paraphrased the user's hypothesis into its
-opposite and then "corrected" it; quoting back and letting the user confirm the reading would have cost
-one sentence.)
-- **This applies to THIS doctrine too.** A rule you found by grep or a partial read is a partial lookup, and
-the failure mode is specific: you propose a rule that already exists, or you read a permissive headline
-whose restriction lives in the next clause. Before proposing or editing any rule here, read its whole
-section - and `see MAINT-2` for the `doctrine-v` / `card-v` stamp so a return can name the revision it
-applied. (2026-08-04: a session proposed four rules the kit already had, after reading this file by grep
-plus two slices. Stated ceiling, no-hook: a partial read leaves no tool call to gate, so this one fires
-only for someone already applying SC-6.1a.)
-(Hot line: lookup and review are complements, not substitutes - the lookup answers what a debate cannot, and a
-reviewer is what catches a partial lookup.)
-
-### SC-6.1b - the kit-specific reading
-For this kit specifically: as a merge-blocking AUTOMATED gate (CI, a Stop-hook), keep LLM review
-advisory-only - the real automated gate is exit codes (lint/test). `SC-5.2`'s independent pass is a
-different mechanism, and the discriminator that keeps it off question 1's self-grading trap is
-INDEPENDENCE (a genuinely different mind reviewing, `see SC-1.6`) - not that it is human-facing rather
-than automated; a judgment pass graded by the SAME author is exactly the theater question 1 names,
-regardless of audience. Disclosed rather than argued away: `SC-1.6`'s ROUTINE-class carve-out lets a
-reasoning-band Lead self-run this pass on its OWN diff - that carve-out IS the self-grading shape
-question 1 warns about, a real residual overlap, not a false alarm. Narrowing that carve-out is a
-separate decision, not settled by this rule. (Sourced 2026-08-06, cross-checked against a real shipped
-gate that fails this checklist despite looking rigorous - don't copy the YAML, adopt the checklist.)
-
-*The exceptional-mechanism normative rules live in six single-owner **policy cards** under
-`cards/`, each loaded on dispatch (never on an ordinary spawn): five from the hot Spawn Contract -
-**XLAB** (cross-provider Codex), **BOSS** (stuck circuit-breaker), **MAINT** (definitions / staleness / gc /
-project layer), **HOST** (model resolution + env probes), **ROUTE** (routing rationale - the five axes, the
-per-spawn model/effort levers, and the rule that stops a cheap Lead grinding a hard shape) - plus **MEMORY**
-(deltas on the system prompt's own memory spec), a REFERENCE card rather than a dispatched one: consult it
-before writing durable memory, the same way any policy card is consulted, but nothing loads it
-automatically. The cold sections here carry rationale + `see <id>`
-pointers into those cards; the card is the rule's one owner.*
+XLAB is a card and not hot core because Codex is an exceptional mechanism: its rules would be dead weight on
+the ordinary spawn.
 
 `TIER-1` **The tiers and their tool surfaces.** Advisor and Boss are read-only; Reviewer is read-only
-on code and writes its one curated findings file; Worker, Sublead and Lead write. The grant, not the prose, is what
+on code and returns its findings inline (its Write grant goes unused); Worker, Sublead and Lead write. The grant, not the prose, is what
 enforces this - so a tier whose behaviour disagrees with this table is a mis-granted definition, not a
-lapse in judgement. If a Reviewer's return says no file was written (the host refused the Write), its full
-list is in that message: persist it yourself if the next step needs a file.
+lapse in judgement. A Reviewer's full list is in its final message: persist it yourself if the next
+step needs a file.
 
 | Tier | Who | Model | Effort | Role | Tools |
 |---|---|---|---|---|---|
-| **Lead** | the main interactive session | **sonnet** interface-band default; **opus (or fable)** reasoning-band per work-class - fable adds the top-of-band COST qualifier, not a third band (see Lead capability-band) | high | The interface layer: converse, route, brief, verify, gate, synthesise, decide. Does NOT grind high-reasoning shapes itself (see ROUTE-4). | full |
+| **Lead** | the main interactive session | **sonnet** interface-band or **opus (or fable)** reasoning-band, chosen per work-class - fable adds the top-of-band COST qualifier, not a third band (see Lead capability-band) | high | Converse, route, brief, verify, gate, synthesise, decide. An interface-band Lead does NOT grind high-reasoning shapes itself (see ROUTE-4). | full |
 | **Worker** | `worker` / `<project>-worker` | sonnet (haiku if rote; **opus per-spawn** for clever code) | low / medium (opus clever-code spawn: medium-high) | Fully-specified mechanical jobs (build, search, transform, verify). Follows the brief; does not decide. | scoped (read/edit/write/bash - canonical: worker.md frontmatter) |
 | **Advisor** | `advisor` | opus | high | Deep reasoning on ONE bounded question OR a bounded design/plan; returns a recommendation (or plan) + confidence. Never edits. | read-only |
-| **Reviewer** | `reviewer` | opus | high | Curates several cheap first-pass audit drafts into ONE trustworthy list - cuts false positives, re-rates severity, dedups, ADDS what the cheap pass missed. Never edits code. | read-only + writes its one curated file |
+| **Reviewer** | `reviewer` | opus | high | Curates several cheap first-pass audit drafts into ONE trustworthy list - cuts false positives, re-rates severity, dedups, ADDS what the cheap pass missed. Never edits code. | read-only, returns its list inline |
 | **Boss** | `boss` | **different from the Lead** (opus for a sonnet Lead; fable if opus reasoning was already implicated) | xhigh | Rare, **always human-gated** circuit-breaker: delivers an independent VERDICT on a distilled brief when the Lead is stuck; the Lead still OWNS adopting it (the value is independence, not authority-transfer). Never gathers; bounces vague briefs. | read-only |
 | **Sublead** | `sublead` | opus | high | Lead for ONE independent slice: cuts it into child jobs, briefs and routes them, verifies every return, hands one verified result upward. GATED (task-spawn-guard Rule D, `[sublead-approved:]` tag). Never pushes, deploys or deletes. | read/edit/write/bash + Agent, SendMessage (canonical: sublead.md frontmatter) |
 
-- **Model is the main cost lever (doctrine, not prices).** Opus is only a **small multiple of sonnet**, so a
-  single scoped opus call is cheap insurance; **fable is a large multiple - it is the tier to guard**, not
-  opus. This logic holds for any pricing with that shape; the live per-MTok numbers are a volatile vendor fact
-  kept in the operator manual (`${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/kit-config.md`, absent under plugin-path installs -
-  only the flat installer creates it), not here - re-check the RATIOS there if present and list pricing
-  shifts materially. Effort is the secondary lever.
-- **The escalation ladder and scope matrix are the Spawn Contract above** - that is the every-spawn
-  decision. The rest of this skill (including the bullets here) is cold reference.
-- Workers stay dumb-and-fast by design - give them exact instructions, not problems to solve.
-  `advisor` answers one bounded question or drafts one bounded plan; `reviewer` curates a SET.
-- The **Lead is GUI-configured** - never pin its model/effort from files. v4's recommended panel
-  setting is **Sonnet @ high** (interface-band default); dial effort up for synthesis-heavy stretches, or
-  set **Opus (reasoning-band)** for an architecture/doctrine session (see Lead capability-band). Setting
-  **Fable** puts the Lead at the TOP of the reasoning band, where the cost qualifier bites: expect to delegate
-  bulk reading rather than do it, or the session is expensive for no capability gain. The panel
-  stays authoritative; the kit only configures and verifies the sub-agents.
+- Cost levers (model first, effort second), dumb-and-fast Workers, and the GUI-set Lead: see ROUTE-6.
 
 ## Lead capability-band - the per-session dial (choose up-front, hold for the session)
 `BAND-1` **The band is chosen up-front by work-class and held for the session.** A mid-session switch of
 the Lead's own model is not a correction move (see the correction ladder below).
 The Lead's model is not a fixed default; it is a per-session **capability BAND**, a human GUI dial set at
 session start by work-class. Written model-agnostic (ids drift):
-- **Interface-band Lead** (below the thinking ceiling; today Sonnet - the v4 default): reaches **DOWN**, buys
-  capability per-call from the Advisor. The standing cheap-Lead mode above.
+- **Interface-band Lead** (below the thinking ceiling; today Sonnet): reaches **DOWN**, buys
+  capability per-call from the Advisor. ROUTE-4 is its standing operating mode.
 - **Reasoning-band Lead** (at the ceiling; today Opus **and above - fable is reasoning-band, not a third
   band**): already HOLDS the capability, so it reaches **OUT** for independence (cross-lab / fable) +
   context-protection - a *different* mind, not more reasoning.
-  - **Cost qualifier at the TOP of the band (today: a fable Lead).** Band is the direction of REACH; it says
-    nothing about price. At the top of the reasoning band the scarce resource is no longer capability, it is
-    **context and per-turn cost** - the band's "answers in-context" trade is *tokens for latency*, and a
-    top-of-band token is a multiple of opus on **every turn of a growing context**. So a top-of-band Lead
-    reaches out on BOTH axes at once: **DOWN for mechanical volume** (bulk reads, greps, transcript sweeps,
-    inventories) and **OUT for independence**, holding only **synthesis, the trust-class verdict, and the
-    gate** in its own context. The counter-intuitive consequence: its trivial-work whitelist **SHRINKS**.
-    `SC-1.4` lets a Lead self-handle read / search / grep because at interface band a read is cheap; at the
-    top of the band a bulk read is the most expensive act in the session. **There, delegate by TOKEN VOLUME,
-    not by difficulty** - hand off work you are entirely capable of, precisely because you are the wrong tier
-    to spend tokens on it. (A one-line edit you can verify by eye stays self-handled; volume is the trigger,
-    not judgment.)
-- **Metering has a cost the dial must weigh:** routing DOWN means brief -> blind spawn re-reads context the
-  Lead already had -> return -> verify (round-trip latency + redundant token reload). A reasoning-band Lead
-  answers in-context. So on a reasoning-heavy session the interface-band's per-token savings can be offset by
-  latency + re-reads - part of why the dial exists.
+  - **Top of the band (today a fable Lead):** its trivial-work whitelist SHRINKS - delegate by TOKEN VOLUME,
+    not difficulty; a by-eye one-line edit stays self-handled, and synthesis, the trust-class verdict and the
+    gate stay in its own context (cost qualifier and the metering trade-off: see ROUTE-6).
 
-**Selection rule (class-proxy, decidable at session start):** default interface-band; choose reasoning-band
+**Selection rule (class-proxy, decidable at session start):** neither band is the default; choose reasoning-band
 from the START for *architecture / doctrine synthesis* or an *anticipated deep empirical hunt the Lead must
 own turn-over-turn* - continuity/ownership of the reasoning, NOT raw hardness (a hard *bounded* question stays
-interface-band + Advisor). A forgotten dial just runs interface-band + boundary-correction: a safe default.
+interface-band + Advisor); interface-band suits a session that is mostly routing and mechanical work. A
+forgotten dial runs whichever band the GUI holds, under that band's rules, so routing stays correct; a
+forgotten Fable dial is the cost case ROUTE-6 guards.
 
-**Band-aware at runtime, agnostic in doctrine.** The Lead reads its own model line (trustworthy for the VALUE,
-not for narrating a CHANGE) and maps to a band via the per-host `model -> band` boundary; that map drifts, so
-it is probed and owned as a host fact (see HOST-2), with an unknown / aliased / new model resolving to the
-conservative interface-band.
-
-**Correction ladder - a mid-session switch of the LEAD's own model is not on it (2026-08-30, corrected).**
-"Lossless" was the wrong frame: a mid-session switch re-reads the FULL transcript, wrong turns included, so
-the new model inherits whatever misled the session instead of fixing it - fidelity to a poisoned transcript is
-the bug, not a virtue. In order:
-1. **Pick the right band up-front** (above) - avoid needing correction at all.
-2. **Session fork/branch, if this host supports it** (probe, never assume - not universal, absent on some GUI
-   hosts) - retry from before the bad turn. The only mechanism that is actually clean.
-3. **A higher-tier agent call via a Lead-authored brief** (Advisor/Boss) - a curated distillation, not a raw
-   transcript replay. Unsound only if an EARLIER spawn was already briefed on the SAME assumption now
-   suspected - a fresh call re-inherits it through the Lead's own brief, and that case needs rung 4. A prior
-   spawn on unrelated work does not disqualify this rung (the Boss itself exists for exactly the case where
-   prior dispatches already happened - see BOSS-1/SC-1.3, this rung must not outrank that circuit-breaker).
-4. **Session-boundary restart** (fresh session on a *distilled* `RESUME_SESSION.md`) - lossy but genuinely
-   clean, works on every host. The reliable fallback when 2 and 3 are unavailable or already spent.
-A mid-session switch of the Lead's OWN model is dropped from the ladder entirely - never reached for or
-suggested by the Lead. If the human does it anyway that is their call; the Lead should not react to its own
-system-prompt changing as if something broke.
+The model -> band map is a per-host fact (see HOST-2).
+**Correction ladder:** a mid-session switch of the Lead's own model is not on it and is never reached for or
+suggested by the Lead; if the human does it anyway, do not react to the changed system prompt as if something
+broke. The four rungs (band up-front, session fork, Lead-briefed higher tier, session restart): see ROUTE-6.
 
 **The band flips only the Lead's default REACH** (down for capability vs out for independence); every other
 tier/mechanism is invariant. Its *benefit* shipped as a stated ASSUMPTION on a kill-switch trial; that trial
@@ -592,90 +407,12 @@ owner and the three authorities:
   findings. That material-conflict bar is exactly what the cross-lab provider-disagreement rule trips on (see
   XLAB-8): a genuine disagreement over classification or ship-decision, not any divergence of findings.
 
-## Project extension + self-maintenance - the MAINT card
-Extending the tiers to a project (the 3 layers: global agents, the L2 `tier-project-brief`, L3 prefixed task
-agents) and the kit's own self-maintenance split (worker learnings vs Lead-solo `MEMORY.md` curation; contract
-changes flagged rather than self-edited) have ONE owner: the **MAINT card** (`cards/MAINT.md`). It loads when
-wiring the project layer or editing a definition, not on an ordinary spawn.
-
-Rationale worth keeping in view (the rules live in the card, cited):
-- The project layer extends the tiers through a `skills:` hook rather than agent copies, so the brief stays
-  single-source and a name collision cannot silently shadow a tier; the mechanics are MAINT-1.
-- Definition changes route through a flagged-in-return proposal + the def-version staleness protocol instead
-  of self-edits - that is what stops a stale definition from silently running; the procedure is MAINT-3 and
-  MAINT-2.
-
-## Memory governance - the MEMORY card
-What the kit adds on top of Claude Code's own memory spec (per-file ceiling, no derivable state, no
-attributed quotes, and the honest scope of the write-time content lint) has ONE owner: the **MEMORY card**
-(`cards/MEMORY.md`). It is a REFERENCE card: consult it before writing a durable memory file or auditing
-one, the same way any policy card is consulted - nothing dispatches it automatically, unlike the five
-Spawn-Contract cards above. The system prompt's own spec governs everything the card is silent on, so this
-card states deltas only, never a restatement.
-
-Rationale worth keeping in view (the rules live in the card, cited):
-- The kit's memory doctrine used to sit beside the system prompt's spec with no cross-reference; the card
-  now starts from that spec and adds only what it lacks (MEMORY-1 to MEMORY-2, PR numbers narrowed and
-  branch names dropped after a corpus check found no false-positive-free shape for the latter).
-- The write-time content lint is advisory, consent-gated (`install-flat.sh --with-memory-content-lint`,
-  unwired by default), and NOT the independent review the operator's propagation rule asks for - the same
-  authoring Lead reads its own advisory, so it is a mechanical floor, not a second mind (MEMORY-4).
-
-## Boss - the stuck circuit-breaker (rare, human-gated)
-The Boss mechanism has ONE owner: the **BOSS card** (`cards/BOSS.md`), loaded on dispatch from the recovery
-ladder (`SC-6.3` "stop + ask" offers the Boss gate) and the spend ladder (`SC-3.1`, rung 3). An ordinary spawn
-never pages into it.
-
-Rationale worth keeping in view (the rules live in the card, cited):
-- The Boss's value is independence, not more strength: a different model on a clean framing sees what the
-  looping Lead can't. It fires after Workers/Advisor, on what they produced (see BOSS-1 for the fire-it/don't test).
-- It runs on distilled context and never gathers - its fuel is the attempt history distilled into the
-  escalation brief at each check-stop (see SC-4.1, BOSS-3), and it bounces a brief that lacks the attempts +
-  hypothesis (see BOSS-3).
-- Every Boss spawn is gated and runs a model different from the Lead's for real independence (see BOSS-3);
-  the Lead still owns adopting the verdict (see SC-1.5).
-
-## How per-agent model/effort resolves - the HOST card
-How a spawn's frontmatter `model:`/`effort:` actually resolves is GUI-specific (frontmatter-override behavior,
-the `CLAUDE_CODE_EFFORT_LEVEL` pin, `$CLAUDE_EFFORT` for worker-effort verification) and has ONE owner: the
-**HOST card** (`cards/HOST.md`, see HOST-1). `/agent-tiers:init` runs the probe and records the resolved answer
-in `.claude/agent-tiers.local.md`; a spawn inherits those values.
-
-## Dynamic model/effort -> the ROUTE card
-The tier table gives each tier a DEFAULT model/effort. The **scope matrix** (Spawn Contract step 2 ROUTE, top
-of skill) is the every-spawn decision. The rationale behind it - the five routing axes, the per-spawn model /
-effort override levers, the routing doctrine that keeps a cheap Lead from under-thinking a hard shape, and the
-band nuance on the verify tiers - has ONE owner: the **ROUTE card** (`cards/ROUTE.md`), see ROUTE-1, ROUTE-3 to ROUTE-5.
-
-## Cross-provider handoff - Claude manages, Codex writes/reviews (per-host)
-The cross-provider machinery has ONE owner: the **XLAB card** (`cards/XLAB.md`). It loads on dispatch, not on
-every spawn - `SC-3.1` (spend), `SC-3.2` (disclosure), and `SC-5.3` (egress preflight) all point to it, so an
-ordinary native-Claude spawn never pages into it. It is a card and not inline hot core because Codex is an
-exceptional mechanism (a second lab, generate-only): its rules would be dead weight on the ordinary spawn checklist.
-
-The rationale worth keeping in view (each normative statement lives in the card or the hot core, cited - never
-restated here):
-- The provider split is two orthogonal axes, not a per-tier cross-product: native Claude tiers own reasoning +
-  the verdict; two thin least-authority brokers (`codex-write`, `codex-read`) own the write/read generate paths
-  (see XLAB-1). Codex is generate-only, so a verdict-owning per-tier copy would be the wrong shape.
-- Codex output is delegated + unverified, so it inherits the same isolation and review-pass rules as any
-  delegated writer (see SC-5.1, SC-5.2) plus the cross-lab specifics (see XLAB-2, XLAB-3).
-- The trust split - generate liberally, but a Claude-strong tier holds the verdict, and provider disagreement
-  routes to the human - is the cross-lab face of the trust taxonomy (see XLAB-8, SC-1.5).
-- A Codex session resumes by explicit session-id, spend is classed by the actual codex invocation, and each
-  send is gated for disclosure (see XLAB-4, XLAB-9, XLAB-10 and the hot SC-5.3 preflight).
-- Availability is per-host, consents are per-session and independent, and the model/effort x brief-specificity
-  knob is the Lead's (see XLAB-6, XLAB-7, XLAB-11). The review path has a programmatic and an interactive
-  entrypoint to one seam (see XLAB-12).
-
 ## Escalation briefs - ONE shared template (universal seam)
 The brief requirement itself is the hot rule (see SC-4.1); this section owns the shared TEMPLATE and its
 consumer deltas. Why it earns a section: the brief IS the cost control - a tight brief lets a cheaper tier
 clear the job (the Codex 2-D model/effort x brief-specificity rule, see XLAB-11, applies to Claude tiers
-equally). Three real consumers (Advisor asks, Boss briefs, Codex handoffs) now share ONE template,
-`${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/templates/escalation-brief.md`: goal . facts gathered (paths cited) .
-attempts with results . the ONE question / acceptance criteria .
-constraints . out-of-scope. Consumer deltas: Advisor gets "the ONE question"; the Boss delta (attempts +
+equally). Three real consumers (Advisor asks, Boss briefs, Codex handoffs) now share ONE template (the SC-4.1 template).
+Consumer deltas: Advisor gets "the ONE question"; the Boss delta (attempts +
 current hypothesis, bounce rule) is owned at BOSS-3; Codex gets acceptance criteria + touch-only scope.
 `codex-handoff-brief.md` is retained as a pointer to the shared template. The template is the FLOOR, not the
 thing that makes a cheap tier clear the job - for a review spawn, the MODE below carries most of the load.
@@ -735,20 +472,11 @@ observed model=gpt-6-sol, effort=medium (upstream response for this child reques
 Without the last record, observed identity remains unverified. The same distinction applies when
 `opus` resolves to a concrete Claude model ID. A broker reports its own and its engine's evidence
 separately. This contract defines reporting; it does not claim that an enforcement hook is installed.
-
-## ⚠️ Check-in-return gotcha (portable technique)
-The Agent tool returns only the agent's **FINAL** message. An opening check-in line does NOT survive back
-to the Lead if the agent runs ANY tools afterward. So the check-in must be **repeated as the first line of
-the FINAL return** (the kit's `advisor`/`worker` already do this). A live GUI panel still shows it streaming.
+Why the check-in must head the FINAL message (the Agent tool returns only that one): CONTRACT card, SC-6.4.
 
 ## Lifecycle - staleness, curation, change management - the MAINT card
-The 3-layer artifacts (agents, briefs, memories, RESUME, plan docs) drift and bloat if unmanaged; the MAINT
-card owns the lifecycle rules. Rationale worth keeping in view (cited):
-- A watcher lag means an edited agent file is not immediately live, which is the whole reason the def-version
-  check exists; the protocol is MAINT-2 (dispatched from SC-6.4).
-- Drift and bloat are detected read-only (`/agent-tiers:doctor`) and fixed under gates (`/agent-tiers-gc`); the
-  gc guarantees, thresholds, resume-injection throttle, and manual controls are MAINT-4.
-- The add / remove / promote lifecycle, VCS disposition, and per-artifact ownership are MAINT-5.
+Staleness protocol: see MAINT-2 (dispatched from SC-6.4); doctor and gc: see MAINT-4; add / remove /
+promote and VCS disposition: see MAINT-5.
 
 ## Evaluations
 Three manual scenario+rubric evals for the hot rules this doctrine's own measurements flag as fragile
@@ -759,5 +487,5 @@ directory's README for why.
 ## Companions (optional power-ups)
 Two optional external companions amplify the kit - the **agentsview** session ledger (verify/diagnose a
 sub-agent's real run: tools, timings, usage) and the **Codex cross-lab** layer (the write path + dual-lab
-review, see the XLAB card). Both opt-in, both degrade gracefully; the kit works standalone. See the README
-Companions section for setup pointers.
+review, see the XLAB card). Both opt-in, both degrade gracefully; the kit works standalone. See docs/extending.md
+(Companions) for setup pointers.

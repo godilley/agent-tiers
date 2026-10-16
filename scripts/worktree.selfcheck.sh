@@ -12,6 +12,7 @@
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_NOSYSTEM
+unset CLAUDE_CODE_SESSION_ID
 set -u
 HERE="$(CDPATH= cd "$(dirname "$0")" && pwd)"
 WTSH="$HERE/worktree.sh"
@@ -23,6 +24,10 @@ eq_rc() { [ "$1" -eq "$2" ] && ok "$3" || bad "$3 (want exit $1, got $2)"; }
 command -v git >/dev/null 2>&1 || { echo "SKIP: git absent"; exit 0; }
 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT; W="$(cd "$W" && pwd -P)"
+
+# up calls peer-guard.sh --mark-worktree when a session id is set: keep any marker out of real state.
+PEER_GUARD_STATE_DIR="$W/pgstate"; AGENT_TIERS_GUARDS_LOG="$W/guards.log"
+export PEER_GUARD_STATE_DIR AGENT_TIERS_GUARDS_LOG
 
 GIT_CONFIG_GLOBAL="$W/gitconfig-global"
 export GIT_CONFIG_GLOBAL
@@ -122,6 +127,25 @@ count2="$(grep -c "$marker" "$MAIN/.git/info/exclude")"
   || bad "anchored /CLAUDE.md duplicated after a second up"
 OUT="$("${WT_SH:-sh}" "$WTSH" down t2 2>&1)"; RC=$?
 eq_rc 0 "$RC" "down t2 (teardown) exits 0"
+
+# up with CLAUDE_CODE_SESSION_ID set pre-clears peer-guard's first-write deny (a .nopeer marker); without it, no marker.
+if [ -f "$HERE/../.state/off/peer-guard" ]; then
+  echo "skip: peer-guard kill switch present, worktree mark case not run"
+else
+  OUT="$(CLAUDE_CODE_SESSION_ID=sess-wtmark "${WT_SH:-sh}" "$WTSH" up tm1 2>&1)"; RC=$?
+  eq_rc 0 "$RC" "up tm1 (with session id) exits 0"
+  n="$(ls "$W"/pgstate/foreign/sess-wtmark__*.nopeer 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 1 ] && ok "up with CLAUDE_CODE_SESSION_ID writes exactly one .nopeer marker" \
+    || bad "expected 1 sess-wtmark .nopeer marker, found $n"
+  case "$OUT" in *"peer-guard: marked"*) ok "up prints the peer-guard mark line" ;; *) bad "up output lacks 'peer-guard: marked'" ;; esac
+  "${WT_SH:-sh}" "$WTSH" down tm1 >/dev/null 2>&1
+  rm -rf "$W/pgstate"
+  OUT="$("${WT_SH:-sh}" "$WTSH" up tm2 2>&1)"; RC=$?
+  eq_rc 0 "$RC" "up tm2 (no session id) exits 0"
+  n="$(ls "$W"/pgstate/foreign/*.nopeer 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$n" -eq 0 ] && ok "up without CLAUDE_CODE_SESSION_ID writes no marker" || bad "up without a session id wrote $n marker(s)"
+  "${WT_SH:-sh}" "$WTSH" down tm2 >/dev/null 2>&1
+fi
 
 # =====================================================================================================
 # docs/_local (machine-local plan/ledger dir, git-excluded) is carried by default: symlinked into

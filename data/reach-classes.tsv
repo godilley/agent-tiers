@@ -1,0 +1,405 @@
+# reach-guard kit default classes, read by scripts/reach-guard.sh. TAB-separated, `#` starts a comment.
+# A user layer at ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/reach-guard/classes.tsv adds or overrides rows:
+# group, target and selector rows are keyed (a user row replaces the kit row); prog, optarg, readopt and
+# wrapper rows are unions, and `prog <group> <program> none` removes a kit prog row; verb and rverb rows
+# are ordered lists, user rows first, first match wins; mcp rows are ordered the same way; local-origin
+# rows are a union (a user row cannot remove a kit row). Agents cannot edit this file (reach-guard denies
+# it); a class change is a hand edit committed through the normal kit path.
+#
+# Kinds: group <name> <on|off> <options> <summary>, options `-` or a comma list of act=deny|ask,
+# grant=none|observe|all, local=yes|no (absent: act=ask, grant=none, local=no; read by the browser arm
+# only, a bad value makes the row bad); prog <group> <program> <shape>;
+# mcp <group> <tool-glob> <observe|navigate|act|local>; local-origin <host-glob | ip:<glob> | scheme:<name>>;
+# verb <program> <local|ro|act> <verb-path> [conditions]; rverb <ro|act> <verb-path> [conditions];
+# optarg|target|selector|readopt <program> <flag list>; wrapper <argv|string|stdin> <word(s)> [flags];
+# noexec <word list> (union): commands whose first operand is never run as a program, so an unknown
+# command word is unsure only when it is not listed here and its first operand is a class program.
+
+# groups
+group	remote_shell	on	-	Remote shell and file transfer
+group	cloud	on	-	Cloud and infra CLIs
+group	gh_api	on	-	GitHub API through gh (the user's token)
+group	browser_auto	on	act=ask,grant=all,local=yes	Automated-browser MCP server (chrome-devtools)
+group	browser_real	on	act=ask,grant=none,local=no	MCP server driving the user's everyday browser
+group	gh_write	off	-	gh subcommands that write to GitHub (off in v1)
+
+# programs
+prog	remote_shell	ssh	remote-shell
+prog	remote_shell	autossh	remote-shell
+prog	remote_shell	mosh	remote-shell
+prog	remote_shell	scp	transfer
+prog	remote_shell	rsync	transfer
+prog	remote_shell	sftp	transfer
+prog	remote_shell	sshfs	transfer
+prog	cloud	kubectl	subcmd
+prog	cloud	aws	subcmd
+prog	cloud	gcloud	subcmd
+prog	cloud	wrangler	subcmd
+prog	cloud	terraform	subcmd
+prog	cloud	docker	docker-remote
+prog	gh_api	gh	gh-api
+prog	gh_write	gh	subcmd
+
+# flags that take a value
+optarg	ssh	-b -c -D -E -e -F -I -i -J -L -l -m -O -o -p -Q -R -S -W -w
+optarg	autossh	-M -b -c -D -E -e -F -I -i -J -L -l -m -O -o -p -Q -R -S -W -w
+optarg	scp	-c -F -i -J -l -o -P -S
+optarg	rsync	-e --rsh --rsync-path --exclude --include --filter -f --exclude-from --include-from --files-from --port --log-file
+optarg	sftp	-B -b -c -D -F -i -J -l -o -P -R -S
+optarg	sshfs	-o -p -F
+optarg	kubectl	--context --namespace -n --kubeconfig --cluster --user --server -s -l --selector -o --output -c --container -f --filename --since --tail --field-selector --as
+optarg	aws	--profile --region --output --query --endpoint-url --cli-input-json --exclude --include
+optarg	gcloud	--project --account --format --filter --region --zone --configuration --impersonate-service-account --message
+optarg	wrangler	--outdir --port --env -e -c --config --project-name --branch --compatibility-date --name --ip --inspector-port
+optarg	terraform	-var -var-file -target -chdir -state -lock-timeout
+optarg	docker	-H --host --context -c --config -l --log-level
+optarg	gh	-R --repo --hostname -X --method -f -F --field --raw-field -H --header --input -q --jq -t --template --cache -L --limit
+
+# flags allowed in a read shape (any other flag makes the call act)
+readopt	ssh	-p -i -l -q -T -4 -6 -v -C -o:ConnectTimeout -o:BatchMode -o:StrictHostKeyChecking -o:UserKnownHostsFile -o:ServerAliveInterval -o:ServerAliveCountMax -o:LogLevel -o:Port -o:User -o:IdentityFile -o:IdentitiesOnly
+readopt	autossh	-M -p -i -l -q -T -4 -6 -v -C
+readopt	gh	-H --header -q --jq -t --template --paginate --slurp -i --include --silent --cache --hostname -p --preview --verbose -X --method
+
+# allowlist target and other target selectors
+target	kubectl	--context
+target	aws	--profile
+target	gcloud	--project
+target	docker	--context -c -H --host
+selector	kubectl	--kubeconfig --cluster --server -s --user KUBECONFIG=
+selector	aws	--endpoint-url AWS_PROFILE= AWS_DEFAULT_PROFILE= AWS_ACCESS_KEY_ID= AWS_CONFIG_FILE= AWS_SHARED_CREDENTIALS_FILE=
+selector	gcloud	--account --configuration --impersonate-service-account CLOUDSDK_CORE_PROJECT= CLOUDSDK_ACTIVE_CONFIG_NAME= CLOUDSDK_CONFIG=
+selector	docker	--config DOCKER_HOST= DOCKER_CONTEXT= DOCKER_CONFIG=
+selector	gh	GH_HOST= GH_TOKEN= GITHUB_TOKEN= GH_REPO=
+
+# kubectl
+verb	kubectl	local	config view
+verb	kubectl	local	config get-contexts
+verb	kubectl	local	config current-context
+verb	kubectl	local	completion
+verb	kubectl	local	version	if=--client
+verb	kubectl	local	** $	if=--help
+verb	kubectl	ro	get
+verb	kubectl	ro	describe
+verb	kubectl	ro	explain
+verb	kubectl	ro	logs
+verb	kubectl	ro	top
+verb	kubectl	ro	events
+verb	kubectl	ro	api-resources
+verb	kubectl	ro	api-versions
+verb	kubectl	ro	cluster-info
+verb	kubectl	ro	version
+verb	kubectl	ro	diff
+verb	kubectl	ro	auth can-i
+verb	kubectl	ro	rollout status
+verb	kubectl	ro	rollout history
+verb	kubectl	act	**
+
+# aws
+verb	aws	local	** $	if=--version
+verb	aws	local	help $
+verb	aws	local	** help $
+verb	aws	local	configure list
+verb	aws	local	configure get
+verb	aws	ro	sts get-caller-identity
+verb	aws	ro	s3 ls
+verb	aws	ro	logs tail
+verb	aws	ro	* describe-*
+verb	aws	ro	* list-*
+verb	aws	ro	* get-*
+verb	aws	act	**
+
+# gcloud (act verbs before read and help rows, so a resource named "list" or "help" stays act)
+verb	gcloud	local	info
+verb	gcloud	local	version
+verb	gcloud	local	config list
+verb	gcloud	local	config get-value
+verb	gcloud	local	auth list
+verb	gcloud	act	** delete
+verb	gcloud	act	** create
+verb	gcloud	act	** update
+verb	gcloud	act	** deploy
+verb	gcloud	act	** publish
+verb	gcloud	act	** ssh
+verb	gcloud	act	** scp
+verb	gcloud	act	** set-*
+verb	gcloud	act	** add-*
+verb	gcloud	act	** remove-*
+verb	gcloud	local	** $	if=--version
+verb	gcloud	local	help $
+verb	gcloud	local	** help $
+verb	gcloud	ro	** list
+verb	gcloud	ro	** describe
+verb	gcloud	ro	** get-iam-policy
+verb	gcloud	ro	logging read
+verb	gcloud	act	**
+
+# wrangler (-r as the short form of --remote is inferred, not yet checked against `wrangler dev --help`)
+verb	wrangler	local	** $	if=--version
+verb	wrangler	local	** $	if=--help
+verb	wrangler	local	dev	unless=--remote,unless=-r
+verb	wrangler	local	pages dev	unless=--remote,unless=-r
+verb	wrangler	local	deploy	if=--dry-run
+verb	wrangler	local	types
+verb	wrangler	local	build
+verb	wrangler	local	docs
+verb	wrangler	ro	whoami
+verb	wrangler	ro	tail
+verb	wrangler	ro	deployments list
+verb	wrangler	ro	deployments status
+verb	wrangler	ro	versions list
+verb	wrangler	ro	pages project list
+verb	wrangler	ro	pages deployment list
+verb	wrangler	ro	pages deployment tail
+verb	wrangler	ro	kv namespace list
+verb	wrangler	ro	kv key list
+verb	wrangler	ro	r2 bucket list
+verb	wrangler	ro	d1 list
+verb	wrangler	ro	d1 info
+verb	wrangler	ro	queues list
+verb	wrangler	act	**
+
+# terraform (verbs that change real infrastructure or remote state are act; the rest stays local)
+verb	terraform	act	apply
+verb	terraform	act	destroy
+verb	terraform	act	import
+verb	terraform	act	refresh
+verb	terraform	act	test
+verb	terraform	act	taint
+verb	terraform	act	untaint
+verb	terraform	act	force-unlock
+verb	terraform	act	state rm
+verb	terraform	act	state mv
+verb	terraform	act	state push
+verb	terraform	act	state replace-provider
+verb	terraform	act	workspace new
+verb	terraform	act	workspace delete
+verb	terraform	act	init	if=-migrate-state
+verb	terraform	act	init	if=-force-copy
+verb	terraform	local	**
+
+# docker (in class only when a remote daemon is named, or for context changes)
+verb	docker	act	context use
+verb	docker	act	context create
+verb	docker	act	context update
+verb	docker	act	context rm
+verb	docker	act	context import
+verb	docker	local	context
+verb	docker	ro	ps
+verb	docker	ro	images
+verb	docker	ro	inspect
+verb	docker	ro	logs
+verb	docker	ro	info
+verb	docker	ro	version
+verb	docker	ro	top
+verb	docker	ro	stats	if=--no-stream
+verb	docker	ro	container ls
+verb	docker	ro	container inspect
+verb	docker	ro	container logs
+verb	docker	ro	image ls
+verb	docker	act	**
+
+# gh subcommands other than `api` (group gh_write, off by default): reads local, the rest act
+verb	gh	local	auth status
+verb	gh	local	status
+verb	gh	local	browse
+verb	gh	local	search
+verb	gh	local	issue view
+verb	gh	local	issue list
+verb	gh	local	issue status
+verb	gh	local	pr view
+verb	gh	local	pr list
+verb	gh	local	pr diff
+verb	gh	local	pr checks
+verb	gh	local	pr status
+verb	gh	local	repo view
+verb	gh	local	repo list
+verb	gh	local	repo clone
+verb	gh	local	run view
+verb	gh	local	run list
+verb	gh	local	run watch
+verb	gh	local	release view
+verb	gh	local	release list
+verb	gh	local	workflow view
+verb	gh	local	workflow list
+verb	gh	local	** $	if=--version
+verb	gh	act	**
+
+# commands on the far side of ssh: only verbs with no file-writing or program-running option
+rverb	ro	ls
+rverb	ro	cat
+rverb	ro	head
+rverb	ro	tail
+rverb	ro	wc
+rverb	ro	stat
+rverb	ro	df
+rverb	ro	du
+rverb	ro	free
+rverb	ro	uptime
+rverb	ro	uname
+rverb	ro	hostname	maxpos=0
+rverb	ro	whoami
+rverb	ro	id
+rverb	ro	ps
+rverb	ro	pwd
+rverb	ro	nproc
+rverb	ro	lsblk
+rverb	ro	which
+rverb	ro	readlink
+rverb	ro	realpath
+rverb	ro	md5sum
+rverb	ro	sha256sum
+rverb	ro	grep
+rverb	ro	egrep
+rverb	ro	date	unless=-s,unless=--set,pos=+*
+rverb	ro	find	unless=-delete,unless=-exec,unless=-execdir,unless=-ok,unless=-okdir,unless=-fprint,unless=-fprint0,unless=-fprintf,unless=-fls
+rverb	ro	journalctl	unless=--vacuum-size,unless=--vacuum-time,unless=--vacuum-files,unless=--rotate,unless=--flush
+rverb	ro	systemctl status
+rverb	ro	systemctl is-active
+rverb	ro	systemctl is-enabled
+rverb	ro	systemctl list-units
+rverb	ro	systemctl list-timers
+rverb	ro	systemctl show
+rverb	ro	systemctl cat
+rverb	ro	git status
+rverb	ro	git log	unless=--output
+rverb	ro	git diff	unless=--output
+rverb	ro	git show	unless=--output
+rverb	ro	docker ps
+rverb	ro	docker logs
+rverb	ro	docker inspect
+rverb	ro	docker images
+rverb	act	**
+
+# wrappers: argv ones are walked through; string and stdin ones are not read into
+wrapper	argv	sudo	-u --user -g --group -C --close-from -D --chdir -R --chroot -T --command-timeout -h --host -p --prompt -r --role -t --type -U --other-user
+wrapper	argv	doas	-u -C
+wrapper	argv	env	-u --unset -C --chdir
+wrapper	argv	nohup
+wrapper	argv	time
+wrapper	argv	exec	-a
+wrapper	argv	nice	-n --adjustment
+wrapper	argv	ionice	-c -n -p
+wrapper	argv	setsid
+wrapper	argv	stdbuf	-i -o -e
+wrapper	argv	timeout	skip=1 -s -k --signal --kill-after
+wrapper	argv	command
+wrapper	argv	sshpass	-p -f -d -e -P
+wrapper	argv	npx	-p --package
+wrapper	argv	bunx
+wrapper	argv	yarn dlx
+wrapper	argv	pnpm dlx
+wrapper	argv	yarn
+wrapper	argv	pnpm
+wrapper	argv	npm exec
+wrapper	argv	aws-vault exec	skip=1 -d --duration -t --mfa-token
+wrapper	argv	op run	--env-file --account
+wrapper	argv	doppler run	-p --project -c --config --command
+wrapper	argv	direnv exec	skip=1
+wrapper	argv	strace	-e -o -p -P -s -u -a -b -E -I -O -S -U -X --trace --signal --status --output --attach --user --env --string-limit --columns --detach-on --summary-columns --trace-path --decode-fds --quiet --seccomp-bpf
+wrapper	argv	ltrace	-e -o -p -u -a -A -D -l -L -n -s -w -x -F -E --output --library --align --indent
+wrapper	argv	taskset	skip=1
+wrapper	argv	chrt	skip=1 -T --sched-runtime -P --sched-period -D --sched-deadline
+wrapper	argv	numactl	-N -m -C -i -p -P -w --cpunodebind --membind --physcpubind --interleave --preferred --preferred-many --weighted-interleave
+wrapper	argv	unshare	-S --setuid -G --setgid -R --root -w --wd --propagation --setgroups -l --load-interp --map-user --map-group --map-users --map-groups
+wrapper	argv	nsenter	-t --target -S --setuid -G --setgid -r --root -w --wd --env
+wrapper	argv	firejail
+wrapper	argv	proxychains	-f
+wrapper	argv	proxychains4	-f
+wrapper	argv	torsocks	-u -p -a -P --user --pass --address --port
+wrapper	argv	tsocks
+wrapper	argv	ssh-agent	-a -E -P -t -O
+wrapper	argv	dbus-run-session	--config-file --dbus-daemon
+wrapper	argv	fakeroot	-l --lib --faked -s -i -b
+wrapper	argv	xvfb-run	-e --error-file -f --auth-file -n --server-num -p --xauth-protocol -s --server-args -w --wait
+wrapper	argv	systemd-run	-u --unit -p --property --description --slice -E --setenv --uid --gid --nice -H --host -M --machine --working-directory --on-active --on-boot --on-startup --on-unit-active --on-unit-inactive --on-calendar --path-property --socket-property --timer-property --service-type
+wrapper	argv	chronic
+wrapper	argv	unbuffer
+wrapper	argv	valgrind	--tool --log-file
+wrapper	argv	mise exec	-C --cd -E --env -j --jobs
+wrapper	argv	mise x	-C --cd -E --env -j --jobs
+wrapper	argv	uv run	--with -w --python -p --project --directory --package --extra --group --env-file --from --index --index-url
+wrapper	argv	poetry run	-C --directory -P --project
+wrapper	argv	pipenv run
+wrapper	argv	bun x
+wrapper	string	bash	str=-c
+wrapper	string	sh	str=-c
+wrapper	string	zsh	str=-c
+wrapper	string	dash	str=-c
+wrapper	string	su	str=-c,--command
+wrapper	string	script	str=-c,--command
+wrapper	string	flock	-w -E str=-c,--command
+wrapper	argv	flock	skip=1 -w -E
+wrapper	string	env	str=-S,--split-string
+wrapper	string	eval	str=rest
+wrapper	string	trap	str=first
+wrapper	string	watch	-n --interval -d str=rest
+wrapper	stdin	xargs	-n -I -i -P -L -l -d -a -E -e -s --max-args --replace --max-procs --arg-file --delimiter
+wrapper	stdin	parallel
+wrapper	stdin	find -exec
+wrapper	stdin	find -execdir
+wrapper	stdin	find -ok
+
+# commands that never run their first operand as a program (an unknown command whose first operand
+# is a class program is otherwise unsure)
+noexec	echo printf man which type whereis whatis apropos grep egrep fgrep rg ag ack git cat less more head tail ls stat file test [ [[ pacman yay apt apt-get dnf brew pip pip3 npm cargo go nix-env flatpak snap tldr info help journalctl pkill pgrep killall systemctl
+
+# chrome-devtools (new upstream tools fall to the trailing act catch-all, never to a pass)
+mcp	browser_auto	mcp__chrome-devtools__emulate	local
+mcp	browser_auto	mcp__chrome-devtools__resize_page	local
+mcp	browser_auto	mcp__chrome-devtools__select_page	local
+mcp	browser_auto	mcp__chrome-devtools__close_page	local
+mcp	browser_auto	mcp__chrome-devtools__list_pages	local
+mcp	browser_auto	mcp__chrome-devtools__list_extensions	local
+mcp	browser_auto	mcp__chrome-devtools__take_snapshot	observe
+mcp	browser_auto	mcp__chrome-devtools__take_screenshot	observe
+mcp	browser_auto	mcp__chrome-devtools__list_console_messages	observe
+mcp	browser_auto	mcp__chrome-devtools__get_console_message	observe
+mcp	browser_auto	mcp__chrome-devtools__list_network_requests	observe
+mcp	browser_auto	mcp__chrome-devtools__get_network_request	observe
+mcp	browser_auto	mcp__chrome-devtools__performance_*	observe
+mcp	browser_auto	mcp__chrome-devtools__lighthouse_audit	observe
+mcp	browser_auto	mcp__chrome-devtools__wait_for	observe
+mcp	browser_auto	mcp__chrome-devtools__take_memory_snapshot	observe
+mcp	browser_auto	mcp__chrome-devtools__get_css_styles	observe
+mcp	browser_auto	mcp__chrome-devtools__get_tab_id	observe
+mcp	browser_auto	mcp__chrome-devtools__list_webmcp_tools	observe
+mcp	browser_auto	mcp__chrome-devtools__screencast_*	observe
+mcp	browser_auto	mcp__chrome-devtools__take_heapsnapshot	observe
+mcp	browser_auto	mcp__chrome-devtools__*heapsnapshot*	observe
+mcp	browser_auto	mcp__chrome-devtools__navigate_page	navigate
+mcp	browser_auto	mcp__chrome-devtools__new_page	navigate
+mcp	browser_auto	mcp__chrome-devtools__click	act
+mcp	browser_auto	mcp__chrome-devtools__click_at	act
+mcp	browser_auto	mcp__chrome-devtools__hover	act
+mcp	browser_auto	mcp__chrome-devtools__drag	act
+mcp	browser_auto	mcp__chrome-devtools__fill	act
+mcp	browser_auto	mcp__chrome-devtools__fill_form	act
+mcp	browser_auto	mcp__chrome-devtools__type_text	act
+mcp	browser_auto	mcp__chrome-devtools__press_key	act
+mcp	browser_auto	mcp__chrome-devtools__handle_dialog	act
+mcp	browser_auto	mcp__chrome-devtools__upload_file	act
+mcp	browser_auto	mcp__chrome-devtools__evaluate_script	act
+mcp	browser_auto	mcp__chrome-devtools__execute_webmcp_tool	act
+mcp	browser_auto	mcp__chrome-devtools__*	act
+
+# claudecodebrowser (published upstream under this server name; no local-origin pass: it drives the
+# user's own browser, so every call asks the Lead and is denied to a sub-agent)
+mcp	browser_real	mcp__claudecodebrowser__browser_screenshot	observe
+mcp	browser_real	mcp__claudecodebrowser__browser_get_*	observe
+mcp	browser_real	mcp__claudecodebrowser__browser_find_tabs	observe
+mcp	browser_real	mcp__claudecodebrowser__browser_navigate	navigate
+mcp	browser_real	mcp__claudecodebrowser__browser_create_tab	navigate
+mcp	browser_real	mcp__claudecodebrowser__*	act
+
+# origins that are this machine (`*.local` is not here: an mDNS name can be another machine on the LAN;
+# `scheme:chrome` is not here: chrome://settings holds sync and account controls)
+local-origin	localhost
+local-origin	*.localhost
+local-origin	ip:127.*
+local-origin	ip:::1
+local-origin	*.test
+local-origin	scheme:file
+local-origin	scheme:about
+local-origin	scheme:data
+local-origin	scheme:blob
+local-origin	scheme:devtools

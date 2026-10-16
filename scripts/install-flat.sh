@@ -10,12 +10,30 @@
 # idempotent; PreToolUse guard rows are consent-only via --with-<id> - see section 4).
 #
 # Canonical source of truth stays ~/.claude/agent-tiers/ - edit there, re-run this to re-flatten.
-# Standalone-CLI users installing the PLUGIN get skills/agents/commands + the three SessionStart hooks
-# from hooks/hooks.json - and NO guards. Every PreToolUse/PostToolUse row (consent class below) exists
-# only via this script -> settings.json, so plugin users who want a guard still run
-# `install-flat.sh --with-<id>` (corrected 2026-08-16, Tier 1 review T1.6: this line used to say
-# plugin users "don't need this", true for skills, false for guards). Idempotent + safe to re-run.
+# The plugin's hooks/hooks.json wires every kit hook (gated by the plugin options), so a plugin install
+# needs no flat install; this script refuses to install while an agent-tiers plugin is enabled (and from
+# a plugin-cache copy), since each hook would run twice. `--unwire-only` removes kit hook rows from
+# settings.json and their ledger rows (with the usual settings backup and prune) and links, copies or
+# creates nothing. The enabled-plugin check reads the profile settings.json and
+# managed settings files only; a plugin enabled at project scope (<repo>/.claude/settings.json) is not
+# checked. Idempotent + safe to re-run.
+#
+# AGENT_TIERS_TEST_SKIP_HOOK_PROOF=1 is a kit-internal TEST-ONLY knob, read from the environment only
+# (no CLI flag, no options.tsv row): the kit's own installer selfchecks set it so they do not re-run
+# every wired hook's selfcheck on each of their many installs. Risk if a user exports it: a real install
+# wires hooks without proving any of them fires on this host (a guard broken by this host's shell or
+# tools is wired silently, the "wired" vs "fires" gap the proof step exists to close); the installer
+# prints a SKIPPED line so the run is not silent.
+#
+# Exit codes: 0 = done (a failed post-wire hook selfcheck, reported as "<id> selfcheck FAILED", is a
+# warning and still exits 0, by design: the wiring itself succeeded); 1 = refused or failed (usage error, unknown id, plugin
+# refusal, probe refusal, --check found stale copies, or an install that finished but could not
+# complete a settings.json step: a failed wire, rewire or --without-<id> removal, or hook wiring skipped
+# because settings.json is invalid JSON or the backup names for this second were exhausted). A failed step is also reported on stderr at the end.
 set -eu
+
+# Managed settings dirs the plugin-enabled check reads (same form as kit-gate's _kg_managed).
+IF_MANAGED='/etc/claude-code:/Library/Application Support/ClaudeCode'
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"          # .../.claude/agent-tiers   (canonical kit source)
 CLAUDE_DIR="$(cd "$ROOT/.." && pwd)"              # .../.claude               (kit's own parent)
@@ -48,51 +66,36 @@ else
   LEDGER="$STATE_DIR/integrations.$(printf '%s' "$TARGET" | tr -c 'A-Za-z0-9' '-' | sed -e 's/^-*//' -e 's/-*$//').json"
 fi
 
-# id;class;event;matcher;timeout   (script = scripts/<id>.sh; empty matcher = none). Defined up here,
-# before flag parsing, so an unknown id can be rejected before the install touches anything.
+# id;class;event;matcher;timeout   (script = scripts/<id>.sh; empty matcher = none). Derived from the
+# `hook` rows of install/options.tsv (the one hook list): class is `core` when the row's group is
+# `core`, else `consent`. Defined up here, before flag parsing, so an unknown id can be rejected before
+# the install touches anything. Missing/unreadable file, zero hook rows, a hook row without exactly 7
+# fields (the 7th, `requires`, is `-` or a comma list of hook ids, each a known hook id other than
+# the row's own) or with a non-numeric timeout, or a `;` inside a field is a hard error here, before
+# any write.
+# The requires column is validated here but not enforced at wire time (precompact-guard's own probe does that).
 # resume-inject's timeout is a ceiling, not a cost: on Windows (Git Bash) one startup run measured 19 s
 # (likely per-file process spawns in the stamp/manifest; not profiled), and 10 s dropped its output
 # silently. Re-running this installer does NOT update the timeout on an already-wired row (see the
 # drift note further down), so existing installs need the value changed in settings.json by hand.
-HOOK_ROWS='resume-inject;core;SessionStart;;60
-codex-home-isolate;core;SessionStart;;10
-ledger-check;core;SessionStart;;10
-guard-summary;core;SessionEnd;;5
-grep-footgun-guard;consent;PreToolUse;Bash;5
-pgrep-footgun-guard;consent;PreToolUse;Bash;5
-worktree-guard;consent;PreToolUse;Bash;5
-long-run-guard;consent;PreToolUse;Bash;5
-git-add-stash-guard;consent;PreToolUse;Bash;5
-codex-guard;consent;PreToolUse;Bash;5
-dangerous-actions-blocker;consent;PreToolUse;Bash|Write|Edit|NotebookEdit|MultiEdit;5
-security-gate;consent;PreToolUse;Write|Edit|NotebookEdit|Bash;5
-hygiene-commit-guard;consent;PreToolUse;Bash;5
-vcs-commit-guard;consent;PreToolUse;Bash;5
-sc52a-write-disclosure-guard;consent;PreToolUse;Bash;5
-review-gate-guard;consent;PreToolUse;Bash;5
-kit-leak-guard;consent;PreToolUse;Bash;5
-framing-guard;consent;PreToolUse;Task|Agent;5
-unattended-guard;consent;PreToolUse;EnterPlanMode|AskUserQuestion;5
-authorship-record;consent;PostToolUse;Edit|Write|MultiEdit|NotebookEdit;5
-memory-content-lint;consent;PostToolUse;Write|Edit|MultiEdit;5
-memory-write-gate;consent;PreToolUse;Write|Edit|MultiEdit|Bash;5
-peer-guard;consent;PreToolUse;Bash|Write|Edit|MultiEdit|NotebookEdit;5
-task-spawn-guard;consent;PreToolUse;Task|Agent;5
-simple-rules-guard;consent;PreToolUse;Bash|AskUserQuestion|SendMessage;5
-agent-selfdef-guard;consent;PreToolUse;Write|Edit|MultiEdit;5
-demo-css-guard;consent;PreToolUse;Write|Edit|MultiEdit;5
-portable-citation-advisory;consent;PostToolUse;Write|Edit|MultiEdit;5
-subagent-bg-return-guard;consent;SubagentStop;;5
-numeric-claim-ledger;consent;PostToolUse;Bash;5
-plan-graduate-nudge;consent;PostToolUse;ExitPlanMode;5
-read-basis-guard;consent;PreToolUse;ExitPlanMode;5
-advisory-ack-guard;consent;Stop;;5
-precompact-guard;consent;PreCompact;manual;5
-notify;consent;Notification;permission_prompt;5
-notify-stop;consent;Stop;;5
-notify-tag-guard;consent;Stop;;5
-ask-gate;consent;PreToolUse;AskUserQuestion;5
-notify-tag-strip;consent;MessageDisplay;;10'
+OPTIONS_TSV="$ROOT/install/options.tsv"
+[ -r "$OPTIONS_TSV" ] || { echo "install-flat: $OPTIONS_TSV missing or unreadable - cannot derive the hook rows" >&2; exit 1; }
+HOOK_ROWS="$(awk -F'\t' '
+  $1 == "hook" {
+    if (NF != 7 || $6 !~ /^[0-9]+$/) { print "install-flat: options.tsv:" NR ": hook row needs 7 fields and a numeric timeout" > "/dev/stderr"; bad = 1; exit }
+    if ($7 !~ /^(-|[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*)$/) { print "install-flat: options.tsv:" NR ": hook row requires column is not - or a comma list of hook ids" > "/dev/stderr"; bad = 1; exit }
+    ids[$2] = 1; rq[NR] = $7; rid[NR] = $2
+    for (i = 1; i <= NF; i++) if (index($i, ";")) { print "install-flat: options.tsv:" NR ": hook row field contains ;" > "/dev/stderr"; bad = 1; exit }
+    printf "%s;%s;%s;%s;%s\n", $2, ($3 == "core" ? "core" : "consent"), $4, $5, $6
+  }
+  END {
+    if (bad) exit 1
+    for (n in rq) { m = split(rq[n], a, ","); for (j = 1; j <= m; j++) {
+      if (a[j] == "-") continue
+      if (a[j] == rid[n]) { print "install-flat: options.tsv:" n ": hook row requires itself" > "/dev/stderr"; exit 1 }
+      if (!(a[j] in ids)) { print "install-flat: options.tsv:" n ": hook row requires unknown hook id " a[j] > "/dev/stderr"; exit 1 } } }
+  }' "$OPTIONS_TSV")" || exit 1
+[ -n "$HOOK_ROWS" ] || { echo "install-flat: $OPTIONS_TSV has no hook rows" >&2; exit 1; }
 KNOWN_IDS="$(printf '%s\n' "$HOOK_ROWS" | cut -d';' -f1 | tr '\n' ' ')"
 
 has_id() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
@@ -103,7 +106,7 @@ has_id() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # report a successful install with a consent-class control silently absent (review 2026-08-10).
 # --force-with-<id> wires the row WITHOUT running its support probe (below) - an escape hatch for a
 # probe false negative, never a way to skip the unknown-id/missing-script checks, which still apply.
-WITH="" WITHOUT="" HSCOPE_ARG="" FORCE=""
+WITH="" WITHOUT="" HSCOPE_ARG="" FORCE="" UNWIRE=0
 for arg in "$@"; do
   case "$arg" in
     --with-*)    WITH="$WITH ${arg#--with-}" ;;
@@ -122,9 +125,16 @@ for arg in "$@"; do
         *) echo "install-flat: --hygiene-scope must be repo or narrow (got '$HSCOPE_ARG')"; exit 1 ;;
       esac ;;
     --check) CHECK_ONLY=1 ;;
-    *) echo "usage: install-flat.sh [--check] [--with-<hook-id>] [--force-with-<hook-id>] [--without-<hook-id>] [--hygiene-scope=repo|narrow]"; exit 1 ;;
+    --unwire-only) UNWIRE=1 ;;
+    *) echo "usage: install-flat.sh [--check] [--with-<hook-id>] [--force-with-<hook-id>] [--without-<hook-id>] [--hygiene-scope=repo|narrow] | --unwire-only [--without-<hook-id>]"; exit 1 ;;
   esac
 done
+if [ "$UNWIRE" = 1 ]; then
+  if [ -n "$WITH" ] || [ -n "$HSCOPE_ARG" ] || [ "${CHECK_ONLY:-0}" = 1 ]; then
+    echo "install-flat: --unwire-only combines only with --without-<hook-id> (not --with-*, --force-with-*, --hygiene-scope or --check)"; exit 1
+  fi
+  [ -n "$WITHOUT" ] || WITHOUT=" $KNOWN_IDS"
+fi
 for w in $WITH $WITHOUT; do
   has_id "$w" "$KNOWN_IDS" || { echo "install-flat: unknown hook id '$w' - known ids: $KNOWN_IDS"; exit 1; }
 done
@@ -136,6 +146,68 @@ done
 for w in $WITH; do
   [ -f "$ROOT/scripts/$w.sh" ] || { echo "install-flat: --with-$w requested but scripts/$w.sh is not in this kit copy (usually because it is kit-local and export-ignored in .gitattributes, e.g. kit-leak-guard; a partial checkout hits this too). Not installing: a consent control you asked for would otherwise be silently absent."; exit 1; }
 done
+
+# Plugin refusal (install modes only). The plugin's hooks/hooks.json already wires every kit hook, so a
+# flat install while it is enabled (or from a plugin-cache copy) makes each hook run twice. Nothing is
+# written. --check and --unwire-only run regardless.
+if [ "${CHECK_ONLY:-0}" != 1 ] && [ "$UNWIRE" != 1 ]; then
+  # (a) plugin-cache kit root: <P>/cache/<marketplace>/<plugin>/<version> with <P>/installed_plugins.json
+  pr_r="$(cd "$ROOT" && pwd -P)"
+  pr_root="$pr_r"; pr_v="${pr_r##*/}"; pr_r="${pr_r%/*}"; pr_p="${pr_r##*/}"; pr_r="${pr_r%/*}"; pr_m="${pr_r##*/}"; pr_r="${pr_r%/*}"
+  case "$pr_r" in
+    */cache)
+      if [ -n "$pr_p" ] && [ -n "$pr_m" ] && [ -n "$pr_v" ] && [ -f "${pr_r%/cache}/installed_plugins.json" ]; then
+        echo "install-flat: this kit copy is a Claude Code plugin install ($pr_root, plugin key $pr_p@$pr_m); kit-gate treats hooks run from this copy as plugin hooks (grouped hooks follow the plugin options, default off), every hook would run twice whenever the plugin is enabled, and the cache copy is replaced on a plugin update. Nothing written. Run install-flat.sh from a kit checkout instead, or configure the plugin through its options (pluginConfigs[\"$pr_p@$pr_m\"].options)." >&2
+        exit 1
+      fi ;;
+  esac
+  # (b) an agent-tiers plugin enabled in the profile's settings.json or a managed file (later wins)
+  set --
+  [ -f "$TARGET/settings.json" ] && [ -r "$TARGET/settings.json" ] && set -- "$TARGET/settings.json"
+  pr_ifs="$IFS"; IFS=:; set -f
+  for pr_md in $IF_MANAGED; do
+    IFS="$pr_ifs"; set +f
+    [ -f "$pr_md/managed-settings.json" ] && [ -r "$pr_md/managed-settings.json" ] && set -- "$@" "$pr_md/managed-settings.json"
+    for pr_mf in "$pr_md"/managed-settings.d/*.json; do
+      [ -f "$pr_mf" ] && [ -r "$pr_mf" ] && set -- "$@" "$pr_mf"
+    done
+    IFS=:; set -f
+  done
+  IFS="$pr_ifs"; set +f
+  if [ "$#" -gt 0 ] && grep -qsF 'agent-tiers@' "$@"; then
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "install-flat: cannot check whether agent-tiers is enabled as a Claude Code plugin: a settings file mentions agent-tiers@ and jq is not installed. Refusing (fail closed). Nothing written. Install jq and re-run." >&2
+      exit 1
+    fi
+    pr_keys="$(jq -rs 'reduce .[] as $f ({}; . + (($f.enabledPlugins // {}) | with_entries(select(.value != null))))
+      | to_entries[] | select((.key | startswith("agent-tiers@")) and .value == true) | .key' "$@" 2>/dev/null)" || {
+      pr_why="is not valid JSON"
+      for pr_f in "$@"; do jq . "$pr_f" >/dev/null 2>&1 || pr_bad=1; done
+      [ "${pr_bad:-0}" = 1 ] || pr_why="has an enabledPlugins that is not a JSON object"
+      echo "install-flat: cannot check whether agent-tiers is enabled as a Claude Code plugin: a settings file that mentions agent-tiers@ $pr_why (one of: $*). Refusing (fail closed). Nothing written." >&2
+      exit 1
+    }
+    if [ -n "$pr_keys" ]; then
+      pr_first=""
+      # one key per line (a key may contain spaces), so read lines rather than word-splitting
+      while IFS= read -r pr_k; do
+        pr_file=""
+        for pr_f in "$@"; do
+          jq -e --arg k "$pr_k" '.enabledPlugins[$k] == true' "$pr_f" >/dev/null 2>&1 && pr_file="$pr_f"
+        done
+        [ -n "$pr_first" ] || pr_first="$pr_k"
+        if [ "$pr_k" = "$pr_first" ]; then
+          echo "install-flat: $pr_k is enabled as a Claude Code plugin (enabledPlugins in $pr_file). The plugin's hooks/hooks.json already wires every kit hook; wiring them into $TARGET/settings.json too would run each hook twice. Nothing written. To proceed: turn hook groups on or off through the plugin's options (pluginConfigs[\"$pr_k\"].options), or disable the plugin first (/plugin disable $pr_k) and re-run. To remove kit rows already wired in $TARGET/settings.json: install-flat.sh --unwire-only." >&2
+        else
+          echo "install-flat: also enabled: $pr_k (enabledPlugins in $pr_file)" >&2
+        fi
+      done <<PR_KEYS_EOF
+$pr_keys
+PR_KEYS_EOF
+      exit 1
+    fi
+  fi
+fi
 
 # Support probe (`# kit-probe: yes` marker): before any settings.json write, ask each REQUESTED
 # --with-<id> hook whether THIS host can actually support it. A hook depending on a HOST-STABLE
@@ -195,6 +267,11 @@ if [ "${CHECK_ONLY:-0}" = 1 ]; then
   exit 0
 fi
 
+COPIED=0   # set if a symlink had to fall back to a copy (a drift surface)
+if [ "$UNWIRE" = 1 ]; then
+  command -v jq >/dev/null 2>&1 || { echo "install-flat: --unwire-only needs jq to edit settings.json safely - install jq and re-run" >&2; exit 1; }
+  echo "agent-tiers unwire-only  (settings: $TARGET/settings.json)"
+else
 mkdir -p "$TARGET/skills" "$TARGET/agents" "$TARGET/commands"
 
 echo "agent-tiers flat-install  (canonical kit: $ROOT)"
@@ -209,13 +286,12 @@ for c in sed awk cksum date cut wc du tr grep head sort env ln cp mv rm mkdir mk
   command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
 done
 [ -n "$missing" ] && echo "  ⚠ missing required commands:$missing - kit scripts (probe / resume-inject) may fail; install them and re-run."
-command -v jq >/dev/null 2>&1 || echo "  ⚠ jq not found (optional) - hook falls back to raw stdout; settings.json wiring is printed for manual paste below."
+command -v jq >/dev/null 2>&1 || echo "  ⚠ jq not found - no hooks are wired (the wiring is printed for manual paste below), the agent-tiers CLI will not run, and installed guard hooks fail open and do nothing."
 # Note (T1.5, 2026-08-16): without jq NOTHING is wired below, so WIRED_IDS stays empty and no selfcheck
 # runs - which is why this installer never reports a jq-less selfcheck "SKIP: jq absent" (exit 0) as
 # proof of a wired guard. That safety is a consequence of the wiring being jq-only, not a designed
 # check; if wiring ever gains a jq-less path, the post-wire selfcheck loop must treat SKIP as not-proven.
 
-COPIED=0   # set if a symlink had to fall back to a copy (a drift surface)
 
 clear_dest() { # $1=dest $2=log label
   # A pre-existing destination that is NOT a symlink might be real user content (name collision) or a
@@ -351,6 +427,7 @@ KITCONFIG_EOF
 else
   echo "  config  ~/.claude/agent-tiers/kit-config.md  (present - left as-is)"
 fi
+fi   # end of install-only sections (unwire-only skips 1, 2, 3, 3b)
 
 # 4. Hooks - the EXTERNAL-INTEGRATIONS seam: one wiring mechanism for every kit hook.
 #
@@ -414,6 +491,43 @@ count_cmd_matcher() { # $1=event $2=cmd $3=matcher
        | objects | .command? | strings | select(. == $c) ] | length' "$SETTINGS"
 }
 
+# Replace settings.json with the content of $1 (a temp file next to it), removing $1. A symlinked
+# settings.json is written THROUGH (cat >) so the link survives; a regular file gets the atomic rename.
+# On a failed write the pre-image is restored. 0 on success.
+settings_commit() { # $1=tmp
+  SC_RESTORE_FAILED=0   # callers read it to word their failure line (settings_state)
+  if [ -L "$SETTINGS" ]; then
+    sc_pre="$(mktemp "$SETTINGS.XXXXXX")" || { rm -f "$1"; return 1; }
+    cp "$SETTINGS" "$sc_pre" || { rm -f "$1" "$sc_pre"; return 1; }
+    if cat "$1" > "$SETTINGS"; then rm -f "$1" "$sc_pre"; return 0; fi
+    cat "$sc_pre" > "$SETTINGS" 2>/dev/null || SC_RESTORE_FAILED=1
+    rm -f "$1" "$sc_pre"; return 1
+  fi
+  mv -f "$1" "$SETTINGS"
+}
+
+# Failure-line wording: "unchanged" is only true when the failed write did not need a restore, or the
+# restore worked. When both failed, the pre-write backup $BAK is the only intact copy.
+settings_state() {
+  if [ "${SC_RESTORE_FAILED:-0}" = 1 ]; then
+    printf 'write and restore both failed, so settings.json may be unchanged or partly written; the intact pre-install copy is the backup %s' "$BAK"
+  else
+    printf 'settings.json unchanged'
+  fi
+}
+
+# Pick a non-colliding backup name into BAK (same scheme as scripts/agent-tiers): the base
+# settings.json.bak-YYYYmmdd-HHMMSS, else one past the highest -2..-9 suffix. Returns 1 past -9.
+pick_backup() {
+  pb_base="$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"; BAK="$pb_base"; pb_n=1
+  for pb_k in 2 3 4 5 6 7 8 9; do if [ -e "$pb_base-$pb_k" ]; then pb_n=$pb_k; fi; done
+  if [ "$pb_n" -gt 1 ] || [ -e "$pb_base" ]; then
+    pb_n=$((pb_n + 1))
+    [ "$pb_n" -le 9 ] || { BAK="$pb_base"; return 1; }
+    BAK="$pb_base-$pb_n"
+  fi
+}
+
 add_hook() { # $1=event $2=matcher('' = none) $3=cmd $4=timeout  -> 0 on confirmed write
   tmp="$(mktemp "$SETTINGS.XXXXXX")" || return 1
   if [ -n "$2" ]; then
@@ -422,11 +536,11 @@ add_hook() { # $1=event $2=matcher('' = none) $3=cmd $4=timeout  -> 0 on confirm
       if ((.hooks[$ev] // []) | map(.matcher == $m) | any)
       then .hooks[$ev] |= map(if .matcher == $m then .hooks += [h] else . end)
       else .hooks[$ev] = ((.hooks[$ev] // []) + [{matcher:$m, hooks:[h]}])
-      end' "$SETTINGS" > "$tmp" && mv -f "$tmp" "$SETTINGS"
+      end' "$SETTINGS" > "$tmp" && settings_commit "$tmp"
   else
     jq --arg ev "$1" --arg c "$3" --argjson t "$4" '
       .hooks[$ev] = ((.hooks[$ev] // []) +
-        [{hooks: [{type:"command", command:$c, timeout:$t}]}])' "$SETTINGS" > "$tmp" && mv -f "$tmp" "$SETTINGS"
+        [{hooks: [{type:"command", command:$c, timeout:$t}]}])' "$SETTINGS" > "$tmp" && settings_commit "$tmp"
   fi || { rm -f "$tmp" 2>/dev/null || true; return 1; }
 }
 
@@ -438,7 +552,7 @@ remove_cmd() { # $1=event $2=cmd - drop entries with that exact command from THA
       .hooks[$ev] |= (map(
           if (.hooks? | type) == "array" then .hooks |= map(select(.command != $c)) else . end
         ) | map(select(((.hooks? // []) | length) > 0)))
-    else . end' "$SETTINGS" > "$tmp" && mv -f "$tmp" "$SETTINGS" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+    else . end' "$SETTINGS" > "$tmp" && settings_commit "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
 }
 
 rewire_hook() { # $1=event $2=matcher('' = none) $3=oldcmd $4=newcmd $5=timeout - ONE jq, ONE rename
@@ -457,7 +571,7 @@ rewire_hook() { # $1=event $2=matcher('' = none) $3=oldcmd $4=newcmd $5=timeout 
           else .hooks[$ev] = ((.hooks[$ev] // []) + [{matcher:$m, hooks:[h]}])
           end)
        else .hooks[$ev] = ((.hooks[$ev] // []) + [{hooks:[h]}])
-       end)' "$SETTINGS" > "$tmp" && mv -f "$tmp" "$SETTINGS" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
+       end)' "$SETTINGS" > "$tmp" && settings_commit "$tmp" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
 }
 
 ledger_set() { # $1=id $2=cmd $3=event $4=matcher
@@ -470,24 +584,38 @@ ledger_set() { # $1=id $2=cmd $3=event $4=matcher
 }
 
 ledger_del() { # $1=id
+  [ -f "$LEDGER" ] || return 0   # unwire-only never creates the ledger
   tmp="$(mktemp "$LEDGER.XXXXXX")" || return 1
   jq --arg id "$1" 'del(.[$id])' "$LEDGER" > "$tmp" && mv -f "$tmp" "$LEDGER" || { rm -f "$tmp" 2>/dev/null || true; return 1; }
 }
 
 WIRED_IDS=""
-if command -v jq >/dev/null 2>&1; then
+UNWIRE_FAIL=0
+SKIP_WIRE=0
+if [ "$UNWIRE" = 1 ] && [ ! -f "$SETTINGS" ]; then
+  echo "  hook    nothing to unwire ($SETTINGS absent)"
+  SKIP_WIRE=1
+fi
+if [ "$SKIP_WIRE" = 1 ]; then
+  :
+elif command -v jq >/dev/null 2>&1; then
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   if ! jq . "$SETTINGS" >/dev/null 2>&1; then
     echo "  hook    ✗ $SETTINGS is not valid JSON - fix it and re-run; SKIPPING all hook wiring."
+    UNWIRE_FAIL=1
+    if [ "$UNWIRE" = 1 ]; then exit 1; fi
+  elif ! pick_backup; then
+    echo "  hook    ✗ too many settings backups this second ($BAK-2..-9 exist) - re-run in a moment; SKIPPING all hook wiring."
+    UNWIRE_FAIL=1
+    if [ "$UNWIRE" = 1 ]; then exit 1; fi
   else
-    mkdir -p "$STATE_DIR"
+    if [ "$UNWIRE" != 1 ]; then mkdir -p "$STATE_DIR"; fi
     if [ -f "$LEDGER" ] && ! jq -e 'type == "object"' "$LEDGER" >/dev/null 2>&1; then
       # mktemp, not a timestamp: two runs in the same second would otherwise clobber the first corpse.
       corrupt="$(mktemp "$LEDGER.corrupt-XXXXXX")" && mv -f "$LEDGER" "$corrupt"
       echo "  hook    ⚠ ledger was invalid/mis-shaped JSON - moved aside ($corrupt), starting fresh"
     fi
-    [ -f "$LEDGER" ] || echo '{}' > "$LEDGER"
-    BAK="$SETTINGS.bak-$(date +%Y%m%d-%H%M%S)"
+    if [ "$UNWIRE" != 1 ] && [ ! -f "$LEDGER" ]; then echo '{}' > "$LEDGER"; fi
     cp -p "$SETTINGS" "$BAK"
     # cp -p inherits settings.json's own perms, which may be world-readable. These copies carry env
     # blocks and API keys verbatim, so clamp them regardless of what the live file allows.
@@ -502,6 +630,7 @@ if command -v jq >/dev/null 2>&1; then
     ls -1 "$SETTINGS".bak-* 2>/dev/null | sort -r | tail -n +6 | while IFS= read -r stale; do rm -f "$stale"; done
     while IFS=';' read -r id class ev m t; do
       if [ -z "$id" ]; then continue; fi
+      if [ "$UNWIRE" = 1 ] && ! has_id "$id" "$WITHOUT"; then continue; fi
       # Never wire a row whose script is not actually in this kit copy (a bundle excludes
       # export-ignored scripts): a wired-but-missing hook 127s on EVERY matching tool call and
       # writes a ledger row with an empty cksum (cold-review F4). --without-<id> still falls
@@ -548,7 +677,7 @@ if command -v jq >/dev/null 2>&1; then
             echo "  hook    ~ $id REWIRED ($ev) - matcher drift: row moved to matcher \"$m\""
             WIRED_IDS="$WIRED_IDS $id"
           else
-            echo "  hook    ✗ $id matcher rewire FAILED - settings.json unchanged (backup: $BAK)"
+            UNWIRE_FAIL=1; echo "  hook    ✗ $id matcher rewire FAILED - $(settings_state) (backup: $BAK)"
           fi
         elif [ "$n_ledger" -gt 0 ]; then
           if rewire_hook "$ev" "$m" "$lcmd" "$CMD" "$t"; then
@@ -556,7 +685,7 @@ if command -v jq >/dev/null 2>&1; then
             echo "  hook    ~ $id REWIRED ($ev) - kit-owned row updated to current target"
             WIRED_IDS="$WIRED_IDS $id"
           else
-            echo "  hook    ✗ $id rewire FAILED - settings.json unchanged (backup: $BAK)"
+            UNWIRE_FAIL=1; echo "  hook    ✗ $id rewire FAILED - $(settings_state) (backup: $BAK)"
           fi
         else
           if add_hook "$ev" "$m" "$CMD" "$t"; then
@@ -567,23 +696,32 @@ if command -v jq >/dev/null 2>&1; then
             fi
             WIRED_IDS="$WIRED_IDS $id"
           else
-            echo "  hook    ✗ $id wire FAILED (jq write error) - settings.json unchanged"
+            UNWIRE_FAIL=1; echo "  hook    ✗ $id wire FAILED (jq write error) - $(settings_state) (backup: $BAK)"
           fi
         fi
       else
         if has_id "$id" "$WITHOUT"; then
-          removed=0
-          if [ "$n_target" -gt 0 ]; then remove_cmd "$ev" "$CMD" && removed=1 || true; fi
-          if [ "$n_ledger" -gt 0 ]; then remove_cmd "$ev" "$lcmd" && removed=1 || true; fi
-          ledger_del "$id" || true
-          if [ "$removed" = 1 ]; then echo "  hook    - $id removed"; else echo "  hook    - $id not present (nothing to remove)"; fi
+          removed=0 rfail=0
+          if [ "$n_target" -gt 0 ]; then if remove_cmd "$ev" "$CMD"; then removed=1; else rfail=1; fi; fi
+          if [ "$n_ledger" -gt 0 ]; then if remove_cmd "$ev" "$lcmd"; then removed=1; else rfail=1; fi; fi
+          if [ "$rfail" = 1 ]; then
+            UNWIRE_FAIL=1
+            if [ "$removed" = 1 ]; then
+              echo "  hook    ✗ $id removal FAILED part way - check $SETTINGS (backup: $BAK)"
+            else
+              echo "  hook    ✗ $id removal FAILED - $(settings_state) (backup: $BAK)"
+            fi
+          else
+            ledger_del "$id" || true
+            if [ "$removed" = 1 ]; then echo "  hook    - $id removed"; else echo "  hook    - $id not present (nothing to remove)"; fi
+          fi
         elif [ "$n_target" -gt 0 ]; then
           # consent row already present and byte-identical to the target: presence IS prior consent.
           ledger_set "$id" "$CMD" "$ev" "$m" || true
           echo "  hook    = $id present (previously consented) - kept; remove with --without-$id"
           WIRED_IDS="$WIRED_IDS $id"
         else
-          echo "  hook    ○ $id available, NOT wired (consent row) - wire with: install-flat.sh --with-$id"
+          echo "  hook    ○ $id available, NOT wired (consent row) - turn its group on with: sh $ROOT/scripts/agent-tiers configure --set group_$(awk -F'\t' -v i="$id" '$1 == "hook" && $2 == i { print $3; exit }' "$ROOT/install/options.tsv" 2>/dev/null </dev/null || true)=true; flat-only alternative: install-flat.sh --with-$id"
         fi
       fi
     done <<HOOK_ROWS_EOF
@@ -591,16 +729,20 @@ $HOOK_ROWS
 HOOK_ROWS_EOF
 
     # Proof step: wired != fires. Run each wired row's selfcheck where one ships.
-    for id in $WIRED_IDS; do
-      sc="$ROOT/scripts/$id.selfcheck.sh"
-      if [ -f "$sc" ]; then
-        if sh "$sc" >/dev/null 2>&1; then
-          echo "  hook    ✓ $id selfcheck OK"
-        else
-          echo "  hook    ⚠ $id selfcheck FAILED - run: sh $sc"
+    if [ "${AGENT_TIERS_TEST_SKIP_HOOK_PROOF:-}" = 1 ]; then
+      echo "  hook    proof SKIPPED (AGENT_TIERS_TEST_SKIP_HOOK_PROOF=1, test-only knob) - no wired row's selfcheck ran"
+    else
+      for id in $WIRED_IDS; do
+        sc="$ROOT/scripts/$id.selfcheck.sh"
+        if [ -f "$sc" ]; then
+          if sh "$sc" >/dev/null 2>&1; then
+            echo "  hook    ✓ $id selfcheck OK"
+          else
+            echo "  hook    ⚠ $id selfcheck FAILED - run: sh $sc"
+          fi
         fi
-      fi
-    done
+      done
+    fi
   fi
 else
   echo "  hook    jq not found - wire hooks manually in $SETTINGS (.hooks.<event>), one entry each:"
@@ -611,6 +753,12 @@ else
   done <<HOOK_ROWS_EOF
 $HOOK_ROWS
 HOOK_ROWS_EOF
+fi
+
+if [ "$UNWIRE" = 1 ]; then
+  echo "done (unwire only)."
+  [ "$UNWIRE_FAIL" = 0 ] || exit 1
+  exit 0
 fi
 
 # 5. Optional PATH command - agent-tiers-share (bundle + share the kit). Symlink into ~/bin so kit edits
@@ -659,3 +807,5 @@ if [ -n "$HSCOPE_ARG" ]; then
   printf '  config  hygiene_scope: %s (kit-config.md; a repo can override in .claude/agent-tiers.local.md)\n' "$HSCOPE_ARG"
 fi
 echo "done. (skills + commands re-scan live; new AGENT types need a host relaunch.)"
+# UNWIRE_FAIL (despite the name) also covers install-mode wire/rewire/removal failures and skipped wiring.
+[ "$UNWIRE_FAIL" = 0 ] || { echo "install-flat: finished with errors: a settings.json step failed or was skipped (see the hook lines above)" >&2; exit 1; }

@@ -24,10 +24,17 @@ fail() { printf 'FAIL: %s\n' "$1"; fails=$((fails + 1)); }
 
 CDIR="$T/.claude"
 MEMDIR="$CDIR/projects/slug/memory"
-mkdir -p "$MEMDIR" "$CDIR/agent-tiers/scripts/lib" "$CDIR/agent-tiers/.state"
+mkdir -p "$MEMDIR" "$CDIR/agent-tiers/scripts/lib" "$CDIR/agent-tiers/.state" "$CDIR/agent-tiers/install" "$T/managed"
 cp "$GATE" "$CDIR/agent-tiers/scripts/"
 cp "$SCRIPTS/lib/guard-mempath.sh" "$CDIR/agent-tiers/scripts/lib/"
 cp "$SCRIPTS/guard-cmdpos.sh" "$CDIR/agent-tiers/scripts/"
+# kit-gate.sh runs from this sandbox kit too: managed dir pointed at an empty temp dir, every kit-gate
+# input cleared so the user's own options cannot stand the gate down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$CDIR/agent-tiers/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$CDIR/agent-tiers/scripts/kit-gate.sh" || { echo "FAIL: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$CDIR/agent-tiers/install/"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 G="$CDIR/agent-tiers/scripts/memory-write-gate.sh"
 LOG="$T/guards.log"
 TARGET="$MEMDIR/new-fact.md"
@@ -49,11 +56,11 @@ payload() {  # payload <tool> <file-or-cmd> <transcript> [agent_type]
   if [ "$1" = "Bash" ]; then
     jq -n --arg c "$2" --arg tr "$3" --arg a "${4:-}" \
       '{tool_name: "Bash", tool_input: {command: $c}, transcript_path: $tr, session_id: "sess1"}
-       + (if $a == "" then {} else {agent_type: $a} end)'
+       + (if $a == "" then {} else {agent_type: $a} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)'
   else
     jq -n --arg p "$2" --arg tr "$3" --arg a "${4:-}" \
       '{tool_name: "Write", tool_input: {file_path: $p}, transcript_path: $tr, session_id: "sess1"}
-       + (if $a == "" then {} else {agent_type: $a} end)'
+       + (if $a == "" then {} else {agent_type: $a} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)'
   fi
 }
 
@@ -70,6 +77,16 @@ touch "$CDIR/agent-tiers/.state/off/memory-write-gate" 2>/dev/null \
 out="$(run "$TR" "$(payload Write "$TARGET" "$TR")")"
 [ -z "$out" ] || fail "case 2: kill switch did not silence the gate: $out"
 rm -f "$CDIR/agent-tiers/.state/off/memory-write-gate"
+
+# --- case 2b: kit-gate stand-down. The kit root and the CLAUDE_CONFIG_DIR marker root are the same
+# directory here, so the gate's own marker check would pre-empt kit-gate; AGENT_TIERS_OFF=1 (kit-gate
+# rule 1) reaches kit-gate itself. Fails if the call line is missing or misplaced: the unchecked write
+# below is a deny without it.
+TR="$T/t2b.jsonl"; { user_text "write that up"; tu Read '{"file_path":"/etc/hosts"}'; } > "$TR"
+out="$(printf '%s' "$(payload Write "$TARGET" "$TR")" | CLAUDE_CONFIG_DIR="$CDIR" AGENT_TIERS_GUARDS_LOG="$LOG" AGENT_TIERS_OFF=1 sh "$G" 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "case 2b: kit-gate stand-down expected exit 0 and empty stdout (rc=$rc out=$out)"
+grep -aq 'kit-gate standdown memory-write-gate:' "$LOG" || fail "case 2b: kit-gate stand-down not logged"
+[ "$(decision "$(run "$TR" "$(payload Write "$TARGET" "$TR")")")" = "deny" ] || fail "case 2b: without AGENT_TIERS_OFF the same write must be denied"
 
 # --- case 3 (PLAN CHECK a): no coverage check, no question -> DENY ---------------------------------
 # Fails if the live failure this whole guard exists for still goes through.

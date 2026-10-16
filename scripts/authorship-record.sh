@@ -36,7 +36,8 @@ note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s authorship-record fail-open: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 
 # One jq pass: is this edit non-trivial (SC-1.4 floor: a one-line or pattern-mechanical edit verifiable by
@@ -64,7 +65,14 @@ SESSION_ID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null ||
 case "${SESSION_ID:-}" in
   '' | *[!A-Za-z0-9._-]* | '.' | '..') note "unusable session_id - not recording"; exit 0 ;;
 esac
-AGENT="$(printf '%s' "$INPUT" | jq -r '.agent_type // "MAIN"' 2>/dev/null || echo MAIN)"
+AGENT=unknown
+LIB="$(dirname "$0")/guard-cmdpos.sh"
+if [ -r "$LIB" ] && . "$LIB" 2>/dev/null && command -v guard_caller_agent >/dev/null 2>&1; then
+  AGENT="$(guard_caller_agent "$INPUT")"
+  [ -n "$AGENT" ] || AGENT=MAIN
+else
+  note "guard-cmdpos.sh missing, unsourceable or stale - recording agent=unknown"
+fi
 case "$AGENT" in *[!A-Za-z0-9._-]*) AGENT="unknown" ;; esac
 
 # Trust-class surface. PATH only, deliberately: the content regex this replaced (auth|token|secret...)

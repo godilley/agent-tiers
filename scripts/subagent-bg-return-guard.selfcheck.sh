@@ -40,6 +40,15 @@ mkdir -p "$BASE/scripts" "$BASE/.state"
 cp "$SRC" "$BASE/scripts/subagent-bg-return-guard.sh"
 GUARD="$BASE/scripts/subagent-bg-return-guard.sh"
 LOG="$BASE/.state/guards.log"
+# kit-gate.sh runs as a child of the guard: the fixture gets a rewritten copy (empty managed dir) and
+# options.tsv, and every input the user's own options could reach it through is cleared.
+mkdir -p "$BASE/install" "$T/managed" "$T/cfg"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$BASE/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$BASE/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$BASE/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg" AGENT_TIERS_GUARDS_LOG="$LOG"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 run() {  # run <payload-json> ; sets RC and STDERR, prints nothing to stdout by design
   errf="$T/stderr.$$"
@@ -106,6 +115,15 @@ TASKS="[$(shell_task bk44dd running)]"
 run "$(payload agent6 sess1 "$TR6" "$TASKS")"
 [ "$RC" = 0 ] && [ -z "$STDERR" ] || fail "case 6: kill switch did not silence the guard (rc=$RC)"
 rm -f "$BASE/.state/off/subagent-bg-return-guard"
+
+# --- case 6b: stand-down via kit-gate.sh: exit 0, empty stderr, kit-gate log line ---------------------------
+run "$(payload agent6c sess1 "$TR6" "$TASKS")"   # control: no marker, same payload must block (rc 2)
+[ "$RC" = 2 ] && [ -n "$STDERR" ] || fail "case 6b: control run (no marker) did not block, fixture drifted (rc=$RC)"
+touch "$BASE/.state/off/subagent-bg-return-guard"
+run "$(payload agent6b sess1 "$TR6" "$TASKS")"
+rm -f "$BASE/.state/off/subagent-bg-return-guard"
+[ "$RC" = 0 ] && [ -z "$STDERR" ] || fail "case 6b: stand-down did not silence the guard (rc=$RC stderr=$STDERR)"
+grep -aq 'kit-gate standdown subagent-bg-return-guard:' "$LOG" 2>/dev/null || fail "case 6b: no kit-gate log line"
 
 # --- case 7: jq missing -> fail open with a breadcrumb (simulated by hiding jq from PATH) --------------
 TR7="$T/t7.jsonl"; : > "$TR7"
@@ -181,7 +199,7 @@ gc_probe "AGENT_TIERS_STATE_DAYS=99999"
 [ -f "$MARKER_DIR/old9c" ] && fail "case 14: AGENT_TIERS_STATE_DAYS=99999 did not fall back to 7 (kept a 9-day-old file)"
 
 if [ "$fails" -eq 0 ]; then
-  echo "PASS subagent-bg-return-guard: 14/14 cases"
+  echo "PASS subagent-bg-return-guard: 15/15 cases"
   exit 0
 fi
 printf 'subagent-bg-return-guard: %s case(s) failed\n' "$fails"

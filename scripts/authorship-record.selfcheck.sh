@@ -14,8 +14,18 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (recorder fails open by
 
 TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"   # macOS TMPDIR ends in "/" - a "//" in T breaks every pwd comparison (CI, 2026-08-16)
 T="${TMPBASE}/at-authorship-selfcheck.$$"
-rm -rf "$T"; mkdir -p "$T/kit/scripts" || fail "cannot build sandbox"
+rm -rf "$T"; mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed" "$T/cfg" || fail "cannot build sandbox"
 cp "$SRC" "$T/kit/scripts/" || fail "cannot copy recorder"
+cp "$(dirname "$0")/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard-cmdpos.sh"
+# kit-gate.sh runs from this sandbox kit too: managed dir pointed at an empty temp dir, config dir and
+# guards log in the sandbox (outside kit/, so the traversal case's file snapshot is unaffected), every
+# kit-gate input cleared so the user's own options cannot stand the recorder down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$(dirname "$0")/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$(dirname "$0")/../install/options.tsv" "$T/kit/install/"
+export AGENT_TIERS_GUARDS_LOG="$T/guards.log" CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 REC="$T/kit/scripts/authorship-record.sh"
 STATE="$T/kit/.state/authorship"
 trap 'rm -rf "$T"' EXIT
@@ -99,5 +109,23 @@ grep -q CANARY-MUST-NOT-LEAK "$CANARY" || fail "canary was clobbered"
 # 8. Unparseable payload is a silent fail-open, not a crash and not a nudge.
 out="$(run 'garbage {{{')"
 [ -z "$out" ] || fail "unparseable payload must produce no output"
+
+# 9. kit-gate stand-down: marker present -> no nudge, no ledger, exit 0, logged; removed -> nudges again.
+mkdir -p "$T/kit/.state/off" && : > "$T/kit/.state/off/authorship-record"
+S9=sess-gate-9999
+out="$(printf '%s' "$(pay "$S9" "$TRUSTPATH" "$BIG" "")" | sh "$REC" 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "stand-down: expected exit 0 and empty stdout (rc=$rc)"
+[ ! -e "$STATE/$S9.tsv" ] || fail "stand-down: recorder wrote a ledger"
+grep -aq 'kit-gate standdown authorship-record:' "$AGENT_TIERS_GUARDS_LOG" || fail "stand-down not logged"
+rm -f "$T/kit/.state/off/authorship-record"
+[ "$(nudged "$(run "$(pay "$S9" "$TRUSTPATH" "$BIG" "")")")" = YES ] || fail "marker removed: recorder must nudge again"
+
+# 10. Caller identity comes from guard_caller_agent: a `--agent` main (agent_type, NO agent_id) is MAIN;
+# a plugin-namespaced subagent (agent_type + agent_id) is its bare name.
+S10=sess-agent-1010
+run "$(pay "$S10" "$PLAINPATH" "$BIG" "" | jq -c '. + {agent_type:"foo"}')" >/dev/null
+[ "$(tail -n 1 "$STATE/$S10.tsv" | cut -f2)" = MAIN ] || fail "--agent main (no agent_id) must be recorded as MAIN"
+run "$(pay "$S10" "$PLAINPATH" "$BIG" "" | jq -c '. + {agent_type:"agent-tiers:worker", agent_id:"a1b2"}')" >/dev/null
+[ "$(tail -n 1 "$STATE/$S10.tsv" | cut -f2)" = worker ] || fail "namespaced subagent must be recorded as worker"
 
 echo "OK authorship-record: nudges once per session on non-trivial trust-class authorship, records the rest, never blocks"

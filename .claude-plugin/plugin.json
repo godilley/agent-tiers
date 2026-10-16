@@ -1,9 +1,74 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "agent-tiers",
-  "version": "0.1.0",
-  "author": { "name": "George Dilley", "url": "https://github.com/godilley" },
+  "version": "0.1.1",
+  "author": {
+    "name": "George Dilley",
+    "url": "https://github.com/godilley"
+  },
   "homepage": "https://github.com/godilley/agent-tiers",
   "license": "MIT",
-  "description": "Portable Lead/Worker/Advisor/Reviewer/Boss sub-agent tier system. Ships generalized advisor + worker + reviewer + boss agents, the gating/delegation/session-handoff workflow skills, and an env-probe (/agent-tiers:init) that self-configures per project by discovering how the local GUI resolves sub-agent model/effort overrides. The Lead (main chat) stays GUI-configured; the kit only configures and verifies the sub-agents."
+  "description": "Portable Lead/Worker/Advisor/Reviewer/Boss sub-agent tier system. Ships generalized advisor + worker + reviewer + boss agents, the gating/delegation/session-handoff workflow skills, and an env-probe (/agent-tiers:init) that self-configures per project by discovering how the local GUI resolves sub-agent model/effort overrides. The Lead (main chat) stays GUI-configured; the kit only configures and verifies the sub-agents.",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Kit enabled",
+      "description": "Turns the whole kit on or off, core hooks included. Off keeps it installed; each session start then shows one line saying it is off.",
+      "default": true
+    },
+    "group_safety": {
+      "type": "boolean",
+      "title": "Safety guards",
+      "description": "Blocks destructive commands and secrets in written content, bare git add -A and stash, hand-made worktrees; asks or denies agent reach to remote hosts and browser MCPs.",
+      "default": false
+    },
+    "group_shell_footguns": {
+      "type": "boolean",
+      "title": "Shell footgun guards",
+      "description": "Stops shell commands that fail quietly: recursive grep skipping binary files, pgrep/pkill -f, and long checks piped into tail or polled in a loop.",
+      "default": false
+    },
+    "group_commit_review": {
+      "type": "boolean",
+      "title": "Commit review guards",
+      "description": "Asks before a commit or push with no independent review, flags commit hygiene problems and private text in a commit, denies undisclosed sed -i or tee writes to tracked files, and logs derived numbers.",
+      "default": false
+    },
+    "group_delegation": {
+      "type": "boolean",
+      "title": "Delegation guards",
+      "description": "Guards sub-agent spawns (model, framing, return-while-running), bare codex calls, and a sub-agent editing its own definition.",
+      "default": false
+    },
+    "group_memory": {
+      "type": "boolean",
+      "title": "Memory guards",
+      "description": "Gates new memory writes behind a coverage check, lints memory content, warns on unopenable path citations, and records what a session authored.",
+      "default": false
+    },
+    "group_attention": {
+      "type": "boolean",
+      "title": "Attention hooks",
+      "description": "Desktop notifications, plus a Stop block that ends every reply with an operator-tag line, ask-gate for questions, and advisory-ack and unattended-mode guards.",
+      "default": false
+    },
+    "group_multi_session": {
+      "type": "boolean",
+      "title": "Multi-session guards",
+      "description": "Asks before a write into a repo another live session is using, or outside this session's repo. Also simple-rules-guard: no codex resume --last, no sudo JDK switch, no main branch in your own repos, marked defaults, SendMessage rules.",
+      "default": false
+    },
+    "group_planning": {
+      "type": "boolean",
+      "title": "Planning guards",
+      "description": "Asks a plan to declare any tracked source file it names but never read, nudges to save approved plans, blocks CSS demo hacks, and blocks manual /compact before the handoff (needs authorship-record, Memory group).",
+      "default": false
+    },
+    "disabled_hooks": {
+      "type": "string",
+      "multiple": true,
+      "title": "Disabled hooks",
+      "description": "Hook ids to turn off one by one, whatever their group says. Set with: agent-tiers configure --set disabled_hooks=<id>,<id> (or settings.json pluginConfigs)."
+    }
+  }
 }

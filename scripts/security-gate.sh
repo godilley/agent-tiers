@@ -80,6 +80,7 @@
 # Fail-open on any tooling gap - EVERY fail-open path breadcrumbs to `.state/guards.log` (F-25).
 # Self-check: security-gate.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
@@ -109,7 +110,7 @@ deny() { # $1 = reason  $2 = secret|code (tail selector, default secret)
   exit 0
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)"
 [ -n "$TOOL" ] || { note "no tool_name in payload"; exit 0; }

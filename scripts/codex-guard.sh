@@ -15,6 +15,7 @@
 # not chased - the audience is a Lead slipping into old habit, not a hostile agent. NOT auto-wired:
 # consent row, `install-flat.sh --with-codex-guard`. Selfcheck: codex-guard.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 # CLAUDE_PLUGIN_ROOT is not reliably set for a hook's own shell (only baked into flat-installed
 # commands/*.md); resolve the kit root from THIS script's own location instead, same as lint-doctrine.sh.
 KIT_ROOT="$(CDPATH= cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
@@ -38,7 +39,7 @@ deny() { # $1 = reason. jq path emits the JSON decision; the jq-less path uses t
   exit 2
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 FIX="Bare codex invocations are banned in Claude sessions (XLAB-5): a direct call skips the egress preflight and isolation discipline. Re-run via the sanctioned wrapper: replace 'codex' with '$KIT_ROOT/scripts/codex-run.sh' (same argv - probes pass through, exec gets a hard-fail secrets scan). One codex call per Bash command."
 
 if ! command -v jq >/dev/null 2>&1; then

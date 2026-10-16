@@ -10,7 +10,13 @@ ok()  { printf 'ok   %s\n' "$1"; }
 bad() { printf 'FAIL %s\n' "$1"; fail=1; }
 command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (summary counts all sessions without it; not asserted here)"; exit 0; }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/scripts" "$T/.state"; cp "$DIR/guard-summary.sh" "$T/scripts/"
+mkdir -p "$T/scripts" "$T/.state" "$T/install" "$T/cfg"; cp "$DIR/guard-summary.sh" "$T/scripts/"
+mkdir -p "$T/managed"; sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$DIR/kit-gate.sh" > "$T/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$T/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg" AGENT_TIERS_GUARDS_LOG="$T/.state/guards.log"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 G="$T/scripts/guard-summary.sh"
 run() { jq -n --arg s "$1" '{session_id: $s}' | sh "$G" 2>&1 >/dev/null; }
 
@@ -46,6 +52,18 @@ printf '%s' "$out" | grep -q '(deny 1, ask 0)' && ok 'embedded " ask: " in a rea
 printf '2026-08-16T20:07:00+0100 hygiene-commit-guard deny: x [sid=a.b]\n2026-08-16T20:07:01+0100 hygiene-commit-guard deny: y [sid=axb]\n' >> "$T/.state/guards.log"
 out="$(run a.b)"
 printf '%s' "$out" | grep -q '^agent-tiers: 1 guard block(s)' && ok 'dot in session id matched literally' || bad "dot-in-sid: $out"
+# 2026-10-14: the `[sid=<id> agent=<type>]` tag (five writers) and the `agent=<type> [sid=<id>]` form
+# are both this session's lines; the selfcheck form `[sid= agent=...]` is excluded from all-time.
+printf '2026-08-16T20:08:00+0100 vcs-commit-guard deny: x [sid=s5 agent=worker]\n' >> "$T/.state/guards.log"
+out="$(run s5)"
+printf '%s' "$out" | grep -q '^agent-tiers: 1 guard block(s) this session (deny 1, ask 0)' && ok '[sid=s5 agent=worker] deny counted for s5' || bad "bracketed agent form not counted: $out"
+printf '%s' "$out" | grep -q 'sid=\|agent=worker' && bad "bracketed agent tag not stripped from excerpt: $out" || ok 'bracketed agent tag stripped from excerpt'
+printf '2026-08-16T20:09:00+0100 reach-guard deny: x agent=worker [sid=s6]\n' >> "$T/.state/guards.log"
+out="$(run s6)"
+printf '%s' "$out" | grep -q '^agent-tiers: 1 guard block(s) this session (deny 1, ask 0)' && ok 'agent=worker [sid=s6] deny counted for s6' || bad "trailing sid form not counted: $out"
+printf '2026-08-16T20:10:00+0100 vcs-commit-guard deny: real [sid=s7]\n2026-08-16T20:10:01+0100 vcs-commit-guard deny: fixture [sid= agent=lead]\n' > "$T/.state/g2.log"
+out="$(printf '{}' | AGENT_TIERS_GUARDS_LOG="$T/.state/g2.log" sh "$G" 2>&1 >/dev/null)"
+printf '%s' "$out" | grep -q '^agent-tiers: 1 guard block(s) all sessions' && ok '[sid= agent=lead] selfcheck line excluded from all-time' || bad "selfcheck agent form counted all-time: $out"
 # stdout stays empty (a SessionEnd hook's stdout is not a channel either; stderr is the candidate)
 [ -z "$(jq -n '{session_id:"s1"}' | sh "$G" 2>/dev/null)" ] && ok 'nothing on stdout' || bad 'stdout must stay empty'
 # a hostile session id is neutralised, not interpolated into the regex
@@ -76,6 +94,27 @@ jq -n --arg s "sfram" '{session_id:$s}' | AGENT_TIERS_LOG_ROTATE_BYTES=$((FBEFOR
 FARCHIVE="$(ls "$T/.state/"framing.log.[0-9]* 2>/dev/null | head -1)"
 [ -n "$FARCHIVE" ] && [ -s "$FARCHIVE" ] && ok 'rotation: framing.log rotates even when guards.log is absent' \
   || bad 'rotation: framing.log did not rotate with no guards.log present (H-2)'
+
+# reach-guard browser state is cleared at session end, guards.log absent; another session's state stays
+rm -f "$T/.state/guards.log"; mkdir -p "$T/.state/reach-guard/pending"
+for f in grant.srg pages.srg pending/srg.tu1 pending/srg.tu2 grant.other pending/other.tu1; do : > "$T/.state/reach-guard/$f"; done
+run srg >/dev/null
+[ ! -e "$T/.state/reach-guard/grant.srg" ] && [ ! -e "$T/.state/reach-guard/pages.srg" ] \
+  && [ ! -e "$T/.state/reach-guard/pending/srg.tu1" ] && [ ! -e "$T/.state/reach-guard/pending/srg.tu2" ] \
+  && ok 'reach-guard grant, pages and pending state cleared for this session with no guards.log' \
+  || bad "reach-guard state survived session end: $(ls "$T/.state/reach-guard" "$T/.state/reach-guard/pending")"
+[ -e "$T/.state/reach-guard/grant.other" ] && [ -e "$T/.state/reach-guard/pending/other.tu1" ] \
+  && ok "reach-guard state of another session is kept" || bad "another session's reach-guard state was removed"
+# the cleanup dir follows guard_state_dir: the kit .state when only the log is moved elsewhere ...
+mkdir -p "$T/elsewhere"; : > "$T/.state/reach-guard/grant.srg2"
+jq -n '{session_id:"srg2"}' | AGENT_TIERS_GUARDS_LOG="$T/elsewhere/g.log" sh "$G" >/dev/null 2>&1
+[ ! -e "$T/.state/reach-guard/grant.srg2" ] && ok "reach-guard cleanup uses the kit .state when only the log is moved" \
+  || bad "reach-guard cleanup missed the kit .state with the log moved elsewhere"
+# ... and <dir>/.state when AGENT_TIERS_STATE_DIR does not end in /.state
+mkdir -p "$T/sd/.state/reach-guard"; : > "$T/sd/.state/reach-guard/pages.srg3"
+jq -n '{session_id:"srg3"}' | AGENT_TIERS_STATE_DIR="$T/sd" sh "$G" >/dev/null 2>&1
+[ ! -e "$T/sd/.state/reach-guard/pages.srg3" ] && ok "reach-guard cleanup appends /.state to AGENT_TIERS_STATE_DIR" \
+  || bad "reach-guard cleanup did not append /.state to AGENT_TIERS_STATE_DIR"
 
 # --- timeout/kill tracing (2026-09-17): a start/end breadcrumb pair, joined on pid (no [sid=] on
 # these lines - see each guard's own instrumentation comment). Three planted-log cases first, then a
@@ -160,5 +199,13 @@ wait "$fpid" 2>/dev/null
 grep -aq "start \[pid=${fpid}\]\$" "$FIXLOG" 2>/dev/null && ! grep -aq "end \[pid=${fpid}\]" "$FIXLOG" 2>/dev/null \
   && ok 'real SIGKILL: fixture guard logs a start with no matching end at all (no trap runs)' \
   || bad "real SIGKILL did not leave an unmatched start: $(cat "$FIXLOG" 2>/dev/null)"
+
+# kit-gate line is live: AGENT_TIERS_OFF=1 -> rc 0, NO summary on stderr, standdown logged, BUT housekeeping
+# still runs (the unattended flag for that sid is cleared).
+GL="$T/.state/gate.log"; : > "$GL"; : > "$T/.state/unattended.gate-4"
+out="$(jq -n '{session_id: "gate-4"}' | AGENT_TIERS_OFF=1 CLAUDE_CODE_SESSION_ID=gate-4 AGENT_TIERS_GUARDS_LOG="$GL" sh "$G" 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ! printf '%s' "$out" | grep -q 'guard block' && grep -q 'kit-gate standdown guard-summary: AGENT_TIERS_OFF=1 \[sid=gate-4\]' "$GL" 2>/dev/null \
+  && ok "kit-gate: AGENT_TIERS_OFF=1 stands the report down (rc 0, no summary, logged)" || bad "kit-gate line not live: rc=$rc out=$out"
+[ ! -e "$T/.state/unattended.gate-4" ] && ok "kit-gate: housekeeping still clears the unattended flag when off" || bad "unattended flag survived a stood-down run"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

@@ -22,8 +22,17 @@ fail() { printf 'FAIL: %s\n' "$1"; fails=$((fails + 1)); }
 # guard_caller_agent/guard_ask_decision/guard_ask_prefix); its absence is covered by a fail-open path,
 # not this sandbox, so it is copied unconditionally here.
 KIT="$T/kit"
-mkdir -p "$KIT/scripts" "$KIT/.state"
+mkdir -p "$KIT/scripts" "$KIT/.state" "$KIT/install" "$T/managed" "$T/cfg"
 cp "$SRC" "$KIT/scripts/"
+# kit-gate.sh enforces the kit-root kill switch and runs from this sandbox kit: managed dir pointed at an
+# empty temp dir, config dir in the sandbox, every kit-gate input cleared so the user's own options
+# cannot stand the guard down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "FAIL: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$KIT/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 [ -f "$SCRIPTS/guard-cmdpos.sh" ] && cp "$SCRIPTS/guard-cmdpos.sh" "$KIT/scripts/"
 GUARD="$KIT/scripts/task-spawn-guard.sh"
 LOG="$T/guards.log"
@@ -41,7 +50,7 @@ payload() {  # payload <subagent_type> <prompt> [model] [agent_type] -> same sha
   jq -n --arg s "$1" --arg p "$2" --arg m "${3:-}" --arg a "${4:-}" \
     '{tool_name: "Task", session_id: "sess1",
       tool_input: ({subagent_type: $s, prompt: $p} + (if $m == "" then {} else {model: $m} end))}
-     + (if $a == "" then {} else {agent_type: $a} end)'
+     + (if $a == "" then {} else {agent_type: $a} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)'
 }
 
 # --- case 1 (RULE A positive): Explore with no model -> deny --------------------------------------
@@ -87,10 +96,17 @@ grep -aq 'allow: planted-control disclosure marker' "$LOG" 2>/dev/null \
   || fail "case 9: the disclosure allowance was not logged"
 
 # --- case 10: the kill switch is honoured before anything else, resolved from KIT_ROOT -----------------
+# control run, same payload, no marker: it must deny, or the silence below proves nothing
+out="$(run "$(payload Explore "find dead code")")"
+[ "$(decision "$out")" = "deny" ] || fail "case 10: control run without the marker did not deny (got: ${out:-<silence>})"
 mkdir -p "$KIT/.state/off"
 touch "$KIT/.state/off/task-spawn-guard"
 out="$(run "$(payload Explore "find dead code")")"
 [ -z "$out" ] || fail "case 10: kill switch did not silence the guard: $out"
+# kit-gate stand-down: exit 0, empty stdout, logged in the sandbox guards log.
+printf '%s' "$(payload Explore "find dead code")" | AGENT_TIERS_GUARDS_LOG="$LOG" AGENT_TIERS_STATE_DIR= "${GUARD_SH:-sh}" "$GUARD" >/dev/null 2>&1 \
+  || fail "case 10: stand-down exit status was not 0"
+grep -aq 'kit-gate standdown task-spawn-guard:' "$LOG" 2>/dev/null || fail "case 10: kit-gate stand-down was not logged"
 rm -f "$KIT/.state/off/task-spawn-guard"
 
 # --- case 11: an unrelated tool is untouched ---------------------------------------------------------
@@ -284,8 +300,12 @@ out="$(run "$(epay "--prior=$T/w/old/findings.md, then write $T/w/new/findings.m
 printf '%s' "$out" | grep -q "$T/w/new/findings.md" || fail "case 47: the new target was not denied by its real path: ${out:-<silence>}"
 printf '%s' "$out" | grep -q 'prior=' && fail "case 47: the key= prefix was swallowed into the path"
 
+# 48: namespaced sublead caller (agent_type + agent_id) spawning general-purpose -> deny.
+out="$(run "$(payload general-purpose "need broad tool access" "" agent-tiers:sublead)")"
+[ "$(decision "$out")" = "deny" ] || fail "case 48: a namespaced agent-tiers:sublead spawning general-purpose was not denied (got: ${out:-<silence>})"
+
 if [ "$fails" -eq 0 ]; then
-  echo "PASS task-spawn-guard: 47/47 cases"
+  echo "PASS task-spawn-guard: 48/48 cases"
   exit 0
 fi
 printf 'task-spawn-guard: %s case(s) failed\n' "$fails"

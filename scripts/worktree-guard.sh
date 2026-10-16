@@ -53,8 +53,9 @@
 # before; the header already accepted that (a guard cannot hold a determined agent, and `prune` is
 # allowed on purpose). Self-check: worktree-guard.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"   # env override: selfchecks point it at a sandbox
 logdec() { # $1 = "deny: ..." | "ask: ..."   (sid parsed HERE, lazily)

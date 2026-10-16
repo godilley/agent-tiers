@@ -1,0 +1,10 @@
+# agent-tiers SessionStart band lines (defaults), read by scripts/lib/model-band.sh.
+# One `band=text` per line; a `#` line is a comment. Bands: reasoning, top, interface, unranked, absent.
+# Text: printable ASCII only, at most 240 characters; an invalid line is skipped.
+# Per-machine override: ~/.claude/agent-tiers/.state/band-lines (under CLAUDE_CONFIG_DIR when set), same format;
+# a valid line there wins for its band, any band it leaves out keeps the default below.
+reasoning=reasoning band - delegate.
+top=top of the reasoning band, a one-off cost - delegate, and act as the brains shaping upcoming sessions.
+interface=interface band - plan before acting: state the end state and the next three steps before the first edit.
+unranked=model not ranked against the reasoning ceiling - treat it as at-ceiling reasoning band (HOST-2) and say so.
+absent=the SessionStart payload carried no model - map your own model line to a band per HOST-2.

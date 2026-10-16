@@ -48,7 +48,7 @@ unset CLAUDE_PROJECT_DIR 2>/dev/null || true
 # set it back with a per-command prefix, same pattern as TERM above.
 unset AGENT_TIERS_NOTIFY_TERMINAL AGENT_TIERS_NOTIFY_FOCUS_CMD 2>/dev/null || true
 
-H="$(cd "$(dirname "$0")" && pwd)/notify.sh"
+SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP notify: jq absent (hook fails open by design)"; exit 0; }
 
 T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
@@ -59,6 +59,19 @@ cleanup() {
   rm -rf "$T"
 }
 trap cleanup EXIT
+
+# Run from a SANDBOX kit copy (hook, wrapper, assets, lib, plus a kit-gate.sh pointed at an empty managed
+# dir and the real options.tsv) with every kit-gate input cleared, so the live kit's state and the user's
+# real options can never stand the hook down or be touched. The notifier itself stays stubbed on PATH below.
+mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
+cp "$SRC_DIR/notify.sh" "$SRC_DIR/notify-stop.sh" "$T/kit/scripts/" || fail "cannot copy hooks into sandbox"
+cp -R "$SRC_DIR/assets" "$SRC_DIR/lib" "$T/kit/scripts/" || fail "cannot copy assets/lib into sandbox"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+H="$T/kit/scripts/notify.sh"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 export CLAUDE_CONFIG_DIR="$T/cfg"
 mkdir -p "$CLAUDE_CONFIG_DIR/agent-tiers/.state"
@@ -642,6 +655,35 @@ if [ -f "$STOP_WRAPPER" ]; then
 else
   echo "note: skipped case 26 (notify-stop.sh wrapper) - file not present in this kit copy"
 fi
+
+# 26b. kit-gate stand-down, notify.sh: marker present -> no output, exit 0, no notify-send call, logged;
+#      removed -> notifies again. --probe runs before the gate, so it answers the same with the marker.
+printf 'osc' > "$MODE_FILE"
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/notify"
+rm -f "$NOTIFY_SEND_CALLS"
+out="$(run "hello" permission_prompt "")"; rc=$?
+probe_rc=0; PATH="$FULL_PATH" sh "$H" --probe </dev/null >/dev/null 2>&1 || probe_rc=$?
+rm -f "$T/kit/.state/off/notify"
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "kit-gate stand-down (notify) must be silent exit 0 (rc=$rc out=$out)"
+[ ! -f "$NOTIFY_SEND_CALLS" ] || fail "kit-gate stand-down (notify) must not call notify-send"
+grep -qF 'kit-gate standdown notify:' "$T/guards.log" || fail "kit-gate stand-down (notify) must be logged"
+[ "$probe_rc" = 0 ] || fail "--probe with notify-send on PATH must still exit 0 under the marker (rc=$probe_rc)"
+probe_out="$(PATH="$BASE_TOOLS" sh "$H" --probe </dev/null 2>&1)"; probe_rc=$?
+[ "$probe_rc" = 3 ] || fail "--probe with no notify-send must still exit 3 under the marker (rc=$probe_rc)"
+[ -n "$(run "hello" permission_prompt "")" ] || fail "notify must emit again once the marker is removed"
+
+# 26c. kit-gate stand-down, notify-stop.sh (its own id; it execs notify.sh, whose gate also runs): a Stop
+#      payload that normally notifies produces nothing under the notify-stop marker, and logs the id.
+m="$(printf 'Ready.\noperator:want_input')"
+[ -n "$(jq -cn --arg m "$m" '{hook_event_name:"Stop", last_assistant_message:$m}' | CLAUDE_CODE_ENTRYPOINT=cli PATH="$FULL_PATH" sh "$T/kit/scripts/notify-stop.sh" 2>/dev/null)" ] \
+  || fail "test setup: the Stop payload must notify without the notify-stop marker"
+: > "$T/kit/.state/off/notify-stop"
+rm -f "$NOTIFY_SEND_CALLS"
+out="$(jq -cn --arg m "$m" '{hook_event_name:"Stop", last_assistant_message:$m}' | CLAUDE_CODE_ENTRYPOINT=cli PATH="$FULL_PATH" sh "$T/kit/scripts/notify-stop.sh" 2>/dev/null)"; rc=$?
+rm -f "$T/kit/.state/off/notify-stop"
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "kit-gate stand-down (notify-stop) must be silent exit 0 (rc=$rc out=$out)"
+[ ! -f "$NOTIFY_SEND_CALLS" ] || fail "kit-gate stand-down (notify-stop) must not call notify-send"
+grep -qF 'kit-gate standdown notify-stop:' "$T/guards.log" || fail "kit-gate stand-down (notify-stop) must be logged"
 
 # 27. Missing lib/notify-tag.sh (broken install) must still ping (fail toward notifying, never
 #     total silence), and the fallback body must NOT contain the raw operator: tag text - opus

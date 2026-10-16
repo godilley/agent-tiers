@@ -64,8 +64,9 @@
 # shared-library fix belongs to those guards too and is out of scope for this guard's own pass.
 # Self-check: git-add-stash-guard.selfcheck.sh.
 set -u
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"
 logdec() {
@@ -122,9 +123,17 @@ if [ -n "$ADD_SEGS" ]; then
   HIT="$(printf '%s\n' "$ADD_SEGS" | while IFS= read -r seg; do
     bare="$(strip_group "$seg")"
     n="$(guard_verb_optspan "$bare" add | wc -l | tr -d ' ')"
-    danger=0 haspath=0 hasdashA=0 hasdashu=0 exempt=0
+    danger=0 haspath=0 hasdashA=0 hasdashu=0 exempt=0 redir=0
     set -f
     for rawtok in $(printf '%s' "$bare" | tr -s '[:space:]' '\n' | grep -av '^[[:space:]]*$' | tail -n +"$((n + 1))"); do
+      # a BARE redirect operator token (`>`, `>>`, `&>`, `&>>`, `>&`, `>|`, `<`, optional fd digits)
+      # takes the NEXT token as its target, which is never a pathspec: `git add -A > /dev/null` and,
+      # once the quote-aware splitter stopped splitting on `&>`/`>|`, `git add -A &> /dev/null` read
+      # the target as a path and allowed the add (2026-10-14 review).
+      [ "$redir" = 1 ] && { redir=0; continue; }
+      case "${rawtok#"${rawtok%%[!0-9]*}"}" in
+        ('>'|'>>'|'&>'|'&>>'|'>&'|'>|'|'<') redir=1; continue ;;
+      esac
       tok="$(unquote_tok "$rawtok")"
       case "$tok" in
         (-n|--dry-run) exempt=1 ;;

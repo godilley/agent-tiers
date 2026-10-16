@@ -14,6 +14,11 @@
 #   worktree.sh down <name> [--merge] [--discard] [--keep-branch] [--base <ref>]
 #   worktree.sh list
 #
+# Carry set: `up` symlinks machine-local ignored files from the main checkout into the worktree. The
+# default set is in default_carry_list below. A repo's .claude/worktree-carry file REPLACES that set
+# wholesale (it does not add to it): list every path you want carried, defaults included. A file with
+# only comments or blank lines therefore carries nothing.
+#
 # down refuses to discard work: it dies if the worktree's branch has any commit not on its base
 # (the base recorded at `up` time, or an explicit --base, or the default branch as a last resort)
 # unless --discard is passed. <name> is the directory under .claude/worktrees/, whatever branch it
@@ -42,6 +47,10 @@
 # $MAIN/.claude/worktrees/<name>; `up` always names the branch <name>. `up` excludes .claude/worktrees/
 # itself in MAIN's info/exclude (once, on first use) so no OTHER worktree's directory ever shows up
 # as untracked noise in `git status` - this never depends on a global excludes file being edited.
+#
+# When CLAUDE_CODE_SESSION_ID is set, `up` also runs peer-guard.sh --mark-worktree on the new
+# worktree, so the session's first (foreign-repo) write there, e.g. from a subagent, is not denied by
+# peer-guard's arm 2.
 #
 # A symlinked node_modules (the npm/package-lock install branch) is SHARED with MAIN - installing
 # into it from inside a worktree writes into MAIN's node_modules too. An install failure never kills
@@ -113,8 +122,8 @@ append_exclude_once() {
   grep -qxF "$1" "$EXCLUDE_FILE" 2>/dev/null || printf '%s\n' "$1" >> "$EXCLUDE_FILE"
 }
 
-# Default carry set - one relative path per line. Overridden wholesale by a non-comment line in
-# $MAIN/.claude/worktree-carry when that file exists. Carry-file lines are normalised (CR and
+# Default carry set - one relative path per line. Replaced wholesale by
+# $MAIN/.claude/worktree-carry whenever that file exists (even one holding only comments). Carry-file lines are normalised (CR and
 # trailing whitespace stripped, leading/trailing slashes stripped) so a stray "/CLAUDE.md/" still
 # matches.
 default_carry_list() {
@@ -130,6 +139,8 @@ docs/_local
 EOF
 }
 
+# If the repo has .claude/worktree-carry it is the whole carry set (replaces the defaults, never
+# merged with them); only without that file do the defaults apply.
 carry_list() {
   cf="$MAIN/.claude/worktree-carry"
   if [ -f "$cf" ]; then
@@ -204,6 +215,16 @@ cmd_up() {
   # worktree's (and MAIN's) `git status` - excluded here, once, through the same dedup helper as the
   # carry lines, instead of depending on the user having edited a global excludes file.
   append_exclude_once "/.claude/worktrees/"
+
+  # --- peer-guard pre-clear -----------------------------------------------------------------------
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    PG_DIR="$(CDPATH= cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)"
+    if [ -n "$PG_DIR" ] && [ -f "$PG_DIR/peer-guard.sh" ]; then
+      sh "$PG_DIR/peer-guard.sh" --mark-worktree "$WT"
+      pg_rc=$?
+      [ "$pg_rc" -eq 0 ] || echo "WARN: peer-guard mark failed (exit $pg_rc) - a subagent's first write into $WT will be denied"
+    fi
+  fi
 
   # --- install ------------------------------------------------------------------------------------
   # Detected from WT's own checked-out base, not MAIN (an older base may lack a lockfile MAIN has

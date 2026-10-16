@@ -17,6 +17,16 @@ cp "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard-cmdpo
 cp "$SRC_DIR/review-gate-mode.sh" "$T/kit/scripts/" || fail "cannot copy review-gate-mode.sh"
 GUARD="$T/kit/scripts/review-gate-guard.sh"
 trap 'rm -rf "$T"' EXIT
+# kit-gate sandbox: the guard now reads live kit state and the user's settings through kit-gate.sh, so the
+# sandbox kit gets a rewritten gate (managed dir -> an empty temp dir) + options table, and every
+# kit-gate input is cleared. Guards log stays the sandbox kit's own .state/guards.log.
+mkdir -p "$T/kit/install" "$T/cfg" "$T/managed"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID AGENT_TIERS_GUARDS_LOG
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 # Every fixture starts with the agent-listing attachment the CLI writes into REAL transcripts (it quotes
 # agent descriptions, including one that names reviewer/advisor/codex-read and "/codex:review"), plus a
@@ -41,7 +51,7 @@ for r in repoA repoB; do (cd "$T/$r" && git init -q && git config user.email t@t
 CWD="$T/repoA"
 run() { # $1=cmd $2=transcript $3=session_id $4=agent_type(optional, 2026-08-27) -> ask|allow|deny ; cwd = $CWD
   out="$(jq -n --arg x "$1" --arg t "$2" --arg s "$3" --arg c "$CWD" --arg a "${4:-}" \
-         '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}} + (if $a != "" then {agent_type: $a} else {} end)' \
+         '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}} + (if $a != "" then {agent_type: $a} else {} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)' \
          | sh "$GUARD" 2>/dev/null || true)"
   if printf '%s' "$out" | grep -aq '"permissionDecision": *"deny"'; then echo deny
   elif printf '%s' "$out" | grep -aq '"permissionDecision": *"ask"'; then echo ask
@@ -183,7 +193,7 @@ ls "$T/kit/.state/review-gate-asked/" | grep -q '^s-sub__' && fail "a marker was
 printf 'ok   [ask]  a Lead-originated call (no agent_type) is unaffected\n'
 # the deny is worded at the worker, never the unattended-mode text - the two must not collide.
 OUT="$(jq -n --arg x 'git commit -m x' --arg t "$NOREV" --arg s s-sub3 --arg c "$CWD" --arg a worker \
-       '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+       '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}, agent_type: $a, agent_id: "a0test"}' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$OUT" | grep -aq 'DELEGATED AGENT' || fail "subagent deny reason missing the delegated-agent prefix"
 printf '%s' "$OUT" | grep -aq 'cannot judge triviality here or spawn a reviewer' || fail "subagent deny reason missing the worker-specific remedy"
 printf '%s' "$OUT" | grep -aq 'UNATTENDED MODE' && fail "subagent deny reason wrongly carries the unattended prefix"
@@ -191,7 +201,7 @@ printf 'ok   [deny] subagent deny reason is worded for the delegated agent, not 
 # both true at once: subagent wording wins (guard_ask_prefix's own precedence, pinned end-to-end here too).
 : > "$STATE_DIR/unattended.s-sub-both"
 OUT="$(jq -n --arg x 'git commit -m x' --arg t "$NOREV" --arg s s-sub-both --arg c "$CWD" --arg a worker \
-       '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+       '{session_id: $s, cwd: $c, transcript_path: $t, tool_input: {command: $x}, agent_type: $a, agent_id: "a0test"}' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$OUT" | grep -aq 'DELEGATED AGENT' || fail "subagent+unattended: subagent prefix should still win"
 printf '%s' "$OUT" | grep -aq 'UNATTENDED MODE' && fail "subagent+unattended: unattended prefix should not also appear"
 rm -f "$STATE_DIR/unattended.s-sub-both"
@@ -349,5 +359,17 @@ printf '%s' "$MOUT" | grep -aq '^push' || fail "review-gate-mode.sh should print
 printf '%s' "$MOUT" | grep -aq "agent-tiers.local.md" || fail "review-gate-mode.sh should name the source file, got: $MOUT"
 rm -f "$T/repoA/.claude/agent-tiers.local.md"
 printf 'ok   review-gate-mode.sh: prints the effective value and names its source, built-in default and a configured repo both correct\n'
+
+# kit-gate stand-down: marker <kit>/.state/off/review-gate-guard -> silent exit 0 + a kit-gate log line.
+
+sd_in() { jq -n --arg x "git commit -m x" --arg t "$NOREV" --arg c "$CWD" '{session_id: "s-sd", cwd: $c, transcript_path: $t, tool_input: {command: $x}}'; }
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"
+case "$sd_out" in *'"permissionDecision"'*) ;; *) fail "standdown control: expected a decision without the marker, got: $sd_out" ;; esac
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/review-gate-guard"; rm -f "$T/kit/.state/guards.log"
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+[ -z "$sd_out" ] && [ "$sd_rc" = 0 ] || fail "standdown: expected empty stdout + exit 0, got rc=$sd_rc out=$sd_out"
+grep -aq 'kit-gate standdown review-gate-guard:' "$T/kit/.state/guards.log" || fail "standdown: no kit-gate log line"
+rm -f "$T/kit/.state/off/review-gate-guard"
+printf 'ok   [standdown] marker present -> silent exit 0 + log line\n'
 
 echo "OK review-gate-guard: commit detection, independent-pass evidence, once-per-session marker, fail-open, deny-on-unresolvable-cd/-C-target (regardless of caller/attendance), ask-on-unresolved-git-dir/work-tree-target (2026-09-14 correction, converts like the normal review-pass ask), the unattended AND subagent ask->deny conversions (with correct precedence and never banking the marker), push/PR detection sharing the same marker as commit, review_gate: push passing a plain commit for any caller while still gating a publish act and never passing one carrying an unresolved --git-dir/--work-tree flag, a compound commit+push command always classified ship (never smuggled through as a quiet local commit, including via a heredoc-body decoy), a gh pr segment resolved with verb=pr (a literal -C in its title never misreads as an unresolvable cd target) and its ACT_WORD derived structurally (never misreads 'pull request' as 'push'), a typo/duplicate review_gate line falling back to commit, and review-gate-mode.sh printing the same value+source the guard itself would resolve, all hold"

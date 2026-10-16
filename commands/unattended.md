@@ -13,8 +13,11 @@ with nobody watching halts at the first `ask` and stays halted - possibly for ho
 
 With the flag set, for THIS session only:
 - `review-gate-guard` and `vcs-commit-guard` return their question as a **deny carrying the same
-  remedy text**, prefixed to say why. The requirement is unchanged and still enforced - a review-gate
-  deny still means "spawn a reviewer, then retry the commit", which you can act on without a human.
+  remedy text**, prefixed to say why. The requirement is unchanged and still enforced. For the Lead, a
+  review-gate deny means "spawn a reviewer, then retry the commit", which you can act on without a
+  human. A subagent cannot clear it that way: the gate looks for a reviewer spawn in the transcript
+  the hook payload names (the top session's), and the guard tells a subagent caller to leave the
+  commit as-is, stop, and report the deny text back. So a subagent hands the commit back to the Lead.
 - `EnterPlanMode` is denied (its confirmation has nobody to answer it; the brief IS the plan).
   `ExitPlanMode` is left untouched, never auto-allowed - a hook `allow` bypasses the whole permission
   chain, which is more permissive than this feature is meant to ever be (opus reviewer 2026-08-23,
@@ -34,12 +37,16 @@ change that; a worker's commit still converts. See `guard_caller_agent` in `guar
 
 ## Doing it
 
-1. **Find this session's id.** It is the basename (without `.jsonl`) of the newest transcript in
-   `~/.claude/projects/<slug>/`, where `<slug>` is the current directory path with `/` and `.`
-   replaced by `-`:
+1. **Find this session's id.** Use `$CLAUDE_CODE_SESSION_ID` first: current Claude Code puts it in the
+   Bash tool's environment (a hook gets the same value as `session_id` in its JSON payload):
+   `printf '%s\n' "$CLAUDE_CODE_SESSION_ID"`
+   Only when that is empty, fall back to guessing: the basename (without `.jsonl`) of the newest
+   transcript in `~/.claude/projects/<slug>/`, where `<slug>` is the current directory path with `/`
+   and `.` replaced by `-`:
    `ls -t ~/.claude/projects/$(pwd | sed 's#[/.]#-#g')/*.jsonl | head -1`
-   Cross-check it against a path the harness has already shown you this session (background task
-   output files are under a directory named for the session id) before writing anything.
+   The fallback can pick ANOTHER live session's transcript in the same project, so cross-check it
+   against a path the harness has already shown you this session (background task output files are
+   under a directory named for the session id) before writing anything.
 2. **`on`** - create the flag:
    `mkdir -p "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/.state" && : > "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/agent-tiers}/.state/unattended.<session-id>"`
 3. **`off`** - remove it:
@@ -54,9 +61,11 @@ change that; a worker's commit still converts. See `guard_caller_agent` in `guar
 - **Guessing the session id wrong is NOT safe.** A wrong id either applies to nothing (the run keeps
   halting - annoying, not dangerous) or names ANOTHER LIVE SESSION, whose asks then arrive as denies
   without its operator knowing. Two Leads sharing a repo is the exact case the per-session design
-  exists for, and "newest transcript" is precisely the resolution that gets it wrong there. So the
-  cross-check in step 1 is a HARD PRECONDITION, not an aside: no corroborating second source for the
-  id, no write. If several transcripts were touched in the same minute, say so and stop.
+  exists for, and "newest transcript" is precisely the resolution that gets it wrong there. So when
+  step 1 had to fall back to the newest transcript, its cross-check is a HARD PRECONDITION, not an
+  aside: no corroborating second source for the id, no write. An id taken from
+  `$CLAUDE_CODE_SESSION_ID` needs no second source. On the fallback route, if several transcripts
+  were touched in the same minute, say so and stop.
 - **Never set this on the operator's behalf as a convenience.** It is a statement about whether a
   human is present, which only the operator can make. If a guard just blocked you and you would like
   it to stop asking, that is not a reason to run this command - it is a reason to do what the remedy

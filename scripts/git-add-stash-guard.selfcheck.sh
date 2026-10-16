@@ -5,8 +5,20 @@
 # git stash subcommand other than list/show/--help.
 set -u
 DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
-GUARD="$DIR/git-add-stash-guard.sh"
-SBLOG="$(mktemp -d)/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG"
+# Run from a SANDBOX kit copy with a temp config dir and guards log, never the real kit's .state/, and
+# with every kit-gate input cleared so the user's own options cannot stand the hook down mid-check.
+SB="$(mktemp -d)" || { echo "SELF-CHECK FAILED: mktemp"; exit 1; }
+trap 'rm -rf "$SB"' EXIT
+mkdir -p "$SB/kit/install" "$SB/cfg" "$SB/managed"
+cp -R "$DIR" "$SB/kit/scripts"
+# Managed settings dir pointed at an empty temp dir, so a machine's real one cannot change the result.
+sed "s|^_kg_managed=.*|_kg_managed='$SB/managed'|" "$DIR/kit-gate.sh" > "$SB/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$SB/managed'" "$SB/kit/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$DIR/../install/options.tsv" "$SB/kit/install/"
+GUARD="$SB/kit/scripts/git-add-stash-guard.sh"
+SBLOG="$SB/guards.log"; export AGENT_TIERS_GUARDS_LOG="$SBLOG" CLAUDE_CONFIG_DIR="$SB/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 fail=0
 NL='
 '
@@ -40,6 +52,12 @@ check deny  'git add -A 2>/dev/null'   # a redirect word is not a pathspec (guar
 check deny  'git add -u 2>&1'
 check deny  'git add -A >out.log'
 check deny  'git add -u <in.txt'
+# 2026-10-14 review: a bare redirect operator's target is not a pathspec, and a comment apostrophe
+# must not merge the next line into the comment's segment.
+check deny  "# Stage what's changed${NL}git add -A"
+check deny  'git add -A &> /dev/null'
+check deny  'git add -A >| log'
+check deny  'git add -A > /dev/null'
 
 # should DENY: stash, any subcommand but list/show/--help, including bare
 check deny  'git stash'
@@ -87,5 +105,19 @@ grep -aqE '^[^ ]+ git-add-stash-guard deny: .*\[sid=sess-gs\]$' "$SBLOG" && prin
 # the trailing-)-hiding-a-real-subcommand fix, confirmed both ways.
 check deny '(git stash pop)'
 check allow '(git stash list)'
+
+# kit-gate stand-down: a marker under the sandbox kit's .state/off/ silences the hook (no output, exit 0,
+# one guards.log line); the control run without the marker proves the payload does emit.
+SD_PAYLOAD="$(jq -n '{tool_name:"Bash", session_id:"sess-sd", tool_input:{command:"git add -A"}}')"
+mkdir -p "$SB/kit/.state/off"
+sd_ctl="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null || true)"
+: > "$SB/kit/.state/off/git-add-stash-guard"
+sd_out="$(printf '%s' "$SD_PAYLOAD" | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+rm -f "$SB/kit/.state/off/git-add-stash-guard"
+if [ -n "$sd_ctl" ] && [ -z "$sd_out" ] && [ "$sd_rc" = 0 ] && grep -aq 'kit-gate standdown git-add-stash-guard:' "$SBLOG"; then
+  printf 'ok   kill-switch marker stands the hook down (empty stdout, exit 0, log line)\n'
+else
+  printf 'FAIL kill-switch marker did not stand the hook down\n'; fail=1
+fi
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

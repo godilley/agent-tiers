@@ -10,14 +10,31 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP install-flat: jq absent (seam is jq-only)"; exit 0; }
+unset CLAUDE_CONFIG_DIR   # never inherit the caller's profile; cases that need one set it per call
+# Every case skips the installer's post-wire proof loop (it re-runs each hook selfcheck per install);
+# case H1 is the one that runs it.
+AGENT_TIERS_TEST_SKIP_HOOK_PROOF=1; export AGENT_TIERS_TEST_SKIP_HOOK_PROOF
 
 T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
 cleanup() { chmod -R u+rwX "$T" 2>/dev/null || true; rm -rf "$T"; }
+trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 fail() { printf 'FAIL: %s\n' "$1"; cleanup; exit 1; }
 
 mkdir -p "$T/.claude"
 cp -a "$ROOT" "$T/.claude/agent-tiers" || fail "could not copy kit"
 rm -rf "$T/.claude/agent-tiers/.state"
+# Point the copy's managed-settings dirs at an empty temp dir so a host's real /etc/claude-code (or the
+# macOS path) cannot change any case. Only demanded when the installer under test has the variable
+# (an older installer, run for before/after proof, does not).
+mkdir -p "$T/managed"
+if grep -q '^IF_MANAGED=' "$T/.claude/agent-tiers/scripts/install-flat.sh"; then
+  sed "s|^IF_MANAGED=.*|IF_MANAGED='$T/managed'|" "$T/.claude/agent-tiers/scripts/install-flat.sh" > "$T/if.tmp" \
+    && cat "$T/if.tmp" > "$T/.claude/agent-tiers/scripts/install-flat.sh"
+  grep -qxF "IF_MANAGED='$T/managed'" "$T/.claude/agent-tiers/scripts/install-flat.sh" || fail "IF_MANAGED not rewritten in the kit copy"
+fi
+# IFSC_ONLY=<P1|P2|P3|P4|P5|U1|U2|L1|B1|F1|F2|F3|H1> runs just that new case (skips cases 1-13) so each can be
+# shown failing alone against an older installer. Unset runs everything.
+only() { [ -z "${IFSC_ONLY:-}" ] || [ "$IFSC_ONLY" = "$1" ]; }
 I="$T/.claude/agent-tiers/scripts/install-flat.sh"
 S="$T/.claude/settings.json"
 L="$T/.claude/agent-tiers/.state/integrations.json"
@@ -38,6 +55,7 @@ count() { # $1=event $2=cmd -> how many entries under that event carry that comm
     '[(.hooks[$ev] // [])[] | (.hooks? // [])[] | select(.command == $c)] | length' "$S"
 }
 
+if [ -z "${IFSC_ONLY:-}" ]; then
 # --- 1. core auto-wire, consent withheld until asked -----------------------------------------------
 echo '{}' > "$S"
 install
@@ -71,11 +89,9 @@ PATH="$NOTIFYSTUB:$PATH" install --with-authorship-record --with-precompact-guar
 [ "$(count Notification 'sh "$HOME/.claude/agent-tiers/scripts/notify.sh"')" = 1 ] \
   || fail "--with-notify should wire the Notification row"
 [ "$(jq -r '.["notify"].event' "$L")" = Notification ] || fail "ledger should record notify's event"
-# Unwire again immediately: every later install() call below re-runs EVERY wired row's own
-# selfcheck (the proof step), and notify.selfcheck.sh alone spends real wall-clock seconds on
-# delayed-click assertions - leaving these two wired would multiply that cost across every
-# remaining case in this file for no additional coverage (the wiring behaviour is already proven
-# above).
+# Unwire again immediately so later cases start from the core rows only. (Written when every later
+# install() re-ran each wired row's selfcheck; AGENT_TIERS_TEST_SKIP_HOOK_PROOF, exported at the top,
+# now skips that proof step here, so the remaining reason is a clean baseline. Case H1 runs the loop.)
 install --without-authorship-record --without-precompact-guard --without-notify
 
 # --- 3. THE SILENT ONE: the same command present under a DIFFERENT event must not be mistaken for
@@ -118,6 +134,8 @@ jq --arg c "$CG" '.hooks.PreToolUse |= (map(.hooks |= map(select(.command != $c)
   "$S" > "$S.t" && mv "$S.t" "$S"
 install --with-codex-guard
 grep -q 'codex-guard REWIRED.*matcher drift' "$T/out" || fail "matcher drift should be reported as a rewire"
+# An unwired consent row names its group option (the CLI route), not only the per-row flag (row P1).
+grep -q 'memory-write-gate available, NOT wired.*configure --set group_memory=true' "$T/out" || fail "an unwired consent row should name its group option"
 [ "$(jq --arg c "$CG" '[.hooks.PreToolUse[] | select(.matcher=="Bash") | .hooks[] | select(.command==$c)] | length' "$S")" = 1 ] || fail "drifted row should be moved under the target matcher"
 [ "$(jq --arg c "$CG" '[.hooks.PreToolUse[] | select(.matcher=="Write") | .hooks[] | select(.command==$c)] | length' "$S")" = 0 ] || fail "drifted row should not remain under the old matcher"
 [ "$(count PreToolUse "$CG")" = 1 ] || fail "matcher rewire must not duplicate the row"
@@ -138,7 +156,7 @@ grep -q "ledger was invalid" "$T/out" || fail "non-object ledger should be moved
 
 # --- 8. invalid settings.json: skip all wiring rather than write over it -----------------------------
 cp "$S" "$T/settings.good"; printf '{ broken' > "$S"
-install
+if HOME="$T" sh "$I" >"$T/out" 2>&1; then fail "invalid settings.json skips all wiring, so the install must exit non-zero"; fi
 grep -q "SKIPPING all hook wiring" "$T/out" || fail "invalid settings.json should skip wiring"
 grep -q "broken" "$S" || fail "invalid settings.json must be left exactly as found"
 cp "$T/settings.good" "$S"
@@ -219,7 +237,7 @@ grep -q 'not in this kit copy' "$T/out" || fail "missing-requested-id error shou
 [ "$(count PreToolUse 'sh "$HOME/.claude/agent-tiers/scripts/kit-leak-guard.sh"')" = 0 ] || fail "must not wire a row whose script is absent"
 HOME="$T" sh "$I" >"$T/out" 2>&1 || { cat "$T/out"; fail "unrequested missing row must still soft-skip (plain install should succeed)"; }
 
-# --- 12. memory-content-lint HOOK_ROWS row (2026-09): consent-gated, wires under PostToolUse with the
+# --- 12. memory-content-lint hook row (2026-09): consent-gated, wires under PostToolUse with the
 #         Write|Edit|MultiEdit matcher (MultiEdit added per Lead decision: legacy per permissions.md, but
 #         still a live tool the CLI accepts - errors.md/permissions.md do not say it is refused) and not
 #         before --with- is asked for.
@@ -284,6 +302,258 @@ HOME="$T" sh "$I" --with-authorship-record --with-precompact-guard >"$T/out" 2>&
   || { cat "$T/out"; fail "--with-authorship-record --with-precompact-guard together should succeed"; }
 [ "$(count PreCompact 'sh "$HOME/.claude/agent-tiers/scripts/precompact-guard.sh"')" = 1 ] \
   || fail "precompact-guard should be wired when authorship-record is requested alongside it"
+
+# --- 13. install/options.tsv absent -> the installer exits non-zero before writing settings or ledger.
+OT="$T/.claude/agent-tiers/install/options.tsv"
+echo '{}' > "$S"; rm -f "$L"
+mv "$OT" "$T/options.tsv.bak"
+if HOME="$T" sh "$I" >"$T/out" 2>&1; then fail "missing install/options.tsv must make the installer exit non-zero"; fi
+grep -q 'options.tsv' "$T/out" || fail "missing options.tsv error should name the file (got: $(head -c 300 "$T/out"))"
+[ "$(cat "$S")" = '{}' ] || fail "settings.json must be untouched when options.tsv is missing"
+[ ! -e "$L" ] || fail "ledger must not be written when options.tsv is missing"
+mv "$T/options.tsv.bak" "$OT"
+
+# --- 13b. a malformed hook row (6 fields, bad requires syntax, unknown required id) makes the installer exit
+#     non-zero, naming options.tsv, before it writes settings or ledger. The file is restored after each.
+cp "$OT" "$T/options.tsv.bak"
+for bad in 'cut' 'syntax' 'unknown' 'self'; do
+  msg=''
+  case "$bad" in
+    cut) awk -F'\t' -v OFS='\t' '$1 == "hook" && !d { print $1, $2, $3, $4, $5, $6; d = 1; next } 1' "$T/options.tsv.bak" > "$OT"; msg='needs 7 fields' ;;
+    syntax) awk -F'\t' -v OFS='\t' '$1 == "hook" && !d { $7 = "a b"; d = 1 } 1' "$T/options.tsv.bak" > "$OT"; msg='requires column is not' ;;
+    unknown) awk -F'\t' -v OFS='\t' '$1 == "hook" && !d { $7 = "no-such-hook"; d = 1 } 1' "$T/options.tsv.bak" > "$OT"; msg='requires unknown hook id' ;;
+    self) awk -F'\t' -v OFS='\t' '$1 == "hook" && !d { $7 = $2; d = 1 } 1' "$T/options.tsv.bak" > "$OT"; msg='requires itself' ;;
+  esac
+  echo '{}' > "$S"; rm -f "$L"
+  if HOME="$T" sh "$I" >"$T/out" 2>&1; then fail "13b ($bad): a bad hook row must make the installer exit non-zero"; fi
+  grep -q 'options.tsv' "$T/out" || fail "13b ($bad): error should name options.tsv (got: $(head -c 300 "$T/out"))"
+  [ -z "$msg" ] || grep -q "$msg" "$T/out" || fail "13b ($bad): error should contain '$msg' (got: $(head -c 300 "$T/out"))"
+  [ "$(cat "$S")" = '{}' ] || fail "13b ($bad): settings.json must be untouched"
+  [ ! -e "$L" ] || fail "13b ($bad): ledger must not be written"
+done
+cat "$T/options.tsv.bak" > "$OT"; rm -f "$T/options.tsv.bak"
+fi   # end of cases 1-13 (skipped under IFSC_ONLY)
+
+try() { HOME="$T" sh "$I" "$@" >"$T/out" 2>&1; }
+reset() { mkdir -p "$(dirname "$L")"; echo '{}' > "$S"; echo '{}' > "$L"; rm -f "$S".bak-*; rm -rf "$T/.claude/commands" "$T/.claude/skills" "$T/.claude/agents"; }
+ENABLED='{"enabledPlugins":{"agent-tiers@m":true}}'
+
+# --- P1. a plugin enabled in the profile's settings.json: every install mode refuses, nothing written
+if only P1; then
+  reset; echo "$ENABLED" > "$S"
+  for a in "" "--with-codex-guard"; do
+    # shellcheck disable=SC2086
+    if try $a; then fail "P1: install ($a) must be refused while agent-tiers@m is enabled in settings.json"; fi
+    [ "$(cat "$S")" = "$ENABLED" ] || fail "P1: refused install must leave settings.json byte-identical ($a)"
+    [ ! -e "$T/.claude/commands" ] && [ ! -e "$T/.claude/skills" ] || fail "P1: refused install must write no skills/commands ($a)"
+    ls "$S".bak-* >/dev/null 2>&1 && fail "P1: refused install must take no backup ($a)"
+    grep -q 'agent-tiers@m' "$T/out" && grep -q -- '--unwire-only' "$T/out" || fail "P1: refusal should name agent-tiers@m and --unwire-only (got: $(head -c 300 "$T/out"))"
+  done
+fi
+
+# --- P2. enabled only in a managed file; a later managed-settings.d file can switch it off
+if only P2; then
+  reset; mkdir -p "$T/managed/managed-settings.d"
+  echo "$ENABLED" > "$T/managed/managed-settings.json"
+  if try; then fail "P2: a plugin enabled only in a managed file must refuse the install"; fi
+  grep -q 'managed-settings.json' "$T/out" || fail "P2: refusal should name the managed file (got: $(head -c 300 "$T/out"))"
+  echo '{"enabledPlugins":{"agent-tiers@m":false}}' > "$T/managed/managed-settings.d/x.json"
+  try || { cat "$T/out"; fail "P2: a later managed file setting it false must lift the refusal"; }
+  rm -rf "$T/managed"; mkdir -p "$T/managed"
+fi
+
+# --- P3. disabled, or some other plugin enabled: not a refusal
+if only P3; then
+  reset; echo '{"enabledPlugins":{"agent-tiers@m":false}}' > "$S"
+  try || { cat "$T/out"; fail "P3: agent-tiers@m=false must not refuse"; }
+  reset; echo '{"enabledPlugins":{"other@m":true}}' > "$S"
+  try || { cat "$T/out"; fail "P3: an unrelated enabled plugin must not refuse"; }
+fi
+
+# --- P4. --check and --unwire-only still run with the plugin enabled
+if only P4; then
+  reset; try || { cat "$T/out"; fail "P4: setup install failed"; }
+  echo "$ENABLED" > "$S"
+  try --check || { cat "$T/out"; fail "P4: --check must run with the plugin enabled"; }
+  try --unwire-only || { cat "$T/out"; fail "P4: --unwire-only must run (exit 0) with the plugin enabled"; }
+fi
+
+# --- P5. a plugin-cache kit root refuses; the same tree without installed_plugins.json does not
+if only P5; then
+  reset
+  PC="$T/pc/plugins/cache/mk/agent-tiers/1.0.0"; mkdir -p "$PC"
+  cp -a "$T/.claude/agent-tiers/." "$PC/" && rm -rf "$PC/.state" || fail "P5: could not build the plugin-cache copy"
+  : > "$T/pc/plugins/installed_plugins.json"
+  if HOME="$T" CLAUDE_CONFIG_DIR="$T/pcprofile" sh "$PC/scripts/install-flat.sh" >"$T/out" 2>&1; then
+    fail "P5: an install from a plugin-cache kit root must be refused"
+  fi
+  [ ! -e "$T/pcprofile/settings.json" ] || fail "P5: refused install must not create settings.json"
+  [ ! -e "$T/pcprofile/skills" ] && [ ! -e "$T/pcprofile/commands" ] || fail "P5: refused install must write no skills/commands"
+  grep -q 'agent-tiers@mk' "$T/out" || fail "P5: refusal should name agent-tiers@mk (got: $(head -c 300 "$T/out"))"
+  rm -f "$T/pc/plugins/installed_plugins.json"
+  HOME="$T" CLAUDE_CONFIG_DIR="$T/pcprofile" sh "$PC/scripts/install-flat.sh" >"$T/out" 2>&1 \
+    || { cat "$T/out"; fail "P5: without installed_plugins.json the same tree is not a plugin route and must install"; }
+fi
+
+# --- U1. --unwire-only removes only hook rows and creates/links/copies nothing
+if only U1; then
+  reset; install; install --with-codex-guard
+  jq '.hooks.Stop = ((.hooks.Stop // []) + [{hooks:[{type:"command",command:"echo keep"}]}])' "$S" > "$S.t" && mv "$S.t" "$S"
+  rm -f "$T/.claude/skills/agent-tiers"; mkdir -p "$T/.claude/skills/agent-tiers"; echo x > "$T/.claude/skills/agent-tiers/keep"
+  rm -f "$T/.claude/agent-tiers/kit-config.md"
+  try --unwire-only --without-codex-guard || { cat "$T/out"; fail "U1: --unwire-only --without-codex-guard should succeed"; }
+  [ "$(count PreToolUse "$CG")" = 0 ] || fail "U1: codex-guard row should be gone"
+  [ "$(count SessionStart 'sh "$HOME/.claude/agent-tiers/scripts/resume-inject.sh"')" = 1 ] || fail "U1: core rows must stay when only codex-guard is named"
+  [ -f "$T/.claude/skills/agent-tiers/keep" ] || fail "U1: unwire-only must not touch skills"
+  ls -d "$T/.claude/skills/"*.bak-* >/dev/null 2>&1 && fail "U1: unwire-only must not back up/replace skills"
+  [ ! -e "$T/.claude/agent-tiers/kit-config.md" ] || fail "U1: unwire-only must not recreate kit-config.md"
+  jq -e '.["codex-guard"]' "$L" >/dev/null 2>&1 && fail "U1: ledger should drop the codex-guard row"
+  grep -q 'done (unwire only)' "$T/out" || fail "U1: final line should be 'done (unwire only).'"
+  try --unwire-only || { cat "$T/out"; fail "U1: bare --unwire-only should succeed"; }
+  for id in $(awk -F'\t' '$1 == "hook" { print $2 }' "$T/.claude/agent-tiers/install/options.tsv"); do
+    [ "$(jq --arg n "/scripts/$id.sh" '[.. | strings | select(contains($n))] | length' "$S")" = 0 ] \
+      || fail "U1: bare --unwire-only left a row for $id"
+  done
+  [ "$(count Stop 'echo keep')" = 1 ] || fail "U1: an unrelated row must survive --unwire-only"
+fi
+
+# --- U2. --unwire-only edge cases: no settings file, invalid JSON, a forbidden flag mix
+if only U2; then
+  reset; rm -f "$S"
+  try --unwire-only || { cat "$T/out"; fail "U2: absent settings.json should be a clean no-op (exit 0)"; }
+  [ ! -e "$S" ] || fail "U2: unwire-only must not create settings.json"
+  printf '{ broken' > "$S"
+  if try --unwire-only; then fail "U2: invalid settings.json must make --unwire-only exit non-zero"; fi
+  [ "$(cat "$S")" = '{ broken' ] || fail "U2: invalid settings.json must be left as found"
+  echo '{}' > "$S"; rm -f "$S".bak-*
+  if try --unwire-only --with-codex-guard; then fail "U2: --unwire-only with --with-* must be a usage error"; fi
+  [ "$(cat "$S")" = '{}' ] && ! ls "$S".bak-* >/dev/null 2>&1 || fail "U2: the usage error must write nothing"
+fi
+
+# --- L1. a symlinked settings.json is written through, never replaced
+if only L1; then
+  reset; mv "$S" "$T/real-settings.json" && ln -s "$T/real-settings.json" "$S" || fail "L1: could not build the symlink"
+  RS="$T/real-settings.json"
+  try --with-codex-guard || { cat "$T/out"; fail "L1: wire through a symlink failed"; }
+  [ -L "$S" ] || fail "L1: --with-codex-guard replaced the symlinked settings.json"
+  [ "$(jq --arg c "$CG" '[.hooks.PreToolUse[]?.hooks[]? | select(.command == $c)] | length' "$RS")" = 1 ] || fail "L1: the link target should hold the new row"
+  try --without-codex-guard || { cat "$T/out"; fail "L1: remove through a symlink failed"; }
+  [ -L "$S" ] || fail "L1: --without-codex-guard replaced the symlinked settings.json"
+  [ "$(jq --arg c "$CG" '[.hooks.PreToolUse[]?.hooks[]? | select(.command == $c)] | length' "$RS")" = 0 ] || fail "L1: the link target should have lost the row"
+  try --unwire-only || { cat "$T/out"; fail "L1: unwire through a symlink failed"; }
+  [ -L "$S" ] || fail "L1: --unwire-only replaced the symlinked settings.json"
+  [ "$(jq '[.. | strings | select(contains("/scripts/resume-inject.sh"))] | length' "$RS")" = 0 ] || fail "L1: the link target should have lost the core rows"
+  rm -f "$S" "$RS"; echo '{}' > "$S"
+fi
+
+# A stub `date` for the backup-name cases: the one format pick_backup asks for is pinned to a fixed
+# second, so a case can pre-create the colliding names without racing the clock (a slow host used to
+# reach pick_backup after the pre-created names, and the case passed without testing anything).
+DS="$T/datestub"; mkdir -p "$DS"
+{ echo '#!/bin/sh'; echo "case \"\$1\" in +%Y%m%d-%H%M%S) echo 20300101-000000 ;; *) exec $(command -v date) \"\$@\" ;; esac"; } > "$DS/date"
+chmod +x "$DS/date"
+BK="$S.bak-20300101-000000"
+try_pinned() { ( PATH="$DS:$PATH"; export PATH; try "$@" ); }
+
+# --- B1. a backup name already taken (by the CLI, same second) is never overwritten
+if only B1; then
+  reset
+  echo cli-backup > "$BK"; echo cli-backup > "$BK-2"
+  try_pinned || { cat "$T/out"; fail "B1: installer failed"; }
+  [ -f "$BK-3" ] || fail "B1: precondition not met: the installer did not pick the pinned name's -3 slot (stub date unused?)"
+  for f in "$BK" "$BK-2"; do
+    [ "$(cat "$f")" = cli-backup ] || fail "B1: pre-existing backup $f was overwritten"
+  done
+  ls -1 "$S".bak-* | grep -qvE 'settings\.json\.bak-[0-9]{8}-[0-9]{6}(-[2-9])?$' && fail "B1: backup names must match the CLI scheme"
+fi
+
+# --- F1. partial failures exit non-zero and are worded truthfully
+if only F1; then
+  # (b) every backup name for this second taken: hook wiring is skipped, which must not exit 0
+  reset
+  echo x > "$BK"; for k in 2 3 4 5 6 7 8 9; do echo x > "$BK-$k"; done
+  if try_pinned; then fail "F1b: install skipped for exhausted backups but exited 0"; fi
+  grep -q 'too many settings backups' "$T/out" || fail "F1b: precondition not met: no 'too many settings backups' line (got: $(head -c 300 "$T/out"))"
+  # (a)+(c) a read-only symlink target: the removal write fails AND so does the restore
+  reset
+  if [ "$(id -u)" = 0 ]; then
+    echo "note F1a/F1c: running as root, a read-only file does not stop the write - cases not exercised"
+  else
+    RS="$T/real-settings.json"; mv "$S" "$RS" && ln -s "$RS" "$S" || fail "F1: could not build the symlink"
+    try --with-codex-guard || { cat "$T/out"; fail "F1: setup wire failed"; }
+    chmod 444 "$RS"
+    if try --without-codex-guard; then chmod 644 "$RS"; fail "F1a: a failed --without removal must not exit 0"; fi
+    chmod 644 "$RS"
+    grep -q 'codex-guard removal FAILED' "$T/out" || fail "F1a: precondition not met: no removal FAILED line (got: $(head -c 400 "$T/out"))"
+    grep 'removal FAILED' "$T/out" | grep -q 'settings.json unchanged' && fail "F1c: restore failed too, yet the line claims settings.json is unchanged"
+    grep 'removal FAILED' "$T/out" | grep -q "backup $S.bak-" || fail "F1c: the line must name the surviving backup (got: $(grep 'removal FAILED' "$T/out"))"
+    rm -f "$S" "$RS"; echo '{}' > "$S"
+  fi
+fi
+
+# --- F3. install mode: invalid settings.json (wiring skipped) and a failed wire also exit non-zero
+if only F3; then
+  reset; printf '{ broken' > "$S"
+  if try; then fail "F3: invalid settings.json skipped all wiring but the install exited 0"; fi
+  grep -q 'SKIPPING all hook wiring' "$T/out" || fail "F3: precondition not met: no SKIPPING line (got: $(head -c 300 "$T/out"))"
+  grep -q 'finished with errors' "$T/out" || fail "F3: expected the end-of-run 'finished with errors' line"
+  reset
+  if [ "$(id -u)" = 0 ]; then
+    echo "note F3 (wire FAILED): running as root, a read-only file does not stop the write - not exercised"
+  else
+    RS="$T/real-settings.json"; mv "$S" "$RS" && ln -s "$RS" "$S" || fail "F3: could not build the symlink"
+    chmod 444 "$RS"
+    if try --with-codex-guard; then chmod 644 "$RS"; fail "F3: a failed wire must not exit 0"; fi
+    chmod 644 "$RS"
+    grep -q 'codex-guard wire FAILED' "$T/out" || fail "F3: precondition not met: no wire FAILED line (got: $(head -c 400 "$T/out"))"
+    grep -q 'finished with errors' "$T/out" || fail "F3: expected the end-of-run 'finished with errors' line"
+    rm -f "$S" "$RS"; echo '{}' > "$S"
+  fi
+fi
+
+# --- F2. plugin-refusal edge cases: a key with a space, a non-object enabledPlugins
+if only F2; then
+  reset; echo '{"enabledPlugins":{"agent-tiers@my mk":true}}' > "$S"
+  if try; then fail "F2d: a plugin key with a space must still refuse"; fi
+  grep -qF 'agent-tiers@my mk is enabled' "$T/out" || fail "F2d: the whole key must be named (got: $(head -c 300 "$T/out"))"
+  reset; echo '{"enabledPlugins":"agent-tiers@m"}' > "$S"
+  if try; then fail "F2e: a non-object enabledPlugins must still refuse"; fi
+  grep -q 'not a JSON object' "$T/out" || fail "F2e: expected a 'not a JSON object' reason (got: $(head -c 300 "$T/out"))"
+  grep -q 'not valid JSON' "$T/out" && fail "F2e: valid JSON must not be called invalid"
+  reset; printf '{"x":"agent-tiers@", ' > "$S"
+  if try; then fail "F2e: invalid JSON mentioning agent-tiers@ must refuse"; fi
+  grep -q 'not valid JSON' "$T/out" || fail "F2e: control: genuinely invalid JSON should still say so (got: $(head -c 300 "$T/out"))"
+fi
+
+# --- H1. the post-wire proof loop runs (and reports a failing hook selfcheck) unless the test knob is set
+if only H1; then
+  reset
+  KS="$T/.claude/agent-tiers/scripts"; rm -f "$T/proof.log"; : > "$T/h1.ids"; : > "$T/h1.saved"
+  first=""; n=0
+  for id in $(awk -F'\t' '$1=="hook" && $3=="core"{print $2}' "$T/.claude/agent-tiers/install/options.tsv"); do
+    [ -f "$KS/$id.selfcheck.sh" ] || continue
+    cp -p "$KS/$id.selfcheck.sh" "$T/h1.save.$id"; echo "$id" >> "$T/h1.saved"
+    if [ -z "$first" ]; then first="$id"; rc=1; else rc=0; echo "$id" >> "$T/h1.ids"; fi
+    printf '#!/usr/bin/env sh\necho %s >> "%s/proof.log"\nexit %s\n' "$id" "$T" "$rc" > "$KS/$id.selfcheck.sh"
+    n=$((n + 1))
+  done
+  [ "$n" -ge 2 ] || fail "H1: expected at least 2 core hook ids with a selfcheck, found $n"
+  ( unset AGENT_TIERS_TEST_SKIP_HOOK_PROOF; try ) || { cat "$T/out"; fail "H1: installer must exit 0 even when a hook selfcheck fails (knob unset)"; }
+  grep -q "$first selfcheck FAILED" "$T/out" || fail "H1: expected a '$first selfcheck FAILED' line (knob unset)"
+  while read -r id; do
+    grep -q "$id selfcheck OK" "$T/out" || fail "H1: expected a '$id selfcheck OK' line (knob unset)"
+  done < "$T/h1.ids"
+  while read -r id; do
+    grep -qx "$id" "$T/proof.log" 2>/dev/null || fail "H1: expected stub for $id to have run (knob unset)"
+  done < "$T/h1.saved"
+  grep -q 'proof SKIPPED' "$T/out" && fail "H1: no 'proof SKIPPED' line expected with the knob unset"
+  rm -f "$T/proof.log"; reset
+  AGENT_TIERS_TEST_SKIP_HOOK_PROOF=1 try || { cat "$T/out"; fail "H1: installer must exit 0 with the knob set"; }
+  grep -q 'proof SKIPPED' "$T/out" || fail "H1: expected a 'proof SKIPPED' line with the knob set"
+  grep -q 'selfcheck OK\|selfcheck FAILED' "$T/out" && fail "H1: no selfcheck OK/FAILED line expected with the knob set"
+  [ ! -e "$T/proof.log" ] || fail "H1: no hook selfcheck may run with the knob set (proof.log exists)"
+  while read -r id; do cp -p "$T/h1.save.$id" "$KS/$id.selfcheck.sh"; done < "$T/h1.saved"
+fi
 
 cleanup
 echo "OK install-flat: seam wires, scopes, rewires and reports - and never claims a row it did not write (nor one it was asked for and could not)"

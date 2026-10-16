@@ -105,12 +105,12 @@ Worker slice. Keeps a codebase versatile + open to whatever comes next instead o
 - An **Advisor** (`advisor`, opus) = one bounded question OR one bounded design/plan needing real
   reasoning → returns a recommendation/plan, never edits. Announce-only under the v3 ladder.
 - A **Reviewer** (`reviewer`, opus) = curates several cheap auditors' noisy drafts into one trustworthy list
-  (cut false positives, re-rate severity, dedup, add misses) → writes one curated file, never edits code.
+  (cut false positives, re-rate severity, dedup, add misses) → returns the list inline, never edits code.
 - **`codex-write`** (cross-engine WRITE path, per-host where codex is authed) = Claude briefs, Codex writes in
   an ISOLATED worktree, Claude verifies + owns the review (never Codex-reviews-its-own-code; interface-band Lead
   -> opus Reviewer for any non-trivial diff). Codex REVIEW = the read-only `codex` plugin. GATED when it spawns
   a broker / writes / runs background (see the agent-tiers skill's cross-provider section).
 - The **Lead** (main chat, a per-session capability BAND) keeps the knowledge, routes, verifies, synthesises,
-  decides. Don't delegate the deciding. An **interface-band** Lead (sonnet default) routes deep thinking DOWN
+  decides. Don't delegate the deciding. An **interface-band** Lead (sonnet) routes deep thinking DOWN
   instead of grinding it at sonnet depth; a **reasoning-band** Lead (opus, for architecture/synthesis) holds
   the depth and reaches OUT for independence (cross-lab / fable) instead.

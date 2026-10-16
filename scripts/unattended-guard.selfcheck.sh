@@ -12,9 +12,17 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq absent (guard fails open by de
 
 TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
 T="${TMPBASE}/at-unattended-selfcheck.$$"
-rm -rf "$T"; mkdir -p "$T/kit/scripts" "$T/kit/.state" || { echo "FAIL cannot build sandbox"; exit 1; }
+rm -rf "$T"; mkdir -p "$T/kit/scripts" "$T/kit/.state" "$T/kit/install" "$T/managed" "$T/cfg" || { echo "FAIL cannot build sandbox"; exit 1; }
 cp "$SRC_DIR/unattended-guard.sh" "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || { echo "FAIL cannot copy"; exit 1; }
 GUARD="$T/kit/scripts/unattended-guard.sh"
+# kit-gate.sh runs from this sandbox kit too: managed dir pointed at an empty temp dir, config dir in the
+# sandbox, every kit-gate input cleared so the user's own options cannot stand the guard down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || { echo "FAIL _kg_managed not rewritten"; exit 1; }
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 LOG="$T/kit/.state/guards.log"; export AGENT_TIERS_GUARDS_LOG="$LOG"
 # exercise the env seam itself (its only consumer): the flag dir is resolved from it, not from $0
 export AGENT_TIERS_STATE_DIR="$T/kit/.state"
@@ -64,6 +72,14 @@ printf 'not json' | sh "$GUARD" >/dev/null 2>&1 && ok "unparsable payload exits 
 
 # 7. Any other tool is untouched even when flagged (this guard owns plan mode only).
 [ "$(run Bash sess-u)" = silent ] && ok "an unrelated tool is untouched under the flag" || bad "guard fired on an unrelated tool"
+
+# 8. kit-gate stand-down: marker present -> the flagged session's deny is not issued; exit 0, no output, logged.
+mkdir -p "$T/kit/.state/off" && : > "$T/kit/.state/off/unattended-guard"
+out="$(jq -n '{tool_name: "EnterPlanMode", session_id: "sess-u", tool_input: {}}' | sh "$GUARD" 2>/dev/null)"; rc=$?
+rm -f "$T/kit/.state/off/unattended-guard"
+[ "$rc" = 0 ] && [ -z "$out" ] && grep -aq 'kit-gate standdown unattended-guard:' "$LOG" \
+  && ok "kit-gate stand-down: no output, exit 0, logged" || bad "kit-gate stand-down failed (rc=$rc out=$out)"
+[ "$(run EnterPlanMode sess-u)" = deny ] && ok "marker removed: deny returns" || bad "deny did not return after marker removal"
 
 [ "$fail" = 0 ] && echo "OK unattended-guard: the plan-mode and question arms fire only for a flagged session, only ever DENY (never allow), session ids are path-safe, decisions are logged, fail-open holds" \
   || { echo "SELF-CHECK FAILED"; exit 1; }

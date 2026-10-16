@@ -10,7 +10,7 @@
 # simple-rules-guard.selfcheck.sh) - the real kit's .state/ is never touched. guard-cmdpos.sh is also
 # copied alongside it (the guard now sources it) so this fixture is self-contained.
 set -u
-unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS XDG_RUNTIME_DIR
+unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS XDG_RUNTIME_DIR CLAUDE_CODE_SESSION_ID
 
 SCRIPTS="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
 SRC="$SCRIPTS/peer-guard.sh"
@@ -22,10 +22,20 @@ command -v git >/dev/null 2>&1 || { echo "note: skipped - git absent (fixtures n
 [ -d /proc ] || { echo "note: skipped - no /proc (Linux-only presence source)"; exit 0; }
 
 T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 KIT="$T/kit"
 mkdir -p "$KIT/scripts" "$KIT/.state/off"
 cp "$SRC" "$KIT/scripts/"
 cp "$CMDPOS_SRC" "$KIT/scripts/"
+# kit-gate.sh runs as a child of the guard: give the fixture a rewritten copy (empty managed dir) and
+# options.tsv, and clear every input the user's own options could reach it through.
+mkdir -p "$KIT/install" "$T/managed" "$T/cfg"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SCRIPTS/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+cp "$SCRIPTS/../install/options.tsv" "$KIT/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 G="$KIT/scripts/peer-guard.sh"
 LOG="$T/guards.log"
 SOCKDIR="$T/socks"
@@ -177,7 +187,7 @@ fi
 payload() { # tool filepath cwd sid [agent_type]
   tool="$1"; fp="$2"; cwd="$3"; sid="$4"; agt="${5:-}"
   jq -n --arg t "$tool" --arg f "$fp" --arg c "$cwd" --arg s "$sid" --arg a "$agt" \
-    '{tool_name:$t, cwd:$c, session_id:$s} + (if $a=="" then {} else {agent_type:$a} end) +
+    '{tool_name:$t, cwd:$c, session_id:$s} + (if $a=="" then {} else {agent_type:$a} end) + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end) +
      (if $t=="NotebookEdit" then {tool_input:{notebook_path:$f}} else {tool_input:{file_path:$f}} end)'
 }
 run() { printf '%s' "$1" | "$TESTSH" "$G"; }
@@ -355,9 +365,10 @@ rm -f "$KIT/.state/unattended.sess-caseM"
 
 # --- case N: kill switch present, self unresolvable -> no self-walk, no note, guards.log unchanged --
 : > "$KIT/.state/off/peer-guard"
-LOGLINES_BEFORE="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+# (kit-gate's own "kit-gate standdown" line is not the guard's note: count every other line)
+LOGLINES_BEFORE="$(grep -avc 'kit-gate standdown' "$LOG" 2>/dev/null || echo 0)"
 printf '%s' "$(payload Bash '' "$REPO" sess-caseN)" | PEER_GUARD_SELF_PID=999999 "$TESTSH" "$G" >/dev/null 2>&1
-LOGLINES_AFTER="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+LOGLINES_AFTER="$(grep -avc 'kit-gate standdown' "$LOG" 2>/dev/null || echo 0)"
 [ "$LOGLINES_BEFORE" = "$LOGLINES_AFTER" ] && pass "caseN: kill switch suppresses even a self-not-found note" \
   || fail "caseN: expected no new guards.log line, before=$LOGLINES_BEFORE after=$LOGLINES_AFTER"
 rm -f "$KIT/.state/off/peer-guard"
@@ -368,6 +379,23 @@ OUT10="$(run "$(payload Bash '' "$REPO" sess-kill)")"
 [ -z "$OUT10" ] && pass "case12: kill switch silences the guard" \
   || fail "case12: expected no output with kill switch present, got: $OUT10"
 rm -f "$KIT/.state/off/peer-guard"
+
+# --- case SD: kit-gate stand-down (marker enforced by kit-gate.sh): a payload that produces output
+# without the marker (case A's worker Write into a foreign repo with a live peer) is silent with it, the stand-down is logged, and the
+# --list CLI mode still answers identically.
+LIST_BEFORE="$(list | cut -d' ' -f1,3-)"   # column 2 is a ticking age, not part of the identity
+SD_PAY="$(payload Write "$FOREIGN/caseA.txt" "$REPO" sess-caseSD worker)"
+SD_CTL="$(run "$SD_PAY")"   # control: the identical payload without the marker must deny (case A shape)
+[ "$(decision "$SD_CTL")" = deny ] || fail "caseSD: control run (no marker) did not deny, fixture drifted: $SD_CTL"
+: > "$KIT/.state/off/peer-guard"
+OUT_SD="$(run "$SD_PAY")"; RC_SD=$?
+LIST_AFTER="$(list | cut -d' ' -f1,3-)"
+rm -f "$KIT/.state/off/peer-guard"
+if [ "$(decision "$SD_CTL")" = deny ] && [ -z "$OUT_SD" ] && [ "$RC_SD" = 0 ] && grep -aq 'kit-gate standdown peer-guard:' "$LOG" && [ "$LIST_BEFORE" = "$LIST_AFTER" ]; then
+  pass "caseSD: stand-down marker -> empty stdout, exit 0, kit-gate log line, --list unchanged"
+else
+  fail "caseSD: out='$OUT_SD' rc=$RC_SD list_same=$([ "$LIST_BEFORE" = "$LIST_AFTER" ] && echo y || echo n)"
+fi
 
 # --- case 13: jq absent -> skip (fail open) -----------------------------------------------------
 PJSON="$(payload Bash '' "$REPO" sess-nojq)"
@@ -459,6 +487,72 @@ fi
 # kill the case4/caseD nested processes now that both have used them
 rm -f "$SOCKDIR/$NESTSELF.sock" "$SOCKDIR/$NESTCHILD.sock"
 kill -9 "$NESTSELF" "$NESTCHILD" 2>/dev/null
+
+# --- cases X1-X5: --mark-worktree (worktree.sh up pre-clears the first-write deny) -------------------
+XREPO="$T/xrepo"; mkdir -p "$XREPO"
+(cd "$XREPO" && git init -q && git -c user.email=t@t -c user.name=t commit --allow-empty -q -m init \
+  && git worktree add -q "$XREPO/.claude/worktrees/wx" -b wx)
+XWT="$XREPO/.claude/worktrees/wx"
+nmark() { ls "$STATEDIR"/foreign/"$1"__* 2>/dev/null | wc -l | tr -d ' '; }
+
+CLAUDE_CODE_SESSION_ID=sess-x1 "$TESTSH" "$G" --mark-worktree "$XWT" </dev/null >/dev/null 2>&1; RCX1=$?
+OUTX1="$(run "$(payload Write "$XWT/a.txt" "$REPO2" sess-x1 worker)")"
+[ "$RCX1" = 0 ] && [ -z "$OUTX1" ] && pass "caseX1: marked worktree, subagent first write passes silently" \
+  || fail "caseX1: want exit 0 and no output, got rc=$RCX1 out: $OUTX1"
+
+XPEER="$(spawn_claude "$XWT")"
+OUTX2="$(run "$(payload Write "$XWT/b.txt" "$REPO2" sess-x1 worker)")"
+[ "$(decision "$OUTX2")" = deny ] && pass "caseX2: a .nopeer mark never silences a live peer in the worktree" \
+  || fail "caseX2: expected deny, got: $OUTX2"
+kill -9 "$XPEER" 2>/dev/null
+
+CLAUDE_CODE_SESSION_ID=sess-x3 "$TESTSH" "$G" --mark-worktree "$FOREIGN3" </dev/null >/dev/null 2>&1; RCX3=$?
+[ "$RCX3" = 4 ] && [ "$(nmark sess-x3)" = 0 ] && pass "caseX3: plain foreign repo -> exit 4, no marker" \
+  || fail "caseX3: want exit 4 and no marker, got rc=$RCX3 markers=$(nmark sess-x3)"
+
+env -u CLAUDE_CODE_SESSION_ID "$TESTSH" "$G" --mark-worktree "$XWT" </dev/null >/dev/null 2>&1; RCX4=$?
+[ "$RCX4" = 3 ] && pass "caseX4: no session id -> exit 3" || fail "caseX4: want exit 3, got $RCX4"
+
+touch "$KIT/.state/off/peer-guard"
+OUTX5="$(CLAUDE_CODE_SESSION_ID=sess-x5 "$TESTSH" "$G" --mark-worktree "$XWT" </dev/null 2>&1)"; RCX5=$?
+rm -f "$KIT/.state/off/peer-guard"
+[ "$RCX5" = 0 ] && [ "$(nmark sess-x5)" = 0 ] && [ "$OUTX5" = "peer-guard: off (kill switch), nothing marked" ] && pass "caseX5: kill switch -> exit 0, no marker" \
+  || fail "caseX5: want exit 0, no marker and the 'peer-guard: off' line, got rc=$RCX5 markers=$(nmark sess-x5) out: $OUTX5"
+
+# X3b: a MAIN checkout whose path sits under .claude/worktrees/ -> exit 4 (pins the git-dir != common-dir guard)
+XMAIN="$T/m/.claude/worktrees/main"; mkdir -p "$XMAIN"; (cd "$XMAIN" && git init -q)
+mark_rc() { CLAUDE_CODE_SESSION_ID="$1" "$TESTSH" "$G" --mark-worktree "$2" </dev/null >/dev/null 2>&1; echo $?; }
+RCX3B="$(mark_rc sess-x3b "$XMAIN")"
+[ "$RCX3B" = 4 ] && [ "$(nmark sess-x3b)" = 0 ] && pass "caseX3b: main checkout under .claude/worktrees/ -> exit 4, no marker" \
+  || fail "caseX3b: want exit 4 and no marker, got rc=$RCX3B markers=$(nmark sess-x3b)"
+# X3c: a LINKED worktree outside .claude/worktrees/ -> exit 4 (pins the path-pattern guard)
+XOUT="$T/elsewhere/wy"; git -C "$XREPO" worktree add -q "$XOUT" -b wy
+RCX3C="$(mark_rc sess-x3c "$XOUT")"
+[ "$RCX3C" = 4 ] && [ "$(nmark sess-x3c)" = 0 ] && pass "caseX3c: linked worktree outside .claude/worktrees/ -> exit 4, no marker" \
+  || fail "caseX3c: want exit 4 and no marker, got rc=$RCX3C markers=$(nmark sess-x3c)"
+# X1b: mark through a SUBDIR of the worktree; marker must be keyed on the toplevel, not the argument
+mkdir -p "$XWT/sub"
+RCX1B="$(mark_rc sess-x1b "$XWT/sub")"
+OUTX1B="$(run "$(payload Write "$XWT/c.txt" "$REPO2" sess-x1b worker)")"
+[ "$RCX1B" = 0 ] && [ -z "$OUTX1B" ] && pass "caseX1b: mark via a worktree subdir, subagent write passes silently" \
+  || fail "caseX1b: want exit 0 and no output, got rc=$RCX1B out: $OUTX1B"
+
+# --- mutation checks for X3b / X3c / X1b: each guard broken in the fixture copy must flip its case ---
+echo "--- mutation checks: mark-worktree guards ---"
+sed -i 's|\*/.claude/worktrees/\*) MOK=1|*) MOK=1|' "$G"
+[ "$(mark_rc sess-m3c "$XOUT")" = 0 ] && pass "mutationX3c: dropping the path-pattern guard lets a linked worktree outside .claude/worktrees/ be marked (caseX3c pins it)" \
+  || fail "mutationX3c: mutation had no effect"
+cp "$SRC" "$G"
+sed -i 's/\[ "\$MGIT" = "\$MCOMMON" \]/false/' "$G"
+[ "$(mark_rc sess-m3b "$XMAIN")" = 0 ] && pass "mutationX3b: dropping the git-dir != common-dir guard lets a main checkout be marked (caseX3b pins it)" \
+  || fail "mutationX3b: mutation had no effect"
+cp "$SRC" "$G"
+sed -i '/STATE_DIR="\${PEER_GUARD_STATE_DIR:-.*\/peer-guard}"$/{n;s/pg_slug "\$TARGET_REPO"/pg_slug "$MDIR"/}' "$G"
+RCM1B="$(mark_rc sess-m1b "$XWT/sub")"
+OUTM1B="$(run "$(payload Write "$XWT/d.txt" "$REPO2" sess-m1b worker)")"
+[ "$RCM1B" = 0 ] && [ "$(nmark sess-m1b)" = 1 ] && [ "$(decision "$OUTM1B")" = deny ] && pass "mutationX1b: keying the marker on the argument instead of the toplevel makes a subdir mark useless (caseX1b pins it)" \
+  || fail "mutationX1b: mutation had no effect"
+cp "$SRC" "$G"
 
 # --- mutation check 1: delete the ancestor-of-self exclusion line -> caseD-style check must fail ----
 echo "--- mutation check 1: ancestor-of-self exclusion ---"

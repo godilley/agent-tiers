@@ -1,0 +1,64 @@
+# kind	id	group	event	matcher	timeout	requires (comma list of hook ids, - = none)
+hook	resume-inject	core	SessionStart		60	-
+hook	codex-home-isolate	core	SessionStart		10	-
+hook	ledger-check	core	SessionStart		10	-
+hook	guard-summary	core	SessionEnd		5	-
+hook	grep-footgun-guard	shell_footguns	PreToolUse	Bash	5	-
+hook	pgrep-footgun-guard	shell_footguns	PreToolUse	Bash	5	-
+hook	worktree-guard	safety	PreToolUse	Bash	5	-
+hook	long-run-guard	shell_footguns	PreToolUse	Bash	5	-
+hook	git-add-stash-guard	safety	PreToolUse	Bash	5	-
+hook	codex-guard	delegation	PreToolUse	Bash	5	-
+hook	dangerous-actions-blocker	safety	PreToolUse	Bash|Write|Edit|NotebookEdit|MultiEdit	5	-
+hook	security-gate	safety	PreToolUse	Write|Edit|NotebookEdit|Bash	5	-
+hook	hygiene-commit-guard	commit_review	PreToolUse	Bash	5	-
+hook	vcs-commit-guard	commit_review	PreToolUse	Bash	5	-
+hook	sc52a-write-disclosure-guard	commit_review	PreToolUse	Bash	5	-
+hook	review-gate-guard	commit_review	PreToolUse	Bash	5	-
+hook	kit-leak-guard	commit_review	PreToolUse	Bash	5	-
+hook	framing-guard	delegation	PreToolUse	Task|Agent	5	-
+hook	unattended-guard	attention	PreToolUse	EnterPlanMode|AskUserQuestion	5	-
+hook	authorship-record	memory	PostToolUse	Edit|Write|MultiEdit|NotebookEdit	5	-
+hook	memory-content-lint	memory	PostToolUse	Write|Edit|MultiEdit	5	-
+hook	memory-write-gate	memory	PreToolUse	Write|Edit|MultiEdit|Bash	5	-
+hook	peer-guard	multi_session	PreToolUse	Bash|Write|Edit|MultiEdit|NotebookEdit	5	-
+hook	task-spawn-guard	delegation	PreToolUse	Task|Agent	5	-
+hook	simple-rules-guard	multi_session	PreToolUse	Bash|AskUserQuestion|SendMessage	5	-
+hook	agent-selfdef-guard	delegation	PreToolUse	Write|Edit|MultiEdit	5	-
+hook	demo-css-guard	planning	PreToolUse	Write|Edit|MultiEdit	5	-
+hook	portable-citation-advisory	memory	PostToolUse	Write|Edit|MultiEdit	5	-
+hook	subagent-bg-return-guard	delegation	SubagentStop		5	-
+hook	numeric-claim-ledger	commit_review	PostToolUse	Bash	5	-
+hook	plan-graduate-nudge	planning	PostToolUse	ExitPlanMode	5	-
+hook	read-basis-guard	planning	PreToolUse	ExitPlanMode	5	-
+hook	advisory-ack-guard	attention	Stop		5	-
+hook	precompact-guard	planning	PreCompact	manual	5	authorship-record
+hook	notify	attention	Notification	permission_prompt	5	-
+hook	notify-stop	attention	Stop		5	notify,notify-tag-guard
+hook	notify-tag-guard	attention	Stop		5	-
+hook	ask-gate	attention	PreToolUse	AskUserQuestion	5	-
+hook	notify-tag-strip	attention	MessageDisplay		10	-
+hook	reach-guard	safety	PreToolUse	^(Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__chrome-devtools__.*|mcp__claudecodebrowser__.*)$	5	-
+hook	reach-guard-grant	safety	PostToolUse	^(Bash|mcp__chrome-devtools__.*|mcp__claudecodebrowser__.*)$	5	-
+# kind	id	groups (comma list, * = all)	summary
+level	core	core	Session handoff and housekeeping only. No guards. Same as a plain plugin install today.
+level	recommended	core,safety,shell_footguns,commit_review	Adds guards against destructive commands, silent shell footguns, and unreviewed or unhygienic commits.
+level	full	*	Every guard, including delegation, memory, attention, multi-session and planning rules.
+# Options: stored in user settings.json at pluginConfigs["agent-tiers@<marketplace>"].options, written by
+# the plugin dialog, /config and the kit CLI. kit-gate.sh reads them from that file (and managed
+# settings files), never from the CLAUDE_PLUGIN_OPTION_<KEY> env a plugin hook also receives.
+# A plain plugin install runs at Core level: every group defaults to false. core has no group option.
+# kind	key	type	default	title	description
+option	enabled	boolean	true	Kit enabled	Turns the whole kit on or off, core hooks included. Off keeps it installed; each session start then shows one line saying it is off.
+option	group_safety	boolean	false	Safety guards	Blocks destructive commands and secrets in written content, bare git add -A and stash, hand-made worktrees; asks or denies agent reach to remote hosts and browser MCPs.
+option	group_shell_footguns	boolean	false	Shell footgun guards	Stops shell commands that fail quietly: recursive grep skipping binary files, pgrep/pkill -f, and long checks piped into tail or polled in a loop.
+option	group_commit_review	boolean	false	Commit review guards	Asks before a commit or push with no independent review, flags commit hygiene problems and private text in a commit, denies undisclosed sed -i or tee writes to tracked files, and logs derived numbers.
+option	group_delegation	boolean	false	Delegation guards	Guards sub-agent spawns (model, framing, return-while-running), bare codex calls, and a sub-agent editing its own definition.
+option	group_memory	boolean	false	Memory guards	Gates new memory writes behind a coverage check, lints memory content, warns on unopenable path citations, and records what a session authored.
+option	group_attention	boolean	false	Attention hooks	Desktop notifications, plus a Stop block that ends every reply with an operator-tag line, ask-gate for questions, and advisory-ack and unattended-mode guards.
+option	group_multi_session	boolean	false	Multi-session guards	Asks before a write into a repo another live session is using, or outside this session's repo. Also simple-rules-guard: no codex resume --last, no sudo JDK switch, no main branch in your own repos, marked defaults, SendMessage rules.
+option	group_planning	boolean	false	Planning guards	Asks a plan to declare any tracked source file it names but never read, nudges to save approved plans, blocks CSS demo hacks, and blocks manual /compact before the handoff (needs authorship-record, Memory group).
+option	disabled_hooks	string[]		Disabled hooks	Hook ids to turn off one by one, whatever their group says. Set with: agent-tiers configure --set disabled_hooks=<id>,<id> (or settings.json pluginConfigs).
+# kind	id	action (settings = the CLI proposes a settings.json change, undone by remove; pointer = printed only)	title	description
+extra	statusline	settings	Status line	Main and sub-agent status rows: folder, model, git branch, context use, session time. Runs the kit's scripts/statusline.sh and scripts/statusline-subagent.sh.
+extra	agentsview	pointer	agentsview session ledger	Not installed by this CLI. Install the binary yourself (https://github.com/kenn-io/agentsview), then run: claude mcp add --scope user agentsview -- agentsview mcp. Its semantic search needs an index: run agentsview embeddings build, or schedule it yourself (for example a systemd user timer).

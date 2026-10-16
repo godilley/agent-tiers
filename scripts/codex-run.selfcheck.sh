@@ -6,6 +6,7 @@ set -u
 W="$(dirname "$0")/codex-run.sh"
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
 T="$(mktemp -d)" || { echo "FAIL: mktemp"; exit 1; }
+trap 'rm -rf "$T"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 mkdir -p "$T/clean" "$T/dirty"
 # Build the planted key at runtime (concatenation) so THIS file never matches the scan pattern itself -
 # otherwise the kit tree could never pass its own wrapper's scan.

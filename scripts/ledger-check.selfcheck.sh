@@ -23,6 +23,12 @@ trap 'rm -rf "$T"' EXIT INT TERM
 KIT="$T/kit"
 mkdir -p "$KIT/scripts" "$KIT/.state"
 cp "$SRC" "$KIT/scripts/"
+mkdir -p "$T/managed"; sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$HERE/kit-gate.sh" > "$KIT/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$KIT/scripts/kit-gate.sh" || { echo "SELF-CHECK FAILED: _kg_managed not rewritten"; exit 1; }
+mkdir -p "$KIT/install" "$T/cfg"; cp "$HERE/../install/options.tsv" "$KIT/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 HOOK="$KIT/scripts/ledger-check.sh"
 
 FX="$T/fx"
@@ -309,5 +315,11 @@ in_ "$big" "L5 2026-01-01-big-outstanding-work-ledger.md:1: over cap (1501 lines
 # cwd from the payload is used when CLAUDE_PROJECT_DIR is unset.
 out="$(unset CLAUDE_PROJECT_DIR; printf '{"session_id":"selfcheck","cwd":"%s"}' "$T/Untyped" | AGENT_TIERS_GUARDS_LOG="$T/guards.log" sh "$HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null)"
 in_ "$out" "PLANT-L1B" && ok "payload cwd used when CLAUDE_PROJECT_DIR unset" || bad "payload cwd ignored: $out"
+
+# kit-gate line is live: AGENT_TIERS_OFF=1 -> exit 0, no stdout, a standdown line in the sandbox log.
+GL="$T/gate.log"
+out="$(printf '{"session_id":"selfcheck","cwd":"%s"}' "$T/Untyped" | AGENT_TIERS_OFF=1 CLAUDE_CODE_SESSION_ID=gate-3 AGENT_TIERS_GUARDS_LOG="$GL" sh "$HOOK")"; rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] && grep -q 'kit-gate standdown ledger-check: AGENT_TIERS_OFF=1 \[sid=gate-3\]' "$GL" 2>/dev/null \
+  && ok "kit-gate: AGENT_TIERS_OFF=1 stands the hook down (rc 0, no stdout, logged)" || bad "kit-gate line not live: rc=$rc out=$out"
 
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

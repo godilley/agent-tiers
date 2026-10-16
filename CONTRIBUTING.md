@@ -13,3 +13,17 @@ reviewed, leak-scanned snapshot, published as a whole. That shapes what contribu
 Security-relevant findings (a guard bypass, a leak in shipped content): please use a private
 report (GitHub's "Report a vulnerability" if enabled, or the contact on the profile) rather
 than a public issue, so a fix can ship before the gap is advertised.
+
+## Bumping the companion plugin pins (maintainers)
+
+The kit's marketplace lists two third-party companion plugins, each pinned to a commit in `.claude-plugin/marketplace.json`
+(entries `caveman` and `ponytail`, field `.source.sha`). Bump one when upstream ships something
+worth passing on.
+
+1. Find the new upstream commit: `git ls-remote https://github.com/<owner>/<repo> HEAD`, or a release tag.
+2. Read the upstream diff between the old and new sha. Hooks first: they run on every user's machine.
+3. Check the license and the plugin name are unchanged.
+4. Edit only the `sha` value, then `jq . .claude-plugin/marketplace.json` to confirm it still parses.
+5. Install from a throwaway `CLAUDE_CONFIG_DIR` and check `plugins/installed_plugins.json` records
+   the same `gitCommitSha` as the pin:
+   `jq -r '.plugins[] | select(.name=="caveman" or .name=="ponytail") | .source.sha' .claude-plugin/marketplace.json`

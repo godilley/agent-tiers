@@ -30,16 +30,17 @@
 # regex ends the token early.
 #
 # Advisory only: never exits non-zero, never sets a decision field. Fail-open with a breadcrumb.
-# Kill switch: .state/off/ledger-check, resolved from the script's own location (not
+# Kill switch: .state/off/ledger-check (enforced by kit-gate.sh), resolved from the script's own location (not
 # CLAUDE_CONFIG_DIR) - the kill switch and the default log live in the kit's own .state, shared
 # across every profile pointed at this kit, same as guard-summary.sh/portable-citation-advisory.sh.
 # Self-check: ledger-check.selfcheck.sh
 set -u
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
-[ -e "${BASE:-}/.state/off/ledger-check" ] && exit 0
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"
 
-INPUT="$(cat 2>/dev/null || true)"
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 SID="$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p' | head -1)"
 note() {
   { mkdir -p "$(dirname "$LOG")" && printf '%s ledger-check fail-open: %s [sid=%s]\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$1" "$SID" >> "$LOG"; } 2>/dev/null || true

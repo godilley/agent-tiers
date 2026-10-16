@@ -1,5 +1,5 @@
 {
-  "description": "agent-tiers - on a fresh/compacted/resumed session: re-inject the project's RESUME_SESSION.md handoff, isolate CODEX_HOME per session, and print an advisory when the project's outstanding-work ledger has fired triggers or unproven DONE lines (all guarded: silent when nothing applies); at SessionEnd, one stderr line summarising this session's guard blocks from .state/guards.log.",
+  "description": "agent-tiers hooks. Generated from install/options.tsv by scripts/gen-plugin-manifests.sh: do not edit by hand. Every hook first runs the kit gate, which stands it down when the kit is off or the hook's group is off. A plain install runs at Core level: only the session handoff and housekeeping hooks act, and the other groups are turned on in the plugin options.",
   "hooks": {
     "SessionStart": [
       {
@@ -37,6 +37,375 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/guard-summary.sh\"",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/grep-footgun-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/pgrep-footgun-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/long-run-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/git-add-stash-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/codex-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/dangerous-actions-blocker.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/security-gate.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/hygiene-commit-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/vcs-commit-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/sc52a-write-disclosure-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/review-gate-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/framing-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "EnterPlanMode|AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/unattended-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-write-gate.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/peer-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/task-spawn-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|AskUserQuestion|SendMessage",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/simple-rules-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-selfdef-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/demo-css-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/read-basis-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/ask-gate.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__chrome-devtools__.*|mcp__claudecodebrowser__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/reach-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/authorship-record.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/memory-content-lint.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/portable-citation-advisory.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/numeric-claim-ledger.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/plan-graduate-nudge.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^(Bash|mcp__chrome-devtools__.*|mcp__claudecodebrowser__.*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/reach-guard-grant.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/subagent-bg-return-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/advisory-ack-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/notify-stop.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/notify-tag-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/precompact-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/notify.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "MessageDisplay": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/notify-tag-strip.sh\"",
+            "timeout": 10
           }
         ]
       }

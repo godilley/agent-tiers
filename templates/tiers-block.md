@@ -1,15 +1,16 @@
-## Agent tiers (v4 - cheap interface-layer Lead, metered intelligence)
+## Agent tiers (v4 - the Lead routes and decides, tiers bought per call)
 
-Shared vocabulary (from the `agent-tiers` plugin). The **Lead is the sonnet interface layer**: it
-converses, routes, writes briefs, verifies returns, gates, and keeps synthesis + final decisions.
-Deep reasoning is bought per call from a thinking tier, not ground out in the Lead.
+Shared vocabulary (from the `agent-tiers` plugin). The **Lead is the brains of the session, on any
+model**: it converses, routes, writes briefs, verifies returns, gates, and keeps synthesis + final
+decisions. Each job is bought per call from the tier that fits it: mechanical work from a Worker, an
+independent check from a Reviewer, and (for an interface-band Lead) deep reasoning from a thinking tier.
 
 | Tier | Who | Model | Effort | Role | Tools |
 |---|---|---|---|---|---|
-| **Lead** | this main session | sonnet (GUI-set; recommended) | high | Interface layer: converse, route, brief, verify, gate, synthesise, decide. | full |
+| **Lead** | this main session | any (GUI-set; behaviour follows its band, below) | high | Converse, route, brief, verify, gate, synthesise, decide. | full |
 | **Worker** | `worker` / `<project>-worker` | sonnet (haiku if rote; opus per-spawn for clever code) | low / medium | Fully-specified mechanical jobs (build, search, transform, verify). Follows the brief; does not decide. | scoped (read/edit/write/bash) |
 | **Advisor** | `advisor` | opus | high | Deep reasoning on ONE bounded question OR a bounded design/plan; returns a recommendation/plan. Never edits. | read-only |
-| **Reviewer** | `reviewer` | opus | high | Curates several cheap first-pass audit drafts into ONE trustworthy list - cuts false positives, re-rates severity, dedups, ADDS what the cheap pass missed. Never edits code. | read-only + its one curated file |
+| **Reviewer** | `reviewer` | opus | high | Curates several cheap first-pass audit drafts into ONE trustworthy list - cuts false positives, re-rates severity, dedups, ADDS what the cheap pass missed. Never edits code. | read-only, returns its list inline |
 | **Boss** | `boss` | different from the Lead (opus; fable if opus implicated) | xhigh | Rare, always human-gated stuck circuit-breaker: independent verdict on a distilled brief. Never gathers. | read-only |
 
 - Model is the main cost lever: opus is only a small multiple of sonnet (cheap scoped insurance);
@@ -20,12 +21,11 @@ Deep reasoning is bought per call from a thinking tier, not ground out in the Le
   opus-worker) ANNOUNCE-ONLY (one line: tier . model . why) . GATED before spend: opus fan-outs,
   Boss (every spawn), anything fable.
 - **Routing doctrine:** high-reasoning shapes (design, stuck hunt, risky call) route DOWN to the
-  Advisor with a tight brief by default - the cheap Lead must not quietly under-think them.
+  Advisor with a tight brief by default - an interface-band Lead must not quietly under-think them.
 - `advisor` takes ONE bounded ask; `reviewer` curates a SET (noisy audit drafts -> one trustworthy list).
   Workers stay dumb-and-fast - exact instructions, not problems.
-- The **Lead is GUI-configured** - never pin its model/effort from files (recommended panel setting:
-  Sonnet @ high).
-- **Lead capability-band (per-session GUI dial):** interface-band (sonnet, default) reaches DOWN for
+- The **Lead is GUI-configured** - never pin its model/effort from files.
+- **Lead capability-band (per-session GUI dial):** interface-band (sonnet) reaches DOWN for
   capability; reasoning-band (opus and above) reaches OUT for independence; at the top of the band
   (fable) delegate by TOKEN VOLUME, not difficulty. Full dial doctrine -> the `agent-tiers` skill.
 - This environment's per-agent model/effort resolution + scope matrix live in

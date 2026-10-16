@@ -17,6 +17,17 @@ cp "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy guard-cmdpo
 GUARD="$T/kit/scripts/vcs-commit-guard.sh"
 WORK="$T/work"
 trap 'rm -rf "$T"' EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM
+# kit-gate sandbox: the guard now reads live kit state and the user's settings through kit-gate.sh, so the
+# sandbox kit gets a rewritten gate (managed dir -> an empty temp dir) + options table, and every
+# kit-gate input is cleared. Guards log stays the sandbox kit's own .state/guards.log.
+mkdir -p "$T/kit/install" "$T/cfg" "$T/managed"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$SRC_DIR/../install/options.tsv" "$T/kit/install/"
+export CLAUDE_CONFIG_DIR="$T/cfg"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID AGENT_TIERS_GUARDS_LOG
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 # kit-level fallback (vcs_defaults) - used only when WORK has no .claude/agent-tiers.local.md.
 cat > "$T/kit/kit-config.md" <<'EOF'
@@ -240,7 +251,7 @@ reset_repo
 # 7e. payload cwd points at an UNRELATED repo, but the command itself `cd`s into WORK before
 #     committing - guard must resolve the EFFECTIVE cwd (guard_resolve_cwd), not the raw payload
 #     field (F-cwd-bypass 2026-08-16: this shape silently skipped the guard before the fix).
-OTHER="$(mktemp -d)"
+OTHER="$(mktemp -d "$T/other.XXXXXX")"
 (cd "$OTHER" && git init -q && git config user.email t@t && git config user.name t && printf x > f && git add f && git commit -qm init)
 printf 'handoff v7\n' > RESUME_SESSION.md; git add -f RESUME_SESSION.md
 check_in "$OTHER" deny "cd $WORK && git commit -m \"test\""
@@ -320,9 +331,10 @@ git commit -q -m "test"  # [vcs-exception:RESUME_SESSION.md handoff kept on purp
 reset_repo
 
 # 9. no .cwd in payload -> fail-open breadcrumb, no crash, no output.
-T2="$(mktemp -d)"; mkdir -p "$T2/scripts"
+T2="$(mktemp -d "$T/t2.XXXXXX")"; mkdir -p "$T2/scripts"
 cp "$SRC_DIR/vcs-commit-guard.sh" "$T2/scripts/"; cp "$SRC_DIR/guard-cmdpos.sh" "$T2/scripts/"
 cp "$T/kit/kit-config.md" "$T2/" 2>/dev/null || true
+mkdir -p "$T2/install"; cp "$T/kit/scripts/kit-gate.sh" "$T2/scripts/"; cp "$T/kit/install/options.tsv" "$T2/install/"
 if (cd "$T2" && git init -q >/dev/null 2>&1); then
   out="$(jq -n '{tool_input: {command: "git commit -m x"}}' | (cd "$T2" && sh "$T2/scripts/vcs-commit-guard.sh") 2>/dev/null || true)"
   [ -z "$out" ] || fail "no-cwd payload must produce no output"
@@ -366,7 +378,7 @@ rm -f "$T/kit/.state/unattended.s-unatt" RESUME_SESSION.md
 # Subagent caller (2026-08-27): the same "no human behind this ask" case as unattended, converted the
 # same way - deny, with the SAME remedy text, but worded at the delegated agent instead.
 dec_agent() { # $1=session_id $2=cmd $3=agent_type -> deny|ask|allow
-  out="$(jq -n --arg x "$2" --arg c "$WORK" --arg s "$1" --arg a "$3" '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+  out="$(jq -n --arg x "$2" --arg c "$WORK" --arg s "$1" --arg a "$3" '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a} + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)' | sh "$GUARD" 2>/dev/null || true)"
   if   printf '%s' "$out" | grep -aq '"permissionDecision": *"deny"'; then echo deny
   elif printf '%s' "$out" | grep -aq '"permissionDecision": *"ask"';  then echo ask
   else echo allow; fi
@@ -378,7 +390,7 @@ printf 'notes\n' > RESUME_SESSION.md
 [ "$(dec s-sub2 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]')" = ask ] \
   && printf 'ok   [ask]  a Lead-originated call (no agent_type) is unaffected\n' \
   || { printf 'FAIL a Lead-originated call was wrongly converted\n'; fail=1; }
-out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a} + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$out" | grep -aq 'git restore --staged\|git rm --cached' \
   && printf 'ok   the subagent-converted deny keeps its machine-actionable remedy\n' \
   || { printf 'FAIL the subagent-converted deny lost its remedy text\n'; fail=1; }
@@ -395,7 +407,7 @@ grep -aq 'vcs-commit-guard deny: RESUME_SESSION.md' "$T/kit/.state/guards.log" \
 # unattended marker set, so it passed either way) - flag s-sub3 unattended TOO and confirm subagent
 # wording still wins, not the unattended text.
 : > "$T/kit/.state/unattended.s-sub3"
-out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a}' | sh "$GUARD" 2>/dev/null || true)"
+out="$(jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x   # [vcs-exception:test fixture, intentional]' --arg c "$WORK" --arg s s-sub3 --arg a worker '{session_id: $s, cwd: $c, tool_input: {command: $x}, agent_type: $a} + (if $a == "" or $a == "main" or $a == "MAIN" then {} else {agent_id: "a0test"} end)' | sh "$GUARD" 2>/dev/null || true)"
 printf '%s' "$out" | grep -aq 'DELEGATED AGENT' \
   && printf 'ok   subagent prefix still wins when the SAME session is also flagged unattended\n' \
   || { printf 'FAIL subagent+unattended: subagent prefix should still win\n'; fail=1; }
@@ -404,4 +416,17 @@ printf '%s' "$out" | grep -aq 'UNATTENDED MODE' \
   || printf 'ok   subagent+unattended does not also carry the unattended prefix\n'
 rm -f "$T/kit/.state/unattended.s-sub3" RESUME_SESSION.md
 
+# kit-gate stand-down: marker <kit>/.state/off/vcs-commit-guard -> silent exit 0 + a kit-gate log line.
+printf x > "$WORK/RESUME_SESSION.md"
+sd_in() { jq -n --arg x 'git add RESUME_SESSION.md && git commit -m x' --arg c "$WORK" '{cwd: $c, tool_input: {command: $x}}'; }
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"
+case "$sd_out" in *'"permissionDecision"'*) ;; *) fail "standdown control: expected a decision without the marker, got: $sd_out" ;; esac
+mkdir -p "$T/kit/.state/off"; : > "$T/kit/.state/off/vcs-commit-guard"; rm -f "$T/kit/.state/guards.log"
+sd_out="$(sd_in | sh "$GUARD" 2>/dev/null)"; sd_rc=$?
+[ -z "$sd_out" ] && [ "$sd_rc" = 0 ] || fail "standdown: expected empty stdout + exit 0, got rc=$sd_rc out=$sd_out"
+grep -aq 'kit-gate standdown vcs-commit-guard:' "$T/kit/.state/guards.log" || fail "standdown: no kit-gate log line"
+rm -f "$T/kit/.state/off/vcs-commit-guard"
+printf 'ok   [standdown] marker present -> silent exit 0 + log line\n'
+
+rm -f "$WORK/RESUME_SESSION.md"
 [ "$fail" = 0 ] && echo "ALL PASS" || { echo "SELF-CHECK FAILED"; exit 1; }

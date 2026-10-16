@@ -74,8 +74,9 @@ trap 'exit 143' TERM
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 CLAUDE_DIR="${CLAUDE_DIR%/}"
 [ -f "$CLAUDE_DIR/agent-tiers/.state/off/memory-content-lint" ] && exit 0
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 
 FPATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"

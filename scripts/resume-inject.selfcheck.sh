@@ -8,11 +8,25 @@ set -u
 unset AGENT_TIERS_STATE_DAYS AGENT_TIERS_LEDGER_DAYS
 # Resolved ABSOLUTELY up front: the helpers below cd into a temp project dir, and a relative $0-derived
 # path would silently fail there - producing empty output, which every assertion would read as a pass.
-H="$(cd "$(dirname "$0")" && pwd)/resume-inject.sh"
+SRC="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP resume-inject: jq absent (prefs path is jq-only)"; exit 0; }
 
 T="$(mktemp -d)" && T="$(cd "$T" && pwd -P)" || { echo "FAIL: mktemp"; exit 1; }
+trap 'rm -rf "$T"' EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 fail() { printf 'FAIL: %s\n' "$1"; rm -rf "$T"; exit 1; }
+
+# Run the hook from a SANDBOX kit copy (scripts/ + install/options.tsv) so kit-gate.sh reads this fixture's
+# .state/off markers and options, never the live kit's, and with every kit-gate input cleared.
+mkdir -p "$T/gk/install" "$T/gcfg"
+cp -R "$SRC" "$T/gk/scripts"; cp "$SRC/../install/options.tsv" "$T/gk/install/"
+# Point the sandbox gate's managed-settings dir at an empty temp dir so the machine's real /etc/claude-code cannot change results.
+mkdir -p "$T/managed"
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC/kit-gate.sh" > "$T/gk/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/gk/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+H="$T/gk/scripts/resume-inject.sh"
+export AGENT_TIERS_GUARDS_LOG="$T/guards.log"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 
 # `touch -d` is GNU-only (BSD/macOS touch has no -d) - stamp mtimes portably via `touch -t`.
 # $2 is either "YYYY-MM-DD" (absolute) or "-Nd" (N days ago).
@@ -781,5 +795,133 @@ else
   echo "  (7j skipped: git unavailable)"
 fi
 
+# 8. kit-gate line is live: AGENT_TIERS_OFF=1 stands the hook down with exactly the one summary line.
+out="$(cd "$T/proj" && printf '{"session_id":"gate-1","source":"startup"}' | AGENT_TIERS_OFF=1 CLAUDE_CODE_SESSION_ID=gate-1 CLAUDE_PROJECT_DIR="$T/proj" sh "$H" 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] || fail "8: AGENT_TIERS_OFF=1 run exited $rc"
+[ "$out" = "agent-tiers: every kit hook is off (AGENT_TIERS_OFF=1)" ] || fail "8: AGENT_TIERS_OFF=1 stdout was not exactly the one summary line: $out"
+grep -q 'kit-gate standdown resume-inject: AGENT_TIERS_OFF=1 \[sid=gate-1\]' "$T/guards.log" 2>/dev/null || fail "8: no kit-gate standdown line in the sandbox guards log"
+# 8b. a group switched off in settings.json shows in the normal output.
+cp "$CLAUDE_CONFIG_DIR/settings.json" "$T/settings.keep" 2>/dev/null
+mkdir -p "$CLAUDE_CONFIG_DIR"
+printf '%s\n' '{"pluginConfigs":{"agent-tiers@m":{"options":{"group_safety":false}}}}' > "$CLAUDE_CONFIG_DIR/settings.json"
+out="$(run "gate-2" startup)"
+case "$out" in *"agent-tiers: groups off"*) : ;; *) fail "8b: normal output lacks an 'agent-tiers: groups off' line" ;; esac
+rm -f "$CLAUDE_CONFIG_DIR/settings.json"; [ -f "$T/settings.keep" ] && cp "$T/settings.keep" "$CLAUDE_CONFIG_DIR/settings.json"
+
+# 9. Band line (SessionStart `model` -> capability band, lib/model-band.sh). Starts from a project with no
+#    handoff file so the plain NOPREF path is the baseline; 9n covers the other two output paths.
+rm -f "$T/proj/RESUME_SESSION.md"
+runm() { # $1=sid $2=source $3=model JSON value (e.g. '"claude-opus-5"'), or empty for no field
+  ( cd "$T/proj" && { if [ -n "${3:-}" ]; then jq -cn --arg s "$1" --arg src "$2" --argjson m "$3" '{session_id:$s, source:$src, model:$m}'
+                      else jq -cn --arg s "$1" --arg src "$2" '{session_id:$s, source:$src}'; fi; } \
+      | CLAUDE_PROJECT_DIR="$T/proj" sh "$H" 2>/dev/null )
+}
+ctxof() { jq -r '.hookSpecificOutput.additionalContext'; }
+BSTATE="$CLAUDE_CONFIG_DIR/agent-tiers/.state"
+OPUS_LINE='agent-tiers band (model=claude-opus-5, source=startup): reasoning band - delegate.'
+out="$(runm bnd-a startup '"claude-opus-5"' | ctxof)"
+case "$out" in *"$OPUS_LINE"*) ;; *) fail "9a: opus startup lacks the exact reasoning band line, got: $out" ;; esac
+out9a="$out"
+out="$(runm bnd-b startup '"claude-fable-1"' | ctxof)"
+case "$out" in *"): top of the reasoning band, a one-off cost"*) ;; *) fail "9b: fable lacks the top band line, got: $out" ;; esac
+out9b="$out"
+out="$(runm bnd-c resume '"claude-sonnet-5"' | ctxof)"
+case "$out" in *"): interface band - plan before acting"*) ;; *) fail "9c: sonnet lacks the interface band line, got: $out" ;; esac
+out9c="$out"
+out="$(runm bnd-d startup '"claude-haiku-4-5"' | ctxof)"
+case "$out" in *"): interface band - plan before acting"*) ;; *) fail "9d: haiku lacks the interface band line, got: $out" ;; esac
+out9d="$out"
+out="$(runm bnd-e startup '"claude-mystery-9"' | ctxof)"
+case "$out" in *"(model=claude-mystery-9, source=startup): model not ranked"*) ;; *) fail "9e: unknown model lacks the unranked line, got: $out" ;; esac
+out9e="$out"
+out="$(runm bnd-f clear '' | ctxof)"
+case "$out" in *"agent-tiers band (model=none, source=clear): the SessionStart payload carried no model"*) ;; *) fail "9f: absent model lacks the absent line, got: $out" ;; esac
+out9f="$out"
+out="$(runm bnd-g startup '{"id":"claude-opus-5"}' | ctxof)"
+case "$out" in *"$OPUS_LINE"*) ;; *) fail "9g: object model {id} not read as the id, got: $out" ;; esac
+for s in startup resume compact clear; do
+  out="$(runm "bnd-h-$s" "$s" '"claude-opus-5"' | ctxof)"
+  case "$out" in *"agent-tiers band (model=claude-opus-5, source=$s)"*) ;; *) fail "9h: source $s lacks the band line, got: $out" ;; esac
+done
+out="$(runm bnd-i fork '"claude-opus-5"')"; rc=$?
+[ "$rc" = 0 ] || fail "9i: fork run exited $rc"
+case "$out" in *"loaded-doctrine manifest"*) ;; *) fail "9i: fork run printed no stamp/manifest (vacuous pass), got: $out" ;; esac
+case "$out" in *"agent-tiers band"*) fail "9i: unknown source fork must not carry a band line, got: $out" ;; esac
+out="$(runm bnd-j startup '"claude-opus-5\nFORGED LINE"' | ctxof)"
+case "$out" in *"(model=unprintable, source=startup): reasoning band"*) ;; *) fail "9j: unsafe id not shown as unprintable, got: $out" ;; esac
+printf '%s\n' "$out" | grep -q '^FORGED' && fail "9j: a forged line reached the output"
+# 9k. per-machine override wins for its band; an invalid (non-ASCII) override line is skipped silently.
+mkdir -p "$BSTATE"
+printf 'reasoning=CUSTOM REASONING LINE\n' > "$BSTATE/band-lines"
+out="$(runm bnd-k1 startup '"claude-opus-5"' | ctxof)"
+case "$out" in *"): CUSTOM REASONING LINE"*) ;; *) fail "9k: override line not used, got: $out" ;; esac
+printf 'reasoning=bad \303\251 line\n' > "$BSTATE/band-lines"
+out="$(runm bnd-k2 startup '"claude-opus-5"' | ctxof)"
+case "$out" in *"$OPUS_LINE"*) ;; *) fail "9k: non-ASCII override not skipped in favour of the default, got: $out" ;; esac
+rm -f "$BSTATE/band-lines"
+# 9l. kill switch
+mkdir -p "$BSTATE/off"; : > "$BSTATE/off/band-line"
+out="$(runm bnd-l startup '"claude-opus-5"')"; rc=$?
+rm -f "$BSTATE/off/band-line"
+[ "$rc" = 0 ] || fail "9l: kill-switched run exited $rc"
+case "$out" in *"loaded-doctrine manifest"*) ;; *) fail "9l: kill-switched run printed no stamp/manifest (vacuous pass), got: $out" ;; esac
+case "$out" in *"agent-tiers band"*) fail "9l: kill switch did not suppress the band line, got: $out" ;; esac
+# 9m. fail-open when the library is missing
+mv "$T/gk/scripts/lib/model-band.sh" "$T/model-band.aside"
+out="$(runm bnd-m startup '"claude-opus-5"')"; rc=$?
+mv "$T/model-band.aside" "$T/gk/scripts/lib/model-band.sh"
+[ "$rc" = 0 ] || fail "9m: missing-library run exited $rc"
+case "$out" in *"loaded-doctrine manifest"*) ;; *) fail "9m: missing-library run printed no stamp/manifest (vacuous pass), got: $out" ;; esac
+case "$out" in *"agent-tiers band"*) fail "9m: band line emitted without the library, got: $out" ;; esac
+# 9n. all three output paths carry it. (1) NOPREF: no handoff file (already removed above).
+out="$(runm bnd-n1 startup '"claude-opus-5"' | ctxof)"
+case "$out" in *"$OPUS_LINE"*) ;; *) fail "9n: no-handoff path lacks the band line, got: $out" ;; esac
+# (2) full inject, startup (does not seed throttle state).
+printf '# handoff\nline one\n' > "$T/proj/RESUME_SESSION.md"
+out="$(runm bnd-n2 startup '"claude-opus-5"' | ctxof)"
+case "$out" in "Restored working-state from RESUME_SESSION.md"*) ;; *) fail "9n: full inject no longer starts with the Restored header, got: $out" ;; esac
+case "$out" in *"$OPUS_LINE"*) ;; *) fail "9n: full-inject path lacks the band line, got: $out" ;; esac
+# (3) throttled pointer: same sid, resume, twice inside the window.
+runm bnd-n3 resume '"claude-opus-5"' >/dev/null
+out="$(runm bnd-n3 resume '"claude-opus-5"' | ctxof)"
+case "$out" in *"already injected"*) ;; *) fail "9n: fixture invalid: expected the throttled pointer, got: $out" ;; esac
+case "$out" in *"agent-tiers band (model=claude-opus-5, source=resume)"*) ;; *) fail "9n: pointer path lacks the band line, got: $out" ;; esac
+rm -f "$T/proj/RESUME_SESSION.md"
+# 9o. the band line is pure printable ASCII
+for o in "$out9a" "$out9b" "$out9c" "$out9d" "$out9e" "$out9f"; do
+  printf '%s\n' "$o" | grep '^agent-tiers band' | LC_ALL=C grep -q '[^ -~]' && fail "9o: band line has a non-printable-ASCII byte"
+  printf '%s\n' "$o" | grep -q '^agent-tiers band' || fail "9o: no band line to check"
+done
+
+# 9p. length cap: exactly 64 allowed chars shown verbatim, 65 not.
+id64="claude-opus-$(printf 'a%.0s' $(seq 52))"; id65="${id64}a"
+out="$(runm bnd-p1 startup "\"$id64\"" | ctxof)"
+case "$out" in *"(model=$id64, source=startup): reasoning band"*) ;; *) fail "9p: 64-char id not shown verbatim, got: $out" ;; esac
+out="$(runm bnd-p2 startup "\"$id65\"" | ctxof)"
+case "$out" in *"(model=unprintable, source=startup): reasoning band"*) ;; *) fail "9p: 65-char id not shown as unprintable, got: $out" ;; esac
+# 9q. bracketed id (context-window suffix) is allowed.
+out="$(runm bnd-q startup '"claude-opus-4-6[1m]"' | ctxof)"
+case "$out" in *"(model=claude-opus-4-6[1m], source=startup): reasoning band - delegate."*) ;; *) fail "9q: bracketed id not shown, got: $out" ;; esac
+# 9r. non-string, non-object model values read as absent.
+for mv in null 42; do
+  out="$(runm "bnd-r$mv" startup "$mv" | ctxof)"
+  case "$out" in *"(model=none, source=startup): the SessionStart payload carried no model"*) ;; *) fail "9r: model $mv not read as absent, got: $out" ;; esac
+done
+# 9s. a CRLF override file still works and leaves no CR in the band line.
+printf 'reasoning=CRLF LINE\r\n' > "$BSTATE/band-lines"
+out="$(runm bnd-s startup '"claude-opus-5"' | ctxof)"
+rm -f "$BSTATE/band-lines"
+case "$out" in *"): CRLF LINE"*) ;; *) fail "9s: CRLF override ignored, got: $out" ;; esac
+printf '%s\n' "$out" | grep '^agent-tiers band' | LC_ALL=C grep -q "$(printf '\r')" && fail "9s: CR byte in the band line"
+# 9t. a present-but-unparseable library must not kill the hook.
+cp "$T/gk/scripts/lib/model-band.sh" "$T/model-band.keep"
+printf 'model_band() (\n  case x in\n' > "$T/gk/scripts/lib/model-band.sh"
+out="$(runm bnd-t startup '"claude-opus-5"')"; rc=$?
+cp "$T/model-band.keep" "$T/gk/scripts/lib/model-band.sh"
+[ "$rc" = 0 ] || fail "9t: unparseable library run exited $rc"
+case "$out" in *"loaded-doctrine manifest"*) ;; *) fail "9t: hook died instead of failing open, got: $out" ;; esac
+case "$out" in *"agent-tiers band"*) fail "9t: band line emitted from a broken library" ;; esac
+grep -q 'failed to load' "$T/guards.log" 2>/dev/null || fail "9t: no 'failed to load' line in the guards log"
+
 rm -rf "$T"
-echo "OK resume-inject: session id cannot escape the prefs dir; gates, stand-down, version stamp, manifest, the memory advisory (fires pre-gate) and the four arrival advisories hold, the doc-lifecycle advisory (block E) rides the same stamp line, and startup now restores the handoff (capped to keep the whole inject under the host's 10000-char inline limit, fail-closed on an unknown source)"
+echo "OK resume-inject: session id cannot escape the prefs dir; gates, stand-down, version stamp, manifest, the memory advisory (fires pre-gate) and the four arrival advisories hold, the doc-lifecycle advisory (block E) rides the same stamp line, and startup now restores the handoff (capped to keep the whole inject under the host's 10000-char inline limit, fail-closed on an unknown source), and every known source gets a one-line model band (absent, unranked and unsafe ids included; overridable, kill-switched, fail-open)"

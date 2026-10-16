@@ -1,0 +1,793 @@
+#!/bin/sh
+# kit-scope: shared
+# agent-tiers: install, configure, remove or report the agent-tiers kit for one Claude Code profile.
+#   agent-tiers <install|configure|remove|status> [--level LEVEL] [--set key=value]... [--yes] [--dry-run]
+# Levels, groups, hook ids and hook dependencies (the `requires` column) come from install/options.tsv.
+# Options are stored in ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json at .pluginConfigs["agent-tiers@<marketplace>"].options
+# (enabled, group_<g>, disabled_hooks); three env keys live under .env. Without --yes it asks first.
+# Extras (rows of kind extra in options.tsv): --set extra_<id>=<bool> for a settings extra (statusline sets
+# statusLine and subagentStatusLine in settings.json, remove undoes only the keys that run this kit's scripts);
+# a pointer extra is printed on install and writes nothing.
+# --dry-run (install, configure) asks nothing, as --yes, prints the plan and writes and runs nothing.
+#   agent-tiers reach list
+# reach list shows reach-guard's user allowlist ($CFG/reach-guard/allow.tsv); it needs no jq and never
+# writes. The CLI never writes that file: the user adds a row with the printf line reach-guard's prompt
+# shows (see docs/after-install.md).
+# Every effect goes through one function: edit_settings (the only settings.json writer, at most one
+# call per run, backup first), remove_path (the only rm), run_engine (scripts/install-flat.sh) and
+# run_reader (scripts/detect-env.sh, scripts/kit-gate.sh). agent-tiers.selfcheck.sh lints the rest.
+set -u
+LC_ALL=C; export LC_ALL
+
+nl='
+'
+env_keys='AGENT_TIERS_NOTIFY_FOCUS_CMD AGENT_TIERS_NOTIFY_TERMINAL AGENT_TIERS_BADGE_GLYPHS'
+
+err() { printf 'agent-tiers: %s\n' "$*" >&2; }
+usage() {
+  printf '%s\n' 'usage: agent-tiers <install|configure|remove|status> [--level LEVEL] [--set key=value]... [--yes] [--dry-run]' \
+    '  --level LEVEL   a level row of install/options.tsv (install, configure)' \
+    '  --set key=value enabled, group_<g>, disabled_hooks, extra_<id>, AGENT_TIERS_NOTIFY_FOCUS_CMD,' \
+    '                  AGENT_TIERS_NOTIFY_TERMINAL or AGENT_TIERS_BADGE_GLYPHS (repeatable)' \
+    '  --yes           no prompts; detected env values are only printed as hints' \
+    '  --dry-run       print the plan --yes would apply, write and run nothing (install, configure)' \
+    '' \
+    'usage: agent-tiers reach list   show the reach-guard user allowlist (read-only; the CLI never writes it,' \
+    '                                see docs/after-install.md to add a row)'
+}
+bad_usage() { [ $# -gt 0 ] && err "$*"; usage >&2; exit 2; }
+abort() { printf '\n' ; err 'aborted, nothing written'; exit 1; }
+ask() { printf '%s' "$1"; IFS= read -r ans || abort; }
+in_list() { # $1 must be a plain token ([A-Za-z0-9_-], not empty)
+  case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  case " $2 " in *" $1 "*) return 0 ;; esac; return 1
+}
+
+# ---- effect functions (the only places that write, remove or exec a kit script) ----
+
+edit_settings() {
+  es_f=$1; shift
+  if [ ! -f "$settings" ]; then
+    [ -d "$cfg" ] || mkdir -p "$cfg" || return 1
+    printf '{}\n' > "$settings" || return 1
+  fi
+  es_sum=$(cksum < "$settings") || return 1
+  es_base="$settings.bak-$(date +%Y%m%d-%H%M%S)"; es_bak=$es_base; es_n=1
+  # next suffix after the highest one this second (the prune may already have dropped the bare name)
+  for es_k in 2 3 4 5 6 7 8 9; do [ -e "$es_base-$es_k" ] && es_n=$es_k; done
+  if [ "$es_n" -gt 1 ] || [ -e "$es_base" ]; then
+    es_n=$((es_n + 1))
+    [ "$es_n" -le 9 ] || { err "too many backups this second: $es_base"; return 1; }
+    es_bak="$es_base-$es_n"
+  fi
+  cp -p "$settings" "$es_bak" || return 1
+  chmod 600 "$es_bak" || return 1
+  ls -1 "$settings".bak-* 2>/dev/null | sort -r | tail -n +6 | while IFS= read -r es_old; do rm -f "$es_old"; done
+  es_tmp=$(mktemp "$settings.XXXXXX") || return 1
+  es_rc=1
+  if jq "$@" "$es_f" "$settings" > "$es_tmp" && jq -e 'type == "object"' "$es_tmp" >/dev/null 2>&1; then
+    if [ "$(cksum < "$settings")" = "$es_sum" ]; then
+      if cat "$es_tmp" > "$settings"; then es_rc=0
+      else
+        if cat "$es_bak" > "$settings"; then
+          err "writing $settings failed; restored it from the backup $es_bak"
+        else
+          err "writing $settings failed and so did the restore; recover it from $es_bak"
+        fi
+      fi
+    else
+      err "$settings changed while being edited; nothing written"
+    fi
+  else
+    err "jq could not build the new settings; nothing written"
+  fi
+  rm -f "$es_tmp"
+  [ "$es_rc" = 0 ] && printf 'settings.json updated (backup: %s)\n' "$es_bak"
+  return "$es_rc"
+}
+
+remove_path() {
+  case "$1" in
+    "$cfg"/*) ;;
+    *) [ "$1" = "$HOME/bin/agent-tiers-share" ] || { err "refusing to remove $1: not under $cfg"; return 1; } ;;
+  esac
+  case "$1" in */../*|*/..) err "refusing to remove $1: contains .."; return 1 ;; esac
+  if [ -d "$1" ] && [ ! -L "$1" ]; then err "refusing to remove $1: a directory, not a symlink"; return 1; fi
+  rm -f "$1" && printf '  removed %s\n' "$1"
+}
+
+run_engine() {
+  CLAUDE_CONFIG_DIR="$cfg" sh "$root/scripts/install-flat.sh" "$@" </dev/null
+}
+
+run_reader() {
+  case "$1" in
+    detect-env.sh|kit-gate.sh) ;;
+    *) err "run_reader: refusing $1"; return 2 ;;
+  esac
+  rr_n=$1; shift
+  CLAUDE_CONFIG_DIR="$cfg" sh "$root/scripts/$rr_n" "$@" </dev/null
+}
+
+# ---- reach: the reach-guard user allowlist (read-only) ----
+
+# reach_ok: 0 when the user dir and allow.tsv pass the tests reach-guard applies, else says why and 1
+reach_ok() {
+  rch_d="$cfg/reach-guard"; rch_a="$rch_d/allow.tsv"
+  if [ -e "$rch_d" ] || [ -L "$rch_d" ]; then
+    if [ -L "$rch_d" ] || [ ! -O "$rch_d" ] || [ ! -d "$rch_d" ]; then
+      err "refusing $rch_d: a symlink, not a directory or not owned by this user (reach-guard ignores it)"; return 1
+    fi
+  fi
+  if [ -e "$rch_a" ] || [ -L "$rch_a" ]; then
+    if [ -L "$rch_a" ] || [ ! -O "$rch_a" ] || [ ! -f "$rch_a" ] || [ ! -r "$rch_a" ]; then
+      err "refusing $rch_a: a symlink, not a regular file, unreadable or not owned by this user (reach-guard ignores it)"; return 1
+    fi
+  fi
+  return 0
+}
+reach_list() {
+  printf 'allowlist: %s\n' "$cfg/reach-guard/allow.tsv"
+  reach_ok || return 1
+  if [ ! -f "$cfg/reach-guard/allow.tsv" ]; then printf 'absent (no user allowlist rows)\n'; return 0; fi
+  cat "$cfg/reach-guard/allow.tsv"
+}
+reach_main() {
+  root=$(cd "$(dirname "$0")/.." && pwd) || exit 1
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  rch_sub=${1:-}; [ $# -gt 0 ] && shift
+  case "$rch_sub" in
+    list) [ $# -eq 0 ] || bad_usage "reach list takes no arguments"; reach_list ;;
+    *) bad_usage "reach: expected list" ;;
+  esac
+}
+
+# ---- arguments ----
+
+[ $# -gt 0 ] || bad_usage
+case "$1" in -h|--help) usage; exit 0 ;; esac
+if [ "$1" = reach ]; then shift; reach_main "$@"; exit $?; fi
+case "$1" in
+  'install'|'configure'|'remove'|'status') cmd=$1 ;;
+  *) bad_usage "unknown command: $1" ;;
+esac
+shift
+level=""; yes=0; sets=""; has_level=0; dry=0
+set_arg() {
+  case "$1" in *"$nl"*) bad_usage "--set value must be one line" ;; esac
+  sets="$sets$1$nl"
+}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --level) [ $# -ge 2 ] || bad_usage '--level needs a value'; level=$2; has_level=1; shift ;;
+    --level=*) level=${1#--level=}; has_level=1 ;;
+    --set) [ $# -ge 2 ] || bad_usage '--set needs key=value'; set_arg "$2"; shift ;;
+    --set=*) set_arg "${1#--set=}" ;;
+    --yes|-y) yes=1 ;;
+    --dry-run) dry=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) bad_usage "unknown flag: $1" ;;
+  esac
+  shift
+done
+case "$cmd" in
+  'remove'|'status') { [ "$has_level" = 0 ] && [ -z "$sets" ] && [ "$dry" = 0 ]; } || bad_usage "--level, --set and --dry-run apply to install and configure only" ;;
+esac
+[ "$dry" = 1 ] && yes=1   # a dry run plans exactly what --yes would apply
+command -v jq >/dev/null 2>&1 || { err 'jq is required (https://jqlang.org); install it and re-run'; exit 2; }
+
+root=$(cd "$(dirname "$0")/.." && pwd) || exit 1
+tsv="$root/install/options.tsv"
+[ -r "$tsv" ] || { err "missing $tsv"; exit 1; }
+cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+settings="$cfg/settings.json"
+sl_main="sh \"$root/scripts/statusline.sh\""
+sl_sub="sh \"$root/scripts/statusline-subagent.sh\""
+if [ -f "$settings" ] && ! jq -e 'type == "object"' "$settings" >/dev/null 2>&1; then
+  err "$settings is not valid JSON (or not an object); fix it first, nothing was changed"
+  exit 1
+fi
+
+# ---- options.tsv ----
+
+groups=$(awk -F'\t' '$1 == "option" && $2 ~ /^group_/ { sub(/^group_/, "", $2); print $2 }' "$tsv" | tr '\n' ' ')
+hook_ids=$(awk -F'\t' '$1 == "hook" { print $2 }' "$tsv" | tr '\n' ' ')
+levels=$(awk -F'\t' '$1 == "level" { print $2 }' "$tsv" | tr '\n' ' ')
+hooks_of() { awk -F'\t' -v g="$1" '$1 == "hook" && $3 == g { print $2 }' "$tsv" | tr '\n' ' '; }
+reqmap=$(awk -F'\t' '$1 == "hook" && $7 != "-" { print $2 ":" $7 }' "$tsv" | tr '\n' ' ')
+grpmap=$(awk -F'\t' '$1 == "hook" { print $2 ":" $3 }' "$tsv" | tr '\n' ' ')
+requires_of() { # hook id -> its required ids, space separated (from the requires column, loaded once above)
+  for ro_p in $reqmap; do
+    [ "${ro_p%%:*}" = "$1" ] || continue
+    # ids are unique, so return at the match: `set --` below replaces $1, and a later entry for
+    # the first required id would otherwise match too and leak its own requirements into this list
+    ro_v=${ro_p#*:}; ro_i=$IFS; IFS=,; set -- $ro_v; IFS=$ro_i; printf '%s ' "$@"; return 0
+  done
+}
+group_of_hook() { for go_p in $grpmap; do [ "${go_p%%:*}" = "$1" ] && { printf '%s' "${go_p#*:}"; return; }; done; }
+group_text() { awk -F'\t' -v k="group_$1" '$1 == "option" && $2 == k { print $5 " - " $6; exit }' "$tsv"; }
+level_field() { awk -F'\t' -v l="$1" -v n="$2" '$1 == "level" && $2 == l { print $n; exit }' "$tsv"; }
+level_groups() {
+  lg_raw=$(level_field "$1" 3)
+  case ",$lg_raw," in *,\*,*) printf '%s' "$groups"; return ;; esac
+  lg_out=""
+  for lg_g in $(printf '%s' "$lg_raw" | tr ',' ' '); do
+    in_list "$lg_g" "$groups" && lg_out="$lg_out $lg_g"
+  done
+  printf '%s' "$lg_out"
+}
+extra_f() { awk -F'\t' -v i="$1" -v n="$2" '$1 == "extra" && $2 == i { print $n; exit }' "$tsv"; }
+extra_ids() { awk -F'\t' -v a="$1" '$1 == "extra" && $3 == a { print $2 }' "$tsv" | tr '\n' ' '; }
+sorted() { printf '%s\n' $1 | grep -v '^$' | sort | tr '\n' ' '; }
+hook_count() { # hooks a group list runs, core included
+  awk -F'\t' -v s=" core $1 " '$1 == "hook" && index(s, " " $3 " ") { n++ } END { print n + 0 }' "$tsv"
+}
+
+# ---- current state ----
+
+sj() { if [ -f "$settings" ]; then jq "$@" "$settings"; else printf '{}' | jq "$@"; fi; }
+
+flat=0; plugin=0; plugin_on=0
+[ -L "$cfg/skills/agent-tiers" ] && flat=1
+for f in "$cfg"/commands/agent-tiers-*.md; do [ -e "$f" ] && flat=1; break; done
+# plugin_on: enabled in user settings (it wires its own hooks); installed_plugins.json alone is plugin only
+[ "$(sj -r '[.enabledPlugins? | objects | to_entries[] | select((.key | startswith("agent-tiers@")) and .value == true)] | length')" -gt 0 ] && plugin=1 && plugin_on=1
+if [ -f "$cfg/plugins/installed_plugins.json" ] && grep -q 'agent-tiers@' "$cfg/plugins/installed_plugins.json"; then plugin=1; fi
+
+mk_name=""
+[ -f "$root/.claude-plugin/marketplace.json" ] && mk_name=$(jq -r '.name? // empty | strings' "$root/.claude-plugin/marketplace.json" 2>/dev/null)
+# key order: a pluginConfigs key that is enabled, any enabled key (beats a leftover entry on every
+# route, as kit-gate reads it), the first pluginConfigs key, any agent-tiers@ enabledPlugins key, fallback
+pk=$(sj -r --arg fb "agent-tiers@${mk_name:-agent-tiers}" '
+  ([.pluginConfigs? | objects | keys_unsorted[] | select(startswith("agent-tiers@"))]) as $pc
+  | ([.enabledPlugins? | objects | to_entries[] | select(.key | startswith("agent-tiers@"))]) as $ep
+  | ([$ep[] | select(.value == true) | .key]) as $on
+  | ([$pc[] | select(. as $k | any($on[]; . == $k))][0]
+     // $on[0]
+     // $pc[0] // ($ep | map(.key))[0] // $fb)')
+
+cur=$(sj -c --arg pk "$pk" '(try .pluginConfigs[$pk].options catch null) | if type == "object" then . else {} end')
+cur_env=$(sj -c '(try .env catch null) | if type == "object" then . else {} end')
+wired_ids() { # kit hook ids some settings.json hook command runs (any path ending /scripts/<id>.sh)
+  sj -r --arg ids "$hook_ids" '
+  [.hooks? | objects | .[] | arrays | .[] | objects | .hooks? | arrays | .[] | objects | .command? | strings] as $c
+  | ($ids | split(" ") | .[] | select(length > 0)) as $id
+  | select(any($c[]; contains("/scripts/" + $id + ".sh"))) | $id' | tr '\n' ' '
+}
+wired=$(wired_ids)
+# kit | other | unset: is settings key $1 an object whose .command is the string $2
+sl_state() { sj -r --arg k "$1" --arg c "$2" '.[$k] as $v | if $v == null then "unset" elif ($v | type) == "object" and $v.command == $c then "kit" else "other" end'; }
+st_main=$(sl_state statusLine "$sl_main"); st_sub=$(sl_state subagentStatusLine "$sl_sub")
+sl_path_ok() {
+  case "$root" in
+    *'"'*|*'\'*|*'$'*|*'`'*) err 'kit path cannot be carried in a command string'; exit 1 ;;
+  esac
+}
+share_foreign() { # 0 when $HOME/bin/agent-tiers-share is not the kit's, so install-flat.sh would replace it
+  sf_p="$HOME/bin/agent-tiers-share"; sf_src="$root/scripts/agent-tiers-share"
+  [ -f "$sf_src" ] && [ -d "$HOME/bin" ] || return 1
+  [ -e "$sf_p" ] || [ -L "$sf_p" ] || return 1
+  if [ -L "$sf_p" ]; then
+    sf_t=$(readlink "$sf_p")
+    case "$sf_t" in /*) ;; *) sf_t="$HOME/bin/$sf_t" ;; esac
+    sf_t="$(cd "$(dirname "$sf_t")" 2>/dev/null && pwd -P)/$(basename "$sf_t")"
+    [ "$sf_t" = "$(cd "$root/scripts" && pwd -P)/agent-tiers-share" ] && return 1
+  elif [ -f "$sf_p" ] && cmp -s "$sf_p" "$sf_src"; then
+    return 1
+  fi
+  return 0
+}
+engine_blocked() {
+  share_foreign || return 0
+  err "install-flat.sh would replace $HOME/bin/agent-tiers-share, which is not the kit's; move it aside and re-run"
+  exit 1
+}
+
+# jget JSON KEY -> the value as JSON, or "absent" (null counts as absent)
+jget() { printf '%s' "$1" | jq -r --arg k "$2" 'if has($k) and .[$k] != null then (.[$k] | tojson) else "absent" end'; }
+is_off() { case "$1" in false|0|'"false"'|'"0"') return 0 ;; esac; return 1; }
+group_on() { # effectively on, judged from the state before this run
+  go_v=$(jget "$cur" "group_$1")
+  if [ "$go_v" != absent ]; then is_off "$go_v" && return 1; return 0; fi
+  [ "$flat" = 1 ] || return 1
+  for go_id in $(hooks_of "$1"); do in_list "$go_id" "$wired" && return 0; done
+  return 1
+}
+disabled_of() { # JSON options -> space list of disabled hook ids
+  printf '%s' "$1" | jq -r '(.disabled_hooks // []) | if type == "array" then .[] | strings
+    else tostring | split(",")[] | split(" ")[] end | select(length > 0)' | tr '\n' ' '
+}
+
+# eng_failed OUTPUT: install-flat.sh exits 0 now only for the no-jq manual-wiring case and a failed post-wire
+# selfcheck (the CLI counts that one separately, see nsc); failed wire/removal steps exit 1. Quote its failure lines
+# (ASCII patterns only) and return 0 when there are any
+eng_failed() {
+  ef_l=$(printf '%s\n' "$1" | grep -e 'wire FAILED' -e 'removal FAILED' -e 'SKIPPING all hook wiring' -e 'jq not found - wire hooks manually')
+  [ -n "$ef_l" ] || return 1
+  err "install-flat.sh exited 0 but reported a failure:"
+  printf '%s\n' "$ef_l" | while IFS= read -r ef_x; do err "  $ef_x"; done
+  return 0
+}
+
+# ---- status ----
+
+if [ "$cmd" = status ]; then
+  types=""; [ "$flat" = 1 ] && types="flat"; [ "$plugin" = 1 ] && types="$types plugin"
+  printf 'config dir:   %s\n' "$cfg"
+  printf 'settings:     %s%s\n' "$settings" "$([ -f "$settings" ] || printf ' (absent)')"
+  printf 'install type: %s\n' "${types:-none detected}"
+  printf 'plugin key:   %s\n' "$pk"
+  v=$(jget "$cur" enabled); [ "$v" = absent ] && v="absent (on)"
+  printf 'enabled:      %s\n' "$v"
+  st_n=0; st_m=0; st_on=""
+  for g in $groups; do
+    st_m=$((st_m + 1)); v=$(jget "$cur" "group_$g")
+    [ "$v" = absent ] && continue
+    st_n=$((st_n + 1)); is_off "$v" || st_on="$st_on $g"
+  done
+  if [ "$st_n" = 0 ]; then v='never configured (no group value stored)'
+  elif [ "$st_n" != "$st_m" ]; then v="partial ($st_n of $st_m groups stored)"
+  else
+    v=custom; st_s=$(sorted "$st_on")
+    for l in $levels; do [ "$(sorted "$(level_groups "$l")")" = "$st_s" ] && { v=$l; break; }; done
+  fi
+  printf 'level:        %s\n' "$v"
+  printf 'groups:\n'
+  for g in $groups; do
+    v=$(jget "$cur" "group_$g")
+    if [ "$v" = absent ]; then
+      if [ "$plugin" = 1 ] && [ "$flat" = 0 ]; then
+        v="absent ($(awk -F'\t' -v k="group_$g" '$1 == "option" && $2 == k { print $4; exit }' "$tsv"), options.tsv default for plugin)"
+      else
+        v="absent (on for flat)"
+      fi
+    else
+      v="$v (stored)"
+    fi
+    n=0; t=0
+    for id in $(hooks_of "$g"); do t=$((t + 1)); in_list "$id" "$wired" && n=$((n + 1)); done
+    if [ "$plugin_on" = 1 ] && [ "$flat" = 0 ]; then
+      printf '  %-16s %s; wired by plugin (%d hooks)%s\n' "$g" "$v" "$t" "$([ "$n" -gt 0 ] && printf '; %d also wired in settings.json' "$n")"
+    elif [ "$plugin_on" = 1 ]; then
+      printf '  %-16s %s; %d of %d hooks wired; plugin also wires them\n' "$g" "$v" "$n" "$t"
+    else
+      printf '  %-16s %s; %d of %d hooks wired\n' "$g" "$v" "$n" "$t"
+    fi
+  done
+  v=$(disabled_of "$cur"); printf 'disabled_hooks: %s\n' "${v:-none}"
+  for k in $env_keys; do
+    v=$(printf '%s' "$cur_env" | jq -r --arg k "$k" '.[$k] // empty | tostring')
+    printf '%s: %s\n' "$k" "${v:-unset}"
+  done
+  printf 'extra statusline: statusLine %s, subagentStatusLine %s\n' "$st_main" "$st_sub"
+  for xid in $(extra_ids pointer); do
+    if command -v "$xid" >/dev/null 2>&1; then xp=yes; else xp=no; fi
+    printf 'extra %s: pointer only; %s on PATH: %s\n' "$xid" "$xid" "$xp"
+  done
+  line=$(run_reader kit-gate.sh --summary 2>/dev/null | head -n 1)
+  [ -n "$line" ] && printf '%s\n' "$line"
+  exit 0
+fi
+
+# ---- remove ----
+
+if [ "$cmd" = remove ]; then
+  printf 'agent-tiers remove (profile %s)\n' "$cfg"
+  withouts=""; for id in $hook_ids; do withouts="$withouts --without-$id"; done
+  [ "$flat" = 1 ] && printf '  flat install: unwire every kit hook with install-flat.sh --unwire-only (%s ids; edits kit hook rows in settings.json and the kit ledger, backs up settings.json keeping the newest 5 backups), then remove the kit skill and agent symlinks, agent-tiers-*.md commands and ~/bin/agent-tiers-share\n' "$(printf '%s' "$hook_ids" | wc -w | tr -d ' ')"
+  [ "$plugin" = 1 ] && printf '  plugin install: run /plugin uninstall %s in Claude Code (not automated)\n' "$pk"
+  has_keys=$(sj -r --arg ek "$env_keys" '([.pluginConfigs? | objects | keys_unsorted[] | select(startswith("agent-tiers@"))] | length)
+    + ([.env? | objects | keys_unsorted[] as $k | select($ek | split(" ") | index($k))] | length)')
+  [ "$has_keys" -gt 0 ] && printf '  settings.json: delete every agent-tiers@ pluginConfigs entry and the three AGENT_TIERS env keys\n'
+  rk=""
+  [ "$st_main" = kit ] && rk="statusLine"
+  [ "$st_sub" = kit ] && rk="${rk:+$rk / }subagentStatusLine"
+  [ -n "$rk" ] && printf '  settings.json: delete %s (they run this kit'"'"'s statusline scripts)\n' "$rk"
+  [ "$st_main" = other ] && printf '  left in place (not this kit copy'"'"'s): statusLine\n'
+  [ "$st_sub" = other ] && printf '  left in place (not this kit copy'"'"'s): subagentStatusLine\n'
+  if [ "$yes" = 0 ]; then
+    ask 'Remove? [y/N] '
+    case "$ans" in y|Y|yes|YES) ;; *) printf 'nothing changed\n'; exit 1 ;; esac
+  fi
+  if [ "$flat" = 1 ]; then
+    # shellcheck disable=SC2086
+    if eng_out=$(run_engine --unwire-only $withouts 2>&1); then eng_rc=0; else eng_rc=$?; fi
+    printf '%s\n' "$eng_out"
+    [ "$eng_rc" = 0 ] || { err "install-flat.sh failed (exit $eng_rc); stopped, nothing else changed"; exit 1; }
+    eng_failed "$eng_out" && { err "stopped, nothing else changed (settings.json options not written)"; exit 1; }
+  fi
+  left=$(wired_ids)
+  if [ -n "$(printf '%s' "$left" | tr -d ' ')" ]; then
+    err "kit hook rows still wired in $settings (not removed by install-flat.sh, or no flat install to unwire):$(printf ' %s' $left)"
+    err "remove those hook rows by hand and re-run; stopped before removing links or options"
+    exit 1
+  fi
+  if [ "$flat" = 1 ]; then
+    for d in "$root"/skills/*/; do
+      [ -d "$d" ] || continue
+      p="$cfg/skills/$(basename "$d")"
+      if [ -L "$p" ]; then remove_path "$p"; elif [ -e "$p" ]; then printf '  left in place (not a symlink): %s; remove by hand if it is the kit copy\n' "$p"; fi
+    done
+    for a in "$root"/agents/*.md; do
+      [ -f "$a" ] || continue
+      p="$cfg/agents/$(basename "$a")"
+      if [ -L "$p" ]; then remove_path "$p"; elif [ -e "$p" ]; then printf '  left in place (not a symlink): %s; remove by hand if it is the kit copy\n' "$p"; fi
+    done
+    for c in "$root"/commands/*.md; do
+      [ -f "$c" ] || continue
+      p="$cfg/commands/agent-tiers-$(basename "$c")"
+      [ -f "$p" ] && remove_path "$p"
+    done
+    p="$HOME/bin/agent-tiers-share"; src="$root/scripts/agent-tiers-share"
+    if [ -L "$p" ]; then
+      tg=$(readlink "$p")
+      case "$tg" in /*) ;; *) tg="$HOME/bin/$tg" ;; esac
+      tg="$(cd "$(dirname "$tg")" 2>/dev/null && pwd -P)/$(basename "$tg")"
+      [ "$tg" = "$(cd "$root/scripts" && pwd -P)/agent-tiers-share" ] && remove_path "$p"
+    elif [ -f "$p" ] && cmp -s "$p" "$src"; then
+      remove_path "$p"
+    fi
+  fi
+  if [ "$has_keys" -gt 0 ] || [ -n "$rk" ]; then
+    edit_settings '
+      (if (.pluginConfigs | type) == "object" then
+         (.pluginConfigs | with_entries(select(.key | startswith("agent-tiers@") | not))) as $pc
+         | (if $pc == {} and .pluginConfigs != {} then del(.pluginConfigs) else .pluginConfigs = $pc end)
+       else . end)
+      | (if (.env | type) == "object" then
+           (.env | del(.[$ek | split(" ")[]])) as $e
+           | (if $e == {} and .env != {} then del(.env) else .env = $e end)
+         else . end)
+      | (if (.statusLine | type) == "object" and .statusLine.command == $slc then del(.statusLine) else . end)
+      | (if (.subagentStatusLine | type) == "object" and .subagentStatusLine.command == $ssc then del(.subagentStatusLine) else . end)' \
+      --arg ek "$env_keys" --arg slc "$sl_main" --arg ssc "$sl_sub" || exit 1
+  fi
+  nbak=$(ls -1 "$settings".bak-* 2>/dev/null | wc -l | tr -d ' ')
+  printf '%s\n' 'Not automated (see docs/uninstall.md):' \
+    "  $nbak settings.json.bak-* file(s) next to $settings, left as recovery copies" \
+    '  ~/.codex-homes (per-session Codex config copies)' \
+    '  per-project artifacts written by /agent-tiers:init' \
+    "  $root/kit-config.md and $root/.state" \
+    "  the kit checkout itself: $root"
+  exit 0
+fi
+
+# ---- install / configure ----
+
+[ "$has_level" = 0 ] || in_list "$level" "$levels" || bad_usage "unknown level '$level' (levels: $levels)"
+
+# Validate every --set before anything runs: set_opts / set_env are JSON objects.
+set_opts='{}'; set_env='{}'; xsets=""
+xval() { xv_r=""; for xv_p in $xsets; do [ "${xv_p%%=*}" = "$1" ] && xv_r=${xv_p#*=}; done; printf '%s' "$xv_r"; }
+old_ifs=$IFS; IFS=$nl; set -f
+for kv in $sets; do
+  IFS=$old_ifs
+  case "$kv" in *=*) ;; *) bad_usage "--set needs key=value (got '$kv')" ;; esac
+  k=${kv%%=*}; v=${kv#*=}
+  case "$v" in *[[:cntrl:]]*) bad_usage "--set $k: value must be one line with no control bytes" ;; esac
+  if [ "$k" = enabled ] || { case "$k" in group_*) in_list "${k#group_}" "$groups" ;; *) false ;; esac; }; then
+    case "$v" in
+      true|on|1|yes) b=true ;;
+      false|off|0|no) b=false ;;
+      *) bad_usage "--set $k: '$v' is not a boolean (true/false/on/off/1/0/yes/no)" ;;
+    esac
+    set_opts=$(printf '%s' "$set_opts" | jq -c --arg k "$k" --argjson v "$b" '.[$k] = $v')
+  elif [ "$k" = disabled_hooks ]; then
+    ids=$(printf '%s' "$v" | tr ',' ' ')
+    for id in $ids; do in_list "$id" "$hook_ids" || bad_usage "--set disabled_hooks: unknown hook id '$id'"; done
+    set_opts=$(printf '%s' "$set_opts" | jq -c --arg s "$(printf '%s ' $ids)" '.disabled_hooks = ($s | split(" ") | map(select(length > 0)))')
+  elif case "$k" in extra_*) true ;; *) false ;; esac; then
+    xid=${k#extra_}
+    case "$(extra_f "$xid" 3)" in
+      settings) ;;
+      pointer) bad_usage "--set $k: pointer only, nothing to set" ;;
+      *) bad_usage "--set: unknown extra '$xid'" ;;
+    esac
+    case "$v" in
+      true|on|1|yes) b=true ;;
+      false|off|0|no) b=false ;;
+      *) bad_usage "--set $k: '$v' is not a boolean (true/false/on/off/1/0/yes/no)" ;;
+    esac
+    if [ "$xid" = statusline ] && [ "$b" = true ]; then
+      { [ -f "$root/scripts/statusline.sh" ] && [ -f "$root/scripts/statusline-subagent.sh" ]; } || bad_usage "extra statusline: script not in this kit copy"
+      sl_path_ok
+    fi
+    xsets="$xsets $k=$b"
+  elif in_list "$k" "$env_keys"; then
+    set_env=$(printf '%s' "$set_env" | jq -c --arg k "$k" --arg v "$v" '.[$k] = $v')
+  else
+    bad_usage "--set: unknown key '$k' (enabled, group_<g> for g in:$groups, disabled_hooks, extra_<id>, $env_keys)"
+  fi
+done
+IFS=$old_ifs; set +f
+
+use_fzf=0
+if command -v fzf >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]; then use_fzf=1; fi
+
+# Interactive level step: sets choice (keep|set) and chosen (group list).
+pick_level() {
+  pl_i=0; pl_menu=""
+  for pl_l in $levels; do
+    pl_i=$((pl_i + 1)); pl_g=$(level_groups "$pl_l")
+    pl_menu="$pl_menu$pl_i) $pl_l: $(level_field "$pl_l" 4)$nl   groups: ${pl_g:- none}; $(hook_count "$pl_g") hooks$nl"
+  done
+  pl_custom=$((pl_i + 1))
+  pl_menu="$pl_menu$pl_custom) custom: pick groups$nl"
+  [ "$cmd" = configure ] && pl_menu="${pl_menu}0) keep current groups$nl"
+  while :; do
+    if [ "$use_fzf" = 1 ]; then
+      ans=$(printf '%s' "$pl_menu" | grep '^[0-9]' | fzf --no-multi --header 'enter: choose level  esc: abort') || abort
+      ans=${ans%%)*}
+    else
+      printf 'Level:\n%s' "$pl_menu"
+      ask "Choose [0-$pl_custom]: "
+    fi
+    case "$ans" in ''|*[!0-9]*) continue ;; esac
+    if [ "$ans" = 0 ] && [ "$cmd" = configure ]; then choice=keep; return; fi
+    if [ "$ans" -ge 1 ] && [ "$ans" -lt "$pl_custom" ]; then
+      choice=set; chosen=$(level_groups "$(printf '%s' "$levels" | tr ' ' '\n' | sed -n "${ans}p")"); return
+    fi
+    if [ "$ans" = "$pl_custom" ]; then choice=set; group_menu; return; fi
+  done
+}
+
+group_lines() {
+  gl_i=0
+  for gl_g in $groups; do
+    gl_i=$((gl_i + 1)); gl_m=' '; in_list "$gl_g" "$chosen" && gl_m=x
+    printf '%2d) [%s] %s\n' "$gl_i" "$gl_m" "$(group_text "$gl_g")"
+  done
+}
+toggle() { # $1 = 1-based group number
+  tg_g=$(printf '%s' "$groups" | tr ' ' '\n' | grep -v '^$' | sed -n "${1}p")
+  [ -n "$tg_g" ] || return 0
+  if in_list "$tg_g" "$chosen"; then
+    tg_n=""; for tg_x in $chosen; do [ "$tg_x" = "$tg_g" ] || tg_n="$tg_n $tg_x"; done; chosen=$tg_n
+  else
+    chosen="$chosen $tg_g"
+  fi
+}
+group_menu() {
+  chosen=""; for gm_g in $groups; do group_on "$gm_g" && chosen="$chosen $gm_g"; done
+  while :; do
+    if [ "$use_fzf" = 1 ]; then
+      gm_out=$(group_lines | fzf --no-multi --expect=ctrl-d --header 'enter: toggle  ctrl-d: done  esc: abort') || abort
+      [ "$(printf '%s\n' "$gm_out" | sed -n 1p)" = ctrl-d ] && return
+      ans=$(printf '%s\n' "$gm_out" | sed -n 2p | sed 's/^ *\([0-9]*\)).*/\1/')
+    else
+      printf 'Groups:\n'; group_lines
+      ask 'Number toggles, a = all, n = none, d or empty = done: '
+    fi
+    case "$ans" in
+      d|'') return ;;
+      a) chosen=$groups ;;
+      n) chosen="" ;;
+      *[!0-9]*) ;;
+      *) toggle "$ans" ;;
+    esac
+  done
+}
+
+newopt=$cur; newenv=$cur_env; choice=keep; chosen=""; keep_note=0
+opt_set() { newopt=$(printf '%s' "$newopt" | jq -c --arg k "$1" --argjson v "$2" '.[$k] = $v'); }
+
+if [ "$has_level" = 1 ]; then
+  choice=set; chosen=$(level_groups "$level")
+elif [ "$yes" = 0 ]; then
+  pick_level
+fi
+
+if [ "$choice" = set ]; then
+  # a level stores every group explicitly: true inside it, false outside (absent means on for flat
+  # and off for the plugin, so an absent group would read differently per route)
+  for g in $groups; do
+    if in_list "$g" "$chosen"; then opt_set "group_$g" true; else opt_set "group_$g" false; fi
+  done
+else
+  # keep (install fallback, configure --yes or the "keep" pick): each group with no stored value
+  # gets its effective state today, so its wired hooks stay in the engine flags; stored values stay
+  # plugin enabled: group_on is a flat-only guess (an in-place load reads absent as on, a cache
+  # install as off), so never-stored groups stay absent and the plan says so
+  for g in $groups; do
+    [ "$(jget "$cur" "group_$g")" = absent ] || continue
+    if [ "$plugin_on" = 1 ]; then keep_note=1; continue; fi
+    if group_on "$g"; then opt_set "group_$g" true; else opt_set "group_$g" false; fi
+  done
+fi
+# --set wins over the level
+newopt=$(printf '%s' "$newopt" | jq -c --argjson s "$set_opts" '. + $s')
+newenv=$(printf '%s' "$newenv" | jq -c --argjson s "$set_env" '. + $s')
+
+# Detected env proposals: asked one by one interactively, printed as hints with --yes.
+det=$(run_reader detect-env.sh 2>/dev/null) || det=""
+for k in $env_keys; do
+  pv=$(printf '%s\n' "$det" | awk -v p="propose.$k=" 'index($0, p) == 1 { print substr($0, length(p) + 1); exit }')
+  [ -n "$pv" ] || continue
+  [ "$(jget "$set_env" "$k")" = absent ] || continue
+  cv=$(printf '%s' "$cur_env" | jq -r --arg k "$k" 'if has($k) then .[$k] | tostring else "" end')
+  [ "$pv" = "$cv" ] && continue
+  case "$pv" in *[[:cntrl:]]*) continue ;; esac
+  rs=$(printf '%s\n' "$det" | awk -v p="reason.$k=" 'index($0, p) == 1 { print substr($0, length(p) + 1); exit }')
+  printf 'Detected %s=%s\n  reason: %s\n  current: %s\n' "$k" "$pv" "${rs:-none given}" "${cv:-unset}"
+  if [ "$yes" = 1 ]; then
+    printf '  to accept: --set %s=%s\n' "$k" "$pv"
+  else
+    ask "  Set it? [y/N] "
+    case "$ans" in
+      y|yes) newenv=$(printf '%s' "$newenv" | jq -c --arg k "$k" --arg v "$pv" '.[$k] = $v') ;;
+    esac
+  fi
+done
+
+# Extras: settings rows are handled here (only statusline has a handler), pointer rows print after the plan.
+sl_act=keep
+for xid in $(extra_ids settings); do
+  if [ "$xid" != statusline ]; then printf '  skipped extra %s (not supported by this CLI)\n' "$xid"; continue; fi
+  xs_v=$(xval extra_statusline); xs_t=$(extra_f statusline 4); xs_d=$(extra_f statusline 5)
+  if [ -n "$xs_v" ]; then
+    if [ "$xs_v" = true ]; then sl_act=on; else sl_act=off; fi
+  elif [ ! -f "$root/scripts/statusline.sh" ] || [ ! -f "$root/scripts/statusline-subagent.sh" ]; then
+    printf '  skipped extra statusline (script not in this kit copy)\n'
+  elif [ "$yes" = 0 ]; then
+    if [ "$st_main" = kit ] && [ "$st_sub" = kit ]; then
+      printf 'Extra statusline: already set (this kit copy)\n'
+    else
+      xs_c=$(sj -r 'def show: if . == null then "unset" elif type == "object" then (.command // "unset" | tostring) else tojson end;
+        "statusLine \(.statusLine | show), subagentStatusLine \(.subagentStatusLine | show)"')
+      printf 'Extra: %s\n  %s\n  current: %s\n' "$xs_t" "$xs_d" "$xs_c"
+      if [ "$st_main" = other ] || [ "$st_sub" = other ]; then ask '  Replace it? [y/N] '; else ask '  Add it? [y/N] '; fi
+      case "$ans" in y|Y|yes|YES) sl_path_ok; sl_act=on ;; esac
+    fi
+  elif [ "$st_main" != kit ] || [ "$st_sub" != kit ]; then
+    printf '  to add extra statusline: --set extra_statusline=true\n'
+  fi
+done
+cur_x=$(sj -c '{statusLine: .statusLine, subagentStatusLine: .subagentStatusLine} | with_entries(select(.value != null))')
+new_x=$cur_x
+sl_one() { # settings key, its state, the command string
+  case "$sl_act:$2" in
+    on:kit|keep:*|off:unset) ;;
+    on:*) new_x=$(printf '%s' "$new_x" | jq -c --arg k "$1" --arg c "$3" '.[$k] = {type: "command", command: $c}') ;;
+    off:kit) new_x=$(printf '%s' "$new_x" | jq -c --arg k "$1" 'del(.[$k])') ;;
+    off:other) printf "  left in place (not this kit's): %s\n" "$1" ;;
+  esac
+}
+sl_one statusLine "$st_main" "$sl_main"
+sl_one subagentStatusLine "$st_sub" "$sl_sub"
+
+# Engine flags: --with-<id> for each hook of a group that ends true, minus disabled and missing ids.
+disabled=$(disabled_of "$newopt")
+on_groups=""
+for g in $groups; do v=$(jget "$newopt" "group_$g"); [ "$v" != absent ] && ! is_off "$v" && on_groups="$on_groups $g"; done
+ids=""; skipped=""
+for g in $on_groups; do
+  for id in $(hooks_of "$g"); do
+    in_list "$id" "$disabled" && continue
+    if [ ! -f "$root/scripts/$id.sh" ]; then skipped="$skipped $id"; continue; fi
+    ids="$ids $id"
+  done
+done
+# requires column: a hook whose required hook this plan leaves off is not flagged (it would not do
+# its job, and precompact-guard's probe refuses outright); repeat until stable so a chain A needs B
+# needs C drops A and B when C is off.
+dep_notes=""
+changed=1
+while [ "$changed" = 1 ]; do
+  changed=0
+  for dp in $ids; do
+    miss=""
+    for rq in $(requires_of "$dp"); do
+      in_list "$rq" "$ids" && continue
+      # core rows are wired by the engine regardless of the plan, so a core hook with a script counts as present
+      [ "$(group_of_hook "$rq")" = core ] && [ -f "$root/scripts/$rq.sh" ] && ! in_list "$rq" "$disabled" && continue
+      miss="$miss $rq"
+    done
+    [ -n "$miss" ] || continue
+    changed=1
+    i2=""; for x in $ids; do [ "$x" = "$dp" ] || i2="$i2 $x"; done; ids=$i2
+    for rq in $miss; do
+      rg=$(group_of_hook "$rq")
+      if in_list "$rq" "$disabled"; then
+        if [ "$rg" = core ] || in_list "$rg" "$on_groups"; then why="which disabled_hooks lists; take it out of disabled_hooks to turn both on"
+        else why="which disabled_hooks lists; take it out of disabled_hooks and add --set group_$rg=true to turn both on"
+        fi
+      elif [ ! -f "$root/scripts/$rq.sh" ]; then why="whose script is not in this kit copy"
+      elif in_list "$rg" "$on_groups"; then why="which is itself held back by its own requirement (see its own line)"
+      else why="which this plan leaves off; add --set group_$rg=true to turn both on"
+      fi
+      if [ "$plugin_on" = 1 ] || in_list "$dp" "$wired"; then
+        dep_notes="$dep_notes  inert: $dp is wired but needs $rq (group $rg), $why$nl"
+      else
+        dep_notes="$dep_notes  not wired: $dp needs $rq (group $rg), $why$nl"
+      fi
+    done
+  done
+done
+flags=""; for id in $ids; do flags="$flags --with-$id"; done
+engine=0
+if [ "$plugin_on" = 1 ]; then
+  engine=0   # the enabled plugin wires its own hooks; a flat wiring would run each one twice
+elif [ "$cmd" = install ]; then
+  if [ "$plugin" = 1 ] && [ "$flat" = 0 ]; then engine=0; else engine=1; fi
+elif [ "$flat" = 1 ]; then
+  for id in $ids; do in_list "$id" "$wired" || engine=1; done
+fi
+
+[ "$engine" = 1 ] && engine_blocked
+nsc=0
+
+# Plan
+diff_lines() { # $1 old JSON, $2 new JSON, $3 label prefix
+  jq -rn --argjson a "$1" --argjson b "$2" --arg p "$3" '
+    def show($o; $k): if ($o | has($k)) then ($o[$k] | tojson) else "absent" end;
+    (($a | keys_unsorted) + ($b | keys_unsorted) | unique)[] as $k
+    | select(($a | has($k)) != ($b | has($k)) or $a[$k] != $b[$k])
+    | "  \($p)\($k): \(show($a; $k)) -> \(show($b; $k))"'
+}
+plan=$(diff_lines "$cur" "$newopt" "options."; diff_lines "$cur_env" "$newenv" "env."; diff_lines "$cur_x" "$new_x" "settings.")
+printf 'Plan (%s, plugin key %s):\n' "$settings" "$pk"
+if [ -n "$plan" ]; then printf '%s\n' "$plan"; else printf '  settings.json: no changes\n'; fi
+if [ "$engine" = 1 ]; then
+  printf '  engine: install-flat.sh%s\n' "${flags:- (no flags)}"
+elif [ "$plugin_on" = 1 ]; then
+  printf '  engine: not run (agent-tiers plugin enabled: its hooks wire themselves and read these options; nothing wired by this CLI%s)\n' \
+    "$({ [ "$flat" = 1 ] || [ -n "$(printf '%s' "$wired" | tr -d ' ')" ]; } && printf '; kit rows still in settings.json run twice: install-flat.sh --unwire-only removes the ones pointing at this kit, remove any others by hand')"
+elif [ "$cmd" = install ]; then
+  printf '  engine: not run (plugin install only: options and env written, nothing wired by this CLI)\n'
+else
+  printf '  engine: not run\n'
+fi
+[ -n "$skipped" ] && printf '  skipped (script not in this kit copy):%s\n' "$skipped"
+[ -n "$dep_notes" ] && printf '%s' "$dep_notes"
+# only when a group is still unset after --set (a --set can store every skipped group)
+[ "$keep_note" = 1 ] && [ -n "$(for g in $groups; do [ "$(jget "$newopt" "group_$g")" = absent ] && printf x; done)" ] &&
+  printf '  note: groups never stored stay unset (plugin enabled: unset reads as off on a cache install, on for an in-place load); pass --level to store them\n'
+[ "$(jget "$newopt" enabled)" = false ] && printf 'warning: enabled is false, so the kit stays off (--set enabled=true turns it on)\n'
+if [ "$cmd" = install ]; then
+  for xid in $(extra_ids pointer); do printf 'Extra %s:\n  %s\n' "$(extra_f "$xid" 4)" "$(extra_f "$xid" 5)"; done
+fi
+if [ "$dry" = 1 ]; then printf 'dry run: nothing written\n'; exit 0; fi
+if [ "$yes" = 0 ]; then
+  ask 'Apply? [y/N] '
+  case "$ans" in y|yes) ;; *) printf 'nothing changed\n'; exit 1 ;; esac
+fi
+
+if [ "$engine" = 1 ]; then
+  # shellcheck disable=SC2086
+  if eng_out=$(run_engine $flags 2>&1); then eng_rc=0; else eng_rc=$?; fi
+  printf '%s\n' "$eng_out"
+  if [ "$eng_rc" != 0 ]; then
+    err "install-flat.sh failed or partly failed (exit $eng_rc, see its lines above); stopped, settings.json options not written"
+    ref=$(printf '%s\n' "$eng_out" | sed -n 's/^install-flat: refusing --with-\([A-Za-z0-9_-]*\):.*/\1/p' | head -n 1)
+    hint=""
+    [ -n "$ref" ] && for id in $disabled $ref; do in_list "$id" "$hook_ids" && hint="$hint,$id"; done
+    [ -n "$hint" ] && err "hint: re-run with --set disabled_hooks=${hint#,}"
+    exit 1
+  fi
+  eng_failed "$eng_out" && { err "stopped, settings.json options not written"; exit 1; }
+  nsc=$(printf '%s\n' "$eng_out" | grep -c 'selfcheck FAILED')
+fi
+
+if [ -n "$plan" ]; then
+  delta() {
+    jq -cn --argjson a "$1" --argjson b "$2" '{set: ($b | with_entries(select((. as $e | $a | has($e.key) | not) or $a[.key] != .value))),
+      del: [$a | keys_unsorted[] | select(. as $k | $b | has($k) | not)]}'
+  }
+  edit_settings '
+    (if ($o.set | length) > 0 then .pluginConfigs[$pk].options += $o.set else . end)
+    | (if ($o.del | length) > 0 and ((try .pluginConfigs[$pk].options catch null) | type) == "object"
+       then .pluginConfigs[$pk].options |= delpaths([$o.del[] | [.]]) else . end)
+    | (if ($e.set | length) > 0 then .env += $e.set else . end)
+    | (if ($e.del | length) > 0 and (.env | type) == "object" then .env |= delpaths([$e.del[] | [.]]) else . end)
+    | (reduce ($x.set | keys_unsorted[]) as $k (.; if (.[$k] // null) == ($cx[$k] // null) then .[$k] = $x.set[$k] else . end))
+    | (reduce $x.del[] as $k (.; if ((.[$k] | type) == "object") and .[$k].command == (if $k == "statusLine" then $slc else $ssc end) then del(.[$k]) else . end))' \
+    --arg pk "$pk" --argjson o "$(delta "$cur" "$newopt")" --argjson e "$(delta "$cur_env" "$newenv")" \
+    --argjson x "$(delta "$cur_x" "$new_x")" --argjson cx "$cur_x" --arg slc "$sl_main" --arg ssc "$sl_sub" || exit 1
+  for k in statusLine subagentStatusLine; do
+    [ "$(printf '%s' "$cur_x" | jq -c --arg k "$k" '.[$k] // null')" = "$(printf '%s' "$new_x" | jq -c --arg k "$k" '.[$k] // null')" ] && continue
+    [ "$(sj -c --arg k "$k" '.[$k] // null')" = "$(printf '%s' "$new_x" | jq -c --arg k "$k" '.[$k] // null')" ] ||
+      printf '  not changed (settings.json changed during the run): %s\n' "$k"
+  done
+fi
+[ "$nsc" -gt 0 ] && printf 'warning: %s wired hook selfcheck(s) failed (see above)\n' "$nsc"
+printf 'done.\n'

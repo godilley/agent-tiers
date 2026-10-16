@@ -12,7 +12,7 @@ You are the **Lead**. Quick health check of the agent-tier setup for this projec
 3. Confirm the agents are present and shaped right:
    - `advisor` exists with `tools: Read, Grep, Glob` only - and has NOT gained `Write`/`Edit` (a stray
      `memory:` field would auto-add them and break read-only enforcement). Same check for `reviewer`
-     beyond its one curated `Write`.
+     beyond its `Write` grant (unused: it returns findings inline).
    - `reviewer` exists with `tools: Read, Grep, Glob, Write`. NOTE: a new agent type only enumerates after
      a host **relaunch/watcher refresh** - if just added, flag that before it's spawnable.
    - `boss` exists with `tools: Read, Grep, Glob` only (same read-only check as advisor) - a stray
@@ -73,17 +73,36 @@ You are the **Lead**. Quick health check of the agent-tier setup for this projec
    (PreToolUse) row is possible substitution - say so plainly); (4) any settings row mentioning a kit
    script that appears in no ledger entry is FOREIGN - list it, never touch it. Emit one line per row:
    `<id> . <ours-current | ours-stale | missing | foreign | drift: <what>>`.
-   THEN the absence half (T1.3, 2026-08-16 - a per-row walk cannot see a guard that was never wired, so
-   a control that has never fired reads as a clean bill of health): read `HOOK_ROWS` out of
-   `${CLAUDE_PLUGIN_ROOT}/scripts/install-flat.sh` (one row per line, `;`-separated: field 1 = id,
-   field 2 = class `core|consent`). For every `consent` id whose `scripts/<id>.sh` EXISTS in this kit copy
-   (an export-ignored, kit-local guard is not "unwired", it is not shipped - say `not in this copy` for
-   it) and which has NO ledger row and NO live settings row, emit
-   `<id> . available, NOT wired - enable with: install-flat.sh --with-<id>`. LEAD the whole 4f section
-   with one line `guards: N of M wired` (N = consent ids with a ledger row, M = consent ids whose script
-   is present). Do NOT suggest defaulting any consent row - `install-flat.sh` classifies them deliberately
-   (security policy / a record of your work: wired ONLY on an explicit `--with-<id>`); `0 of 10 wired` is
-   a true statement to show the user, not a fault to fix.
+   ROUTE first: the plugin is enabled when settings.json `.enabledPlugins` has a key starting `agent-tiers@`
+   whose value is true (same test as `scripts/agent-tiers`). Name the route in the lead line.
+   PLUGIN ROUTE (enabled): the plugin wires every shipped hook from `hooks/hooks.json`, so the ledger walk
+   above does not apply and nothing reads as "not wired". Instead read the `hook` rows of
+   `${CLAUDE_PLUGIN_ROOT}/install/options.tsv` (field 1 = `hook`, field 2 = id, field 3 = group; group
+   `core` is class core, any other group is class consent). For every `consent` id whose `scripts/<id>.sh`
+   EXISTS in this kit copy (an export-ignored, kit-local guard is not shipped - say `not in this copy`),
+   run `AGENT_TIERS_GUARDS_LOG=/dev/null sh "${CLAUDE_PLUGIN_ROOT}/scripts/kit-gate.sh" <id> </dev/null`
+   (the log override keeps this probe out of guards.log, which records real stand-downs) and report
+   `<id> . on` when it prints nothing, `<id> . off (<group>)` when it prints `standdown`. kit-gate judges
+   the route from where the kit copy it runs from sits on disk, so these answers match the plugin's hooks
+   only when this doctor runs from the plugin (`/agent-tiers:doctor`); run from a flat copy while the
+   plugin is enabled, say so and report the double install first. Also list any settings.json hook row
+   that runs a kit script as `<id> . double-wired` (it runs twice; remedy `install-flat.sh --unwire-only`).
+   FLAT ROUTE (not enabled): keep the ledger walk above, THEN the absence half (T1.3, 2026-08-16 - a
+   per-row walk cannot see a guard that was never wired, so a control that has never fired reads as a
+   clean bill of health): same `hook` rows, same `consent` ids with a script present. A consent id with a
+   ledger row or live settings row is wired: confirm with the same kit-gate call and report `on` or `off`.
+   One with NO ledger row and NO live settings row is `<id> . available, NOT wired`.
+   REMEDY for any `off` or `NOT wired` guard: its group option,
+   `sh "${CLAUDE_PLUGIN_ROOT}/scripts/agent-tiers" configure --set group_<group>=true` (print it with the
+   kit root resolved), or a level (`--level recommended`), or on the plugin route /config; never
+   `install-flat.sh --with-<id>`. If kit-gate says off because of `disabled_hooks` or
+   `.state/off/<id>`, name that instead. Suggest `agent-tiers status` as the cross-check (install type,
+   per-group option value and wiring).
+   LEAD the whole 4f section with one line `guards: N of M on (<plugin|flat> route)` (N = consent ids
+   whose kit-gate answer is on, M = consent ids whose script is present). Do NOT suggest defaulting any
+   consent row - the groups are deliberately opt-in (security policy / a record of your work: on only
+   when a level or group option says so); `0 of M on` is a true statement to show the user, not a fault
+   to fix.
 4g. **Band-dial falsifier trial (MAINT-6) - CLOSED 2026-08-30.** No longer reported here; the card is its
    own record of the closure (verdict + reasoning). `.state/band-tally.md`, if present, is a leftover from
    before closure - not read or reported by this step.
@@ -116,7 +135,7 @@ You are the **Lead**. Quick health check of the agent-tier setup for this projec
    the operator's choices). Emit `kit-config: N of M template sections, K of L vcs_defaults keys present`
    and list any missing heading/key with "append it by hand from install-flat.sh's template; the file is
    write-if-absent by design". Same shape for
-   `hooks/hooks.json` vs `HOOK_ROWS`: every `core` id in HOOK_ROWS should have a `hooks.json` entry
+   `hooks/hooks.json` vs the `install/options.tsv` hook rows: every `core` id there should have a `hooks.json` entry
    (plugin path) - list any core id absent from the manifest.
 4j. **Baked command copies vs canonical (2026-09-05).** Commands are the ONE baked artifact - skills and
    agents are symlinks and cannot go stale, but editing a canonical `commands/*.md` and forgetting to

@@ -55,6 +55,7 @@ printf '#!/bin/sh\nexit 0\n' > scripts/leak-scan.sh
 printf '#!/bin/sh\nexit 0\n' > scripts/selfcontainment-check.sh
 printf '#!/bin/sh\nexit 0\n' > scripts/probe-env.sh
 printf 'exit 0\n' > scripts/stub.selfcheck.sh
+cp "$DIR/selfcheck-all.sh" scripts/selfcheck-all.sh   # the preflight scores selfchecks through it
 printf 'kit readme\n' > README.md
 printf 'secret-ish personal file\n' > docs/personal.md
 printf 'docs/personal.md export-ignore\n' > .gitattributes
@@ -83,7 +84,10 @@ rm -f dirt.txt
 
 # CI_GATE escape hatch: scoped to this ONE call only (env-prefixed, not exported), so every other
 # test in this file goes through the real (stubbed) push/dispatch/poll logic instead.
-CI_GATE_OUT="$(AGENT_TIERS_SHARE_SKIP_CI_GATE=1 bash scripts/agent-tiers-share --plain --review --who ci-gate-probe -o "$OUT" 2>&1)"
+PF_TMP="$(mktemp -d)"   # fresh TMPDIR for this green preflight: selfcheck-all must leave nothing in it
+CI_GATE_OUT="$(TMPDIR="$PF_TMP" AGENT_TIERS_SHARE_SKIP_CI_GATE=1 bash scripts/agent-tiers-share --plain --review --who ci-gate-probe -o "$OUT" 2>&1)"
+ls -d "$PF_TMP"/selfcheck-all.* >/dev/null 2>&1 && bad 'green preflight leaked a selfcheck-all.* temp dir' || ok 'green preflight removes selfcheck-all temp dir'
+rm -rf "$PF_TMP"
 printf '%s' "$CI_GATE_OUT" | grep -q 'CI GATE SKIPPED' && ok 'CI gate skip warns loudly (test sandbox only)' || bad 'CI gate skip should print its loud warning'
 grep -qE "share/ci-gate-probe-1.*	skipped\$" share-ledger.tsv && ok 'ledger records ci_gate=skipped for the escape hatch' || bad 'ledger should record ci_gate=skipped'
 # the skip-hatch path never runs the CI gate's own branch push (line ~136), so this is the ONE
@@ -187,6 +191,8 @@ fp_rc=0
 # failing selfcheck blocks the tag
 printf 'exit 1\n' > scripts/stub.selfcheck.sh
 git add -A; git commit -qm "break stub selfcheck"
+RED_OUT="$(bash scripts/agent-tiers-share --plain --review --who test -o "$OUT" 2>&1)"
+printf '%s' "$RED_OUT" | grep -q 'FAIL scripts/stub.selfcheck.sh (rc=1)' && ok 'red selfcheck is named via selfcheck-all' || bad 'red refusal should carry selfcheck-all per-check FAIL line'
 [ "$(share --plain --review --who test)" = 1 ] && ok 'red selfcheck aborts' || bad 'red selfcheck aborts'
 git rev-parse -q --verify refs/tags/share/test-3 >/dev/null && bad 'red preflight must not tag' || ok 'red preflight left no tag'
 printf 'exit 0\n' > scripts/stub.selfcheck.sh
@@ -198,7 +204,7 @@ printf 'echo "SKIP: fake tool absent"\nexit 0\n' > scripts/stub.selfcheck.sh
 git add -A; git commit -qm "skip stub selfcheck"
 SKIP_OUT="$(bash scripts/agent-tiers-share --plain --review --who test -o "$OUT" 2>&1)"
 [ "$(share --plain --review --who test)" = 1 ] && ok 'SKIPping selfcheck aborts' || bad 'SKIPping selfcheck aborts'
-printf '%s' "$SKIP_OUT" | grep -q 'SKIPPED an assertion' && ok 'SKIP failure names SKIP' || bad 'SKIP failure should name SKIP'
+printf '%s' "$SKIP_OUT" | grep -q 'FAIL scripts/stub.selfcheck.sh (rc=0)' && printf '%s' "$SKIP_OUT" | grep -q '| SKIP: fake tool absent' && ok 'SKIP failure goes through selfcheck-all (per-check FAIL line + the SKIP line)' || bad 'SKIP refusal should carry selfcheck-all per-check FAIL line and the SKIP output'
 git rev-parse -q --verify refs/tags/share/test-3 >/dev/null && bad 'SKIPping preflight must not tag' || ok 'SKIPping preflight left no tag'
 printf 'exit 0\n' > scripts/stub.selfcheck.sh
 git add -A; git commit -qm "fix stub selfcheck again"

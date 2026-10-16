@@ -29,13 +29,15 @@
 # Self-check: plan-graduate-nudge.selfcheck.sh
 set -u
 
+[ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
+
 BASE="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 LOG="${AGENT_TIERS_GUARDS_LOG:-${BASE:-${TMPDIR:-/tmp}}/.state/guards.log}"
 note() {
   { mkdir -p "$(dirname "$LOG")" 2>/dev/null && printf '%s plan-graduate-nudge fail-open: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null)" "$1" >> "$LOG"; } 2>/dev/null || true
 }
 
-INPUT="$(cat 2>/dev/null || true)"
+INPUT="$([ -t 0 ] || cat 2>/dev/null || true)"
 command -v jq >/dev/null 2>&1 || { note "jq missing - cannot parse payload"; exit 0; }
 
 PLAN_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_response.filePath // empty' 2>/dev/null || true)"

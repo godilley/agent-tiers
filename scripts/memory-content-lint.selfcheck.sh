@@ -24,10 +24,17 @@ T="${TMPBASE}/at-memlint-selfcheck.$$"
 # convention, or the kill-switch path ($CLAUDE_DIR/agent-tiers/.state/off/...) resolves one level wrong.
 # The sandbox config dir is literally named .claude (not just "the config dir") because the STANDARD gate
 # scopes by PATH SHAPE (*/.claude/projects/*/memory/*), matching the real default ~/.claude/... layout.
-rm -rf "$T"; mkdir -p "$T/.claude/agent-tiers/scripts/lib" "$T/.claude/projects/x/memory" "$T/proj" || fail "cannot build sandbox"
+rm -rf "$T"; mkdir -p "$T/.claude/agent-tiers/scripts/lib" "$T/.claude/projects/x/memory" "$T/proj" "$T/.claude/agent-tiers/install" "$T/managed" || fail "cannot build sandbox"
 cp "$SRC" "$T/.claude/agent-tiers/scripts/" || fail "cannot copy lint"
 cp "$LIBSRC" "$T/.claude/agent-tiers/scripts/lib/" || fail "cannot copy library"
 cp "$MPSRC" "$T/.claude/agent-tiers/scripts/lib/" || fail "cannot copy mempath library"
+# kit-gate.sh runs from this sandbox kit too: managed dir pointed at an empty temp dir, every kit-gate
+# input cleared so the user's own options cannot stand the lint down.
+sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$(dirname "$0")/kit-gate.sh" > "$T/.claude/agent-tiers/scripts/kit-gate.sh"
+grep -qxF "_kg_managed='$T/managed'" "$T/.claude/agent-tiers/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
+cp "$(dirname "$0")/../install/options.tsv" "$T/.claude/agent-tiers/install/"
+unset AGENT_TIERS_OFF CLAUDE_PLUGIN_ROOT CLAUDE_CODE_SESSION_ID
+for v in $(env | sed -n 's/^\(CLAUDE_PLUGIN_OPTION_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$v"; done
 LINT="$T/.claude/agent-tiers/scripts/memory-content-lint.sh"
 export CLAUDE_CONFIG_DIR="$T/.claude"
 export AGENT_TIERS_GUARDS_LOG="$T/.claude/agent-tiers/.state/guards.log"
@@ -271,6 +278,14 @@ mkdir -p "$T/.claude/agent-tiers/.state/off" && touch "$T/.claude/agent-tiers/.s
 out="$(run "$(pay "$SHA_F")")"
 [ "$(flagged "$out")" = NO ] || fail "kill switch .state/off/memory-content-lint must suppress the lint"
 rm -f "$T/.claude/agent-tiers/.state/off/memory-content-lint"
+
+# --- 5b. kit-gate stand-down. Here the kit root and the CLAUDE_CONFIG_DIR marker root are the same
+#         directory, so the lint's own marker check would pre-empt kit-gate; AGENT_TIERS_OFF=1 (kit-gate
+#         rule 1) reaches kit-gate itself: no output, exit 0, logged.
+out="$(printf '%s' "$(pay "$SHA_F")" | AGENT_TIERS_OFF=1 sh "$LINT" 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [ -z "$out" ] || fail "kit-gate stand-down: expected exit 0 and empty stdout (rc=$rc)"
+grep -aq 'kit-gate standdown memory-content-lint:' "$AGENT_TIERS_GUARDS_LOG" || fail "kit-gate stand-down not logged"
+[ "$(flagged "$(run "$(pay "$SHA_F")")")" = YES ] || fail "without AGENT_TIERS_OFF the lint must flag again"
 
 # --- 6. Never blocks (a real assertion, not just a pattern that cannot appear): exit status is 0 even
 #         on a findings fixture, and no output can carry a deny/block decision field.
