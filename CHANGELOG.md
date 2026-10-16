@@ -5,6 +5,14 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.16.2 - 2026-10-16
+
+- Added a new "Using the kit" guide (`docs/usage.md`) showing day-to-day work with the kit: why it delegates, common work shapes (long sessions, read-only sweeps, routine changes, design questions, parallel plans, guarded commands), and the rarer Boss and cross-lab Codex paths.
+- Covers choosing an install level (`core`, `recommended`, `full`), including what each costs you, plus what changes after install: check-in lines, end-of-reply tags, status line.
+- Documents the `plan-wave` workflow step by step: wave table, ready set, lease, one worktree per row, merge order.
+- Includes real trimmed captures of guard messages and FORK blocks, a table of guards ranked by how often they fired, and a glossary of the kit's terms.
+- The README now links to the guide near the top and in its docs table. Two screenshots of long and parallel sessions are added.
+
 ## v2026.10.16 - 2026-10-16
 
 - Adds a `/agent-tiers:setup` command and an `agent-tiers` CLI (`install`, `configure`, `remove`, `status`). You pick a level (`core`, `recommended`, `full`) or individual hook groups, with a dry-run plan and a confirm step before anything is written.

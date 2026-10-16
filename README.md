@@ -64,6 +64,8 @@ here needs a server or a subscription: files in `~/.claude` and POSIX shell.
 > Assumes you already know Claude Code plugins, hooks, and subagents - see
 > [Anthropic's Claude Code docs](https://docs.claude.com/en/docs/claude-code) first if you don't.
 
+New here? [Using the kit](docs/usage.md) shows what working with it is like day to day, and its [glossary](docs/usage.md#glossary) decodes the kit's terms.
+
 The **Lead** (your main chat) runs whatever model you pick in your GUI's model panel. It converses,
 routes, briefs and verifies, and the doctrine adapts to its model: a Sonnet Lead buys deeper
 reasoning per call, an Opus or Fable Lead reaches *out* for independent review instead of *down* for
@@ -141,6 +143,7 @@ writing anywhere. Updating, switching routes and setup options: [docs/install.md
 
 | Page | Read it for |
 |---|---|
+| [Using the kit](docs/usage.md) | What working with it is like: why it delegates, common work shapes, choosing a level, what changes after install, plan-wave, glossary |
 | [Install and setup](docs/install.md) | Both routes in full, requirements, updating, and changing the setup later: switch level, turn one group or one hook off, turn the whole kit off |
 | [Hooks and guards](docs/hooks.md) | The hooks and their groups, levels, what to do when a guard blocks you, reach-guard, network posture (the hooks make no outbound calls) and how the guards are maintained, more captured output |
 | [What ships](docs/what-ships.md) | Agents, skills, commands, config and scripts, item by item; the check-in line |

@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "agent-tiers",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "George Dilley",
     "url": "https://github.com/godilley"
