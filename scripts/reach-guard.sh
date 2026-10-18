@@ -90,7 +90,9 @@
 # body flag and only `readopt` flags, graphql is act. gh subcommands other than api are group gh_write,
 # off by default. Command words: `argv` wrappers are walked through (an unknown wrapper option followed
 # by a dash word is unsure when a class word is present); an opaque command word is unsure, except a
-# plain parameter (a dollar sign and a bare name, braced or not) or a leading ~ path, which are unsure only beside a class word; an
+# plain parameter (a dollar sign and a bare name, braced or not), a leading ~ path, or a glob with a literal
+# directory part whose last component can match no class program or wrapper name (./*.sh), which are
+# unsure only beside a class word; an
 # unknown command not on the `noexec` list whose first operand is a class program is unsure; a command
 # holding a 0x1D or 0x1F byte and a class word is unsure.
 #
@@ -113,17 +115,39 @@
 # glob word matching either name, or `settings` with a stand-down key word, in any segment that is not a
 # pure read (cat head tail less wc ls stat file diff cmp md5sum sha256sum grep, rg without --pre, git
 # diff/status/blame without --output; no write redirect, no tee, no -i; less without -o, --log-file or a
-# + command); any write onto a settings*.json destination (redirect, cp/mv/ln/install target, tee, dd
-# of=, sed -i; the verb found anywhere in the segment, so launchers are covered), sent to the Edit tool
-# instead; and, by basename only (the Bash arm knows no cwd), a write onto reach-guard*.sh, kit-gate.sh or
-# options.tsv (or a glob word matching one) by the same destination rules, an rm, unlink, shred,
-# truncate or mv of one, or a cp, ln or install of one into a directory-like destination. Naming,
-# reading, running and `git add` of those files pass; a segment whose command word, walked through the
-# argv wrapper rows, is a reader (the pure-read list without less, rg without --pre, git
-# diff/status/blame/log/show/grep without --output or -O) is exempt from the word rules, never from a redirect.
-# hooks.json and guard-cmdpos.sh have no Bash rule. A cd/pushd judges its own write redirects; a cd/pushd
-# into a protected directory makes every later segment subject to the same test, a later write redirect
-# with no command word included.
+# + command); any write onto a settings*.json destination, wherever it is (redirect, cp/mv/ln/install
+# target, tee, sponge, dd of=, sed -i; the verb found anywhere in the segment, so launchers are covered),
+# sent to the Edit tool instead; and a write onto reach-guard*.sh, kit-gate.sh or options.tsv (or a glob
+# word matching one) by the same destination rules, an rm, unlink, shred, truncate or mv of one, or a
+# cp, ln, install or mv of one into a directory-like destination. The stand-down word rule skips a jq,
+# echo, printf (no -v) or git commit/tag/notes with a message, at top level outside any group or compound,
+# with no write redirect, whose output goes nowhere or only into pure readers. A word those rules flag
+# denies only when it lands anywhere inside the kit this guard runs from (any depth), the user
+# reach-guard dir or the state dir, in a path holding one of them, or, for a last-component glob, in the
+# user dir parent; it passes when it is a literal path (a leading ~/ allowed) that lands outside all
+# three, so a dev copy of the kit is not protected. Only a write redirect target or a write verb operand
+# (rm unlink shred truncate mv cp ln install tee sponge, sed -i, dd of=, a cd/pushd target) is placed;
+# any other flagged word (a find pattern, a word under another program) denies by name. Placing:
+# resolved like the Edit route (lexical, readlink -f, the path and its directory through cd -P); a
+# relative word joins the payload cwd, moved only by a leading run of plain `cd <dir>`/`pushd <dir>`
+# segments of the top-level command joined by && (replaced) or ; or a newline (old and new unioned).
+# Unplaceable, so denied by name as before: a word with an expansion, a non-path character, a ~ other
+# than a leading ~/ (a ~user form, ~ after = or :), a glob in a directory component, or a glob anywhere
+# but an rm or unlink operand or an mv source; every relative word when there is no payload cwd, when
+# a cd, pushd, popd, chdir, eval, source, dot script or opaque command word appears anywhere else in
+# the command, or, with a leading cd, when the command holds a group, compound, !, quoted newline, ||
+# or CDPATH/cdpath text, or past 32 possible directories; any word in a segment with a chdir option
+# (clustered -C, a --chdir/--directory/--cwd prefix, -execdir, sudo or run0 -D and the like), find -exec,
+# -ok or -delete, xargs, parallel, or a container, chroot or remote launcher; any word in a command
+# holding a segment that may make or move a symlink (ln, mv, cp with an option, tar, rsync, unzip,
+# mount, patch, git checkout/switch/restore/apply/worktree/clone/stash/reset/merge/pull). Cap: past 32
+# placed paths in one command, the command is denied (fail closed).
+# Naming, reading, running and `git add` of those files pass; a segment whose command word, walked
+# through the argv wrapper rows, is a reader (the pure-read list without less, rg without --pre, git
+# diff/status/blame/log/show/grep without --output or -O) is exempt from the word rules, never from a
+# redirect. hooks.json and guard-cmdpos.sh have no Bash rule. A cd/pushd judges its own write redirects;
+# a cd/pushd into a protected directory (or the kit or state .state/off) makes every later segment with
+# a command word or a write redirect a protected write.
 #
 # Ceilings it cannot see (disclosed): scripts, task runners and interpreters that reach out (./deploy.sh,
 # make, npm run, python with boto3 or paramiko), a script written by the Write tool and then run, aliases
@@ -146,7 +170,11 @@
 # only at a command-word position; the class-word text scan of string wrappers and heredocs matches
 # lowercase only, so `bash -c 'SSH host'` is not seen. Slim arm: string wrappers (bash -c, sh -c, eval,
 # trap, watch, su -c, env -S, flock -c) and stdin wrappers (xargs, parallel, find -exec) are not walked
-# into - a class word in such a segment (read with quotes and backslashes removed) is unsure, and one
+# into, except xargs with only the options its own strict parser knows (no replace-style, optional-argument
+# or prefix form) running a docker-remote program (docker) whose literal first positional is no
+# `context`, with no unknown option before it, and whose given words name no remote daemon:
+# the words it appends cannot change that verdict. Otherwise a class word in such a segment (read with
+# quotes and backslashes removed) is unsure, and one
 # whose text holds $'..', a \x or octal escape, or ${..} with an operator is unsure outright; a string
 # built by a plain $var or a substitution printing a name is not seen. Any remote string holding a
 # metacharacter is act. A PreToolUse hook that times out gives no decision; the 20,000-character cap
@@ -184,20 +212,22 @@ emit() { # emit <decision> <reason>
 # shsafe <word>: one shell-safe token a grant or a policy line may carry (no glob, quote, space, leading ~ or -)
 shsafe() { case "$1" in "" | [~-]* | *[!A-Za-z0-9._:@%+,=~/-]*) return 1 ;; esac; return 0; }
 # policy <group> <target> <read|all>: the persistent allowlist command the user types (a printf append of one
-# TAB row onto allow.tsv; the target is shell-safe, so only % needs doubling for the printf format)
+# TAB row onto allow.tsv). The caller passes only a shell-safe target and group, but both are still
+# escaped for the single-quoted printf format: \ and % doubled, ' written '\''.
 policy() {
   if [ "$UREF" = 1 ]; then
     printf '%s' "No allowlist row can be added: the user's reach-guard directory or allow.tsv is refused (a symlink, not owned by this user, or unreadable)."
     return 0
   fi
-  pt="$(printf '%s' "$2" | sed 's/%/%%/g')"
+  pt="$(printf '%s' "$2" | sed -e 's/\\/\\\\/g' -e 's/%/%%/g' -e "s/'/'\\\\''/g")"
+  pg="$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/%/%%/g' -e "s/'/'\\\\''/g")"
   if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
     pq="'$(printf '%s' "$UDIR" | sed "s/'/'\\\\''/g")'"; pf="'$(printf '%s' "$UDIR/allow.tsv" | sed "s/'/'\\\\''/g")'"
   else
     pq="~/.claude/reach-guard"; pf="$pq/allow.tsv"
   fi
   pm=""; [ -d "$UDIR" ] || pm="mkdir -p $pq; "
-  printf 'POLICY CHANGE (persists, you run it): ! %sprintf %s >> %s' "$pm" "'$1\\t$pt\\t$3\\n'" "$pf"
+  printf 'POLICY CHANGE (persists, you run it): ! %sprintf %s >> %s' "$pm" "'$pg\\t$pt\\t$3\\n'" "$pf"
 }
 # pendw <lines>: write the pending marker <sid>.<tool_use_id> atomically; first drop markers older than a
 # day (a declined ask never gets its PostToolUse, so its marker would stay forever)
@@ -868,82 +898,97 @@ function isprotname(w,   b, lit, re) {
   return ("reach-guard.sh" ~ re || "reach-guard-grant.sh" ~ re || "reach-guard.selfcheck.sh" ~ re || "kit-gate.sh" ~ re || "options.tsv" ~ re)
 }
 function isk(w, nm) { return nm ? isprotname(w) : issetjson(w) }
+# hitw(p, nm, o): a destination p setw found; nm 0 (settings*.json) stops there, nm 1 (a protected script
+# name) only records p (o = an opaque word) for placing, and the scan goes on to every other destination
+function hitw(p, nm, o) { if (!nm) return 1; addc(p, o, base(p), 0); return 0 }
+# addc(w, o, lab, g): one protected-name write candidate (word, opaque flag, label, a glob may stand),
+# placed by flushc
+function addc(w, o, lab, g) { NC++; CCW[NC] = w; CCO[NC] = o; CCL[NC] = lab; CCG[NC] = g }
 # setw(s, nm, part): basename of a file this segment writes (redirect target, cp/mv/ln/install
-# destination, tee operand, dd of=, sed -i operand); nm 0 = settings*.json, nm 1 = a protected script
-# name (verb matched in any case); part "r" = redirects only, "w" = the verb words only, "" = both;
-# every verb word in the segment is tried, not only the first (an earlier `dd` or `sed` operand, as in
-# `env -u dd cp x settings.json`, must not hide the real verb); empty when none
+# destination, tee or sponge operand, dd of=, sed -i operand); nm 0 = settings*.json, nm 1 = a protected
+# script name (verb matched in any case; every such destination is recorded with addc and "" returned);
+# part "r" = redirects only, "w" = the verb words only, "" = both; every verb word in the segment is
+# tried, not only the first (an earlier `dd` or `sed` operand, as in `env -u dd cp x settings.json`, must
+# not hide the real verb); empty when none
 function setw(s, nm, part,   i, t, p, vb, r) {
   for (i = 1; i <= TN[s]; i++) {
     t = TT[s, i]; p = TP[s, i]
-    if (part != "w" && (t == "r" || t == "R") && wredir(t, p)) { sub(/^[^ ]* /, "", p); if (isk(p, nm)) return base(p) }
+    if (part != "w" && (t == "r" || t == "R") && wredir(t, p)) { sub(/^[^ ]* /, "", p); if (isk(p, nm) && hitw(p, nm, t == "R")) return base(p) }
   }
   if (part == "r") return ""
   for (i = 1; i <= TN[s]; i++) {
     vb = tolower(base(TP[s, i]))
-    if (TT[s, i] == "w" && vb ~ /^(cp|mv|ln|install|tee|dd|sed)$/ && (r = setw1(s, nm, i, vb)) != "") return r
+    if (TT[s, i] == "w" && vb ~ /^(cp|mv|ln|install|tee|dd|sed|sponge)$/ && (r = setw1(s, nm, i, vb)) != "") return r
   }
   return ""
 }
 # setw1(s, nm, a, c): the destination rules of setw for the verb word c at position a
-function setw1(s, nm, a, c,   i, t, p, last, sedi, tdir) {
-  last = ""; sedi = 0; tdir = 0
+function setw1(s, nm, a, c,   i, t, p, last, lasto, sedi, tdir) {
+  last = ""; lasto = 0; sedi = 0; tdir = 0
   for (i = a + 1; i <= TN[s]; i++) {
     t = TT[s, i]; p = TP[s, i]
     if (t != "w" && t != "o") continue
     if (p == ";" || p == "+") continue   # find -exec ... \; or +
-    if (tdir) { tdir = 0; if (isk(p, nm)) return base(p); continue }
+    if (tdir) { tdir = 0; if (isk(p, nm) && hitw(p, nm, t == "o")) return base(p); continue }
     if (c != "dd" && p ~ /^-/) {
       if (p == "-t" || p == "--target-directory") tdir = 1
-      else if (p ~ /^--target-directory=/ && isk(substr(p, 20), nm)) return base(p)
+      else if (p ~ /^--target-directory=/ && isk(substr(p, 20), nm) && hitw(substr(p, 20), nm, t == "o")) return base(p)
       if (p ~ /^-[A-Za-z]*i/ || p ~ /^--in-place/) sedi = 1
       continue
     }
-    if (c == "dd") { if (p ~ /^of=/ && isk(substr(p, 4), nm)) return base(p); continue }
-    if ((c == "tee" || (c == "sed" && sedi)) && isk(p, nm)) return base(p)
-    last = p
+    if (c == "dd") { if (p ~ /^of=/ && isk(substr(p, 4), nm) && hitw(substr(p, 4), nm, t == "o")) return base(p); continue }
+    if ((c == "tee" || c == "sponge" || (c == "sed" && sedi)) && isk(p, nm) && hitw(p, nm, t == "o")) return base(p)
+    last = p; lasto = (t == "o")
   }
-  if (c ~ /^(cp|mv|ln|install)$/ && isk(last, nm)) return base(last)
+  if (c ~ /^(cp|mv|ln|install)$/ && isk(last, nm) && hitw(last, nm, lasto)) return base(last)
   return ""
 }
-# namew(s): basename of a protected script name this segment removes or moves (an rm, unlink, shred,
-# truncate or mv word anywhere, then a non-option operand) or copies into a directory-like destination
-# (a cp, ln or install word anywhere, a non-last operand, a last operand ending in /, . or .. or with no
-# dot in its basename, or -t/--target-directory); empty when none
-function namew(s,   i, t, p, b, a, c, n, OP, tdir, tany, last, nm) {
-  a = 0; c = 0
+# namew(s): records with addc every protected script name this segment removes or moves (an rm, unlink,
+# shred, truncate or mv word anywhere, then a non-option operand) or copies or moves into a directory-like
+# destination (a cp, ln, install or mv word anywhere, a non-last operand, a last operand ending in /, .
+# or .. or with no dot in its basename, or -t/--target-directory), the candidate being the destination
+# directory plus the source basename ("" when the -t directory cannot be read)
+function namew(s,   i, j, t, p, b, a, ab, c, n, OP, OPO, AO, tdir, tany, tdv, tdvo, last, nm) {
+  a = 0; c = 0; ab = ""
   for (i = 1; i <= TN[s]; i++) {
     if (TT[s, i] != "w") continue
     b = tolower(base(TP[s, i]))
-    if (!a && b ~ /^(rm|unlink|shred|truncate|mv)$/) a = i
-    if (!c && b ~ /^(cp|ln|install)$/) c = i
+    if (!a && b ~ /^(rm|unlink|shred|truncate|mv)$/) { a = i; ab = b }
+    if (!c && b ~ /^(cp|ln|install|mv)$/) c = i
   }
-  if (a) for (i = a + 1; i <= TN[s]; i++) {
-    t = TT[s, i]; p = TP[s, i]
-    if ((t == "w" || t == "o") && p !~ /^-/ && isprotname(p)) return base(p)
+  # a glob may stand only for an rm or unlink operand or an mv source (not the last operand)
+  if (a) {
+    n = 0
+    for (i = a + 1; i <= TN[s]; i++) if ((TT[s, i] == "w" || TT[s, i] == "o") && TP[s, i] !~ /^-/) AO[++n] = i
+    for (j = 1; j <= n; j++) {
+      i = AO[j]; p = TP[s, i]
+      if (isprotname(p)) addc(p, TT[s, i] == "o", base(p), ab == "rm" || ab == "unlink" || (ab == "mv" && j < n))
+    }
   }
-  if (!c) return ""
-  n = 0; tdir = 0; tany = 0
+  if (!c) return
+  n = 0; tdir = 0; tany = 0; tdv = ""; tdvo = 0
   for (i = c + 1; i <= TN[s]; i++) {
     t = TT[s, i]; p = TP[s, i]
     if (t != "w" && t != "o") continue
     if (p == ";" || p == "+") continue
-    if (tdir) { tdir = 0; continue }
+    if (tdir) { tdir = 0; tdv = p; tdvo = (t == "o"); continue }
     if (p ~ /^-/) {
       # --target-directory and its unique prefixes (--t...), or a short cluster holding t
-      if (p ~ /^--t/) { nm = p; sub(/=.*/, "", nm); if (index("--target-directory", nm) == 1) { tany = 1; if (nm == p) tdir = 1 } }
+      if (p ~ /^--t/) {
+        nm = p; sub(/=.*/, "", nm)
+        if (index("--target-directory", nm) == 1) { tany = 1; if (nm == p) tdir = 1; else { tdv = substr(p, length(nm) + 2); tdvo = (t == "o") } }
+      }
       else if (p ~ /^-[A-Za-z]*t$/) { tdir = 1; tany = 1 }
-      else if (p ~ /^-[A-Za-z]*t/) tany = 1
+      else if (p ~ /^-[A-Za-z]*t/) { tany = 1; tdv = "" }
       continue
     }
-    n++; OP[n] = p
+    n++; OP[n] = p; OPO[n] = (t == "o")
   }
-  if (n == 0) return ""
-  if (tany) { for (i = 1; i <= n; i++) if (isprotname(OP[i])) return base(OP[i]); return "" }
+  if (n == 0) return
+  if (tany) { for (i = 1; i <= n; i++) if (isprotname(OP[i])) addc(tdv == "" ? "" : tdv "/" base(OP[i]), tdvo || OPO[i], base(OP[i]), 0); return }
   last = OP[n]
   if (last ~ /\/$/ || base(last) == "." || base(last) == ".." || base(last) !~ /\./)
-    for (i = 1; i < n; i++) if (isprotname(OP[i])) return base(OP[i])
-  return ""
+    for (i = 1; i < n; i++) if (isprotname(OP[i])) addc(last "/" base(OP[i]), OPO[n] || OPO[i], base(OP[i]), 0)
 }
 # rdrseg(s): the command word of the segment (CWI, set by cmdword), walked through the argv wrapper rows the
 # way classify walks them, is a known reader: cat head tail wc ls stat file diff cmp md5sum sha256sum
@@ -1004,41 +1049,300 @@ function haswr(s,   i) {
   for (i = 1; i <= TN[s]; i++) if ((TT[s, i] == "r" || TT[s, i] == "R") && wredir(TT[s, i], TP[s, i])) return 1
   return 0
 }
-function prot_scan(   s, prev, carry, hit, i, t, w, cw, tw, sw) {
-  prev = ""; carry = 0
-  for (s = 1; s <= NS; s++) {
-    if (SR[s] != prev) { carry = 0; prev = SR[s] }
-    if (TN[s] == 0) continue
-    hit = ""
-    for (i = 1; i <= TN[s]; i++) {
-      t = TT[s, i]; w = TP[s, i]
-      if (t == "r" || t == "R") sub(/^[^ ]* /, "", w)
-      else if (t != "w" && t != "o") continue
-      if ((hit = protword(w)) != "") break
+# ---- placing a flagged word at the running kit ----
+# A word the name rules flag is printed as `CAND <kind> <label> <path>` for the shell to resolve and test
+# against the protected set of the running kit (f: a file written or removed; g: the directory of a glob in the
+# last component; d: a cd/pushd directory a later segment runs in) when it is a literal path the guard can
+# place; place() returns 0 for any other word, and the caller denies it as before. CSS: the directories
+# a relative word may be relative to ("" = unknown), fixed for the whole command by cwdplan().
+function delch(x, c,   k) { while ((k = index(x, c)) > 0) x = substr(x, 1, k - 1) substr(x, k + 1); return x }
+function emitc(kind, p, lab) {
+  if ((kind SUBSEP p) in CEM) return
+  CEM[kind SUBSEP p] = 1
+  print "CAND\t" kind "\t" lab "\t" p
+}
+# place(kind, w, o, lab, gok): gok = a glob in the last component may stand (an rm or unlink operand,
+# an mv source); a glob anywhere else, a write destination included, is unplaceable (it may expand to a
+# symlink into the kit)
+function place(kind, w, o, lab, gok,   x, d, k, n, CP, isg) {
+  if (NORES || SEGNR || w == "" || w ~ /^-/) return 0
+  x = w; gsub(/[A-Za-z0-9._\/@%+,~*?!-]/, "", x); x = delch(delch(x, "["), "]")
+  if (x != "") return 0
+  # a ~ anywhere but as the leading ~ or ~/ of an opaque word (the shell also expands it after = and :)
+  if (index(w, "~") && !(o && w ~ /^~(\/|$)/ && !index(substr(w, 2), "~"))) return 0
+  isg = (o && w ~ /[*?[]/)
+  if (isg) {
+    if (!gok || kind != "f") return 0
+    d = "."; if (match(w, /\/[^\/]*$/)) { d = substr(w, 1, RSTART - 1); if (d == "") d = "/" }
+    if (d ~ /[*?[]/) return 0
+    kind = "g"; w = d
+  }
+  n = 0
+  if (w ~ /^\// || (o && w ~ /^~(\/|$)/)) CP[++n] = w
+  else for (x in CSS) { if (x == "") return 0; CP[++n] = x "/" w }
+  for (k = 1; k <= n; k++) emitc(kind, CP[k], lab)
+  return 1
+}
+# kpos(s): KP[i] = the word at i is a path the guard knows a write verb acts on: an operand of rm,
+# unlink, shred, truncate, mv, cp, ln, install, tee, sponge or sed with -i (1; "g" for an rm or unlink
+# operand or an mv source, where a glob may stand), or a dd of= word ("dd")
+function kpos(s,   a, i, j, b, sedi, t, p, nop, OPI, v) {
+  split("", KP)
+  for (a = 1; a <= TN[s]; a++) {
+    if (TT[s, a] != "w") continue
+    b = tolower(base(TP[s, a]))
+    if (b !~ /^(rm|unlink|shred|truncate|mv|cp|ln|install|tee|sponge|sed|dd)$/) continue
+    sedi = 0
+    if (b == "sed") for (i = a + 1; i <= TN[s]; i++) if (TT[s, i] == "w" && (TP[s, i] ~ /^-[A-Za-z]*i/ || TP[s, i] ~ /^--in-place/)) sedi = 1
+    if (b == "sed" && !sedi) continue
+    nop = 0
+    for (i = a + 1; i <= TN[s]; i++) {
+      t = TT[s, i]; p = TP[s, i]
+      if (t != "w" && t != "o") continue
+      if (b == "dd") { if (p ~ /^of=/ && !(i in KP)) KP[i] = "dd"; continue }
+      if (p !~ /^-/) OPI[++nop] = i
     }
-    if (hit == "" && settings_hit(ST[s])) hit = "settings"
+    for (j = 1; j <= nop; j++) {
+      i = OPI[j]; v = (b == "rm" || b == "unlink" || (b == "mv" && j < nop)) ? "g" : 1
+      if (!(i in KP) || (KP[i] == "g" && v != "g")) KP[i] = v
+    }
+  }
+}
+function flushc(   k) {
+  for (k = 1; k <= NC; k++) if (!place("f", CCW[k], CCO[k], CCL[k], CCG[k])) { print "PROT\t" CCL[k]; return 1 }
+  return 0
+}
+# segnr(s): the segment may run its program in another directory or root (a chdir option, clustered or
+# a unique long-option prefix; a container, chroot or remote launcher), or acts on paths it finds or
+# reads rather than names (find -exec, -ok, -delete; xargs, parallel), so no word in it is placed
+function segnr(s,   i, t, p, b, su, nm, n, L, j) {
+  su = 0
+  n = split("chdir directory cwd wd workdir working-directory root chroot prefix git-dir work-tree", L, " ")
+  for (i = 1; i <= TN[s]; i++) {
+    t = TT[s, i]; if (t != "w" && t != "o") continue
+    p = TP[s, i]; b = tolower(base(p))
+    if (b ~ /^(chroot|docker|podman|nerdctl|buildah|bwrap|proot|fakechroot|unshare|nsenter|systemd-nspawn|systemd-run|machinectl|firejail|schroot|lxc|lxc-attach|lxc-execute|incus|distrobox|distrobox-enter|toolbox|flatpak-spawn|ssh|sshpass|mosh|kubectl|vagrant|xargs|parallel)$/) return 1
+    if (p ~ /^-[A-Za-z]*C/ || p ~ /^--(chdir|dir|cwd|wd|workdir|working-directory|root|prefix|git-dir|work-tree)/ || p ~ /^-(exec|execdir|ok|okdir|delete)$/ || p ~ /^GIT_(DIR|WORK_TREE)=/) return 1
+    if (p ~ /^--[A-Za-z]/) {
+      nm = substr(p, 3); sub(/=.*/, "", nm)
+      if (length(nm) >= 2) for (j = 1; j <= n; j++) if (index(L[j], nm) == 1) return 1
+    }
+    if (b == "sudo" || b == "run0") su = 1
+    else if (su && p ~ /^-[A-Za-z]*[DR]/) return 1
+  }
+  return 0
+}
+# aliasseg(s): the segment may make a symlink or move one (git checkout and the like, patch included), so
+# a path may lead somewhere its text does not say
+function aliasseg(s,   i, b, k) {
+  for (i = 1; i <= TN[s]; i++) {
+    if (TT[s, i] != "w") continue
+    b = tolower(base(TP[s, i]))
+    if (b ~ /^(ln|link|mount|bindfs|mv|rsync|tar|bsdtar|unzip|7z|7za|cpio|patch)$/) return 1
+    if (b == "cp") for (k = i + 1; k <= TN[s]; k++) if ((TT[s, k] == "w" || TT[s, k] == "o") && TP[s, k] ~ /^-./) return 1
+    if (b == "git") for (k = i + 1; k <= TN[s]; k++) if (TT[s, k] == "w" && TP[s, k] ~ /^(checkout|switch|restore|apply|worktree|clone|stash|reset|merge|pull)$/) return 1
+  }
+  return 0
+}
+# mksep(): SEP[s] = the separator after segment s in its record text (&& || |& | ; & newline, "" at the
+# end, "?" when the segment text cannot be lined up with the record text)
+function mksep(   s, r, x, c1, c2) {
+  split("", SCUR); split("", SBAD); split("", SEP)
+  for (s = 1; s <= NS; s++) {
+    r = SR[s]
+    if (!(r in SCUR)) { SCUR[r] = 1; SBAD[r] = !(r in RECT) }
+    SEP[s] = "?"
+    if (SBAD[r]) continue
+    x = ST[s]
+    if (substr(RECT[r], SCUR[r], length(x)) != x) { SBAD[r] = 1; continue }
+    SCUR[r] += length(x)
+    c2 = substr(RECT[r], SCUR[r], 2); c1 = substr(c2, 1, 1)
+    if (c2 == "&&" || c2 == "||" || c2 == "|&") { SEP[s] = c2; SCUR[r] += 2 }
+    else if (c1 == "|" || c1 == ";" || c1 == "&" || c1 == "\n") { SEP[s] = c1; SCUR[r]++ }
+    else if (c1 == "") SEP[s] = ""
+    else SBAD[r] = 1
+  }
+}
+# mkgrp(): RGRP[r] = record r holds a grouping word or a compound command
+function mkgrp(   s, i, p) {
+  split("", RGRP)
+  for (s = 1; s <= NS; s++) {
+    for (i = 1; i <= TN[s]; i++) if (TT[s, i] == "g" || TT[s, i] == "u") RGRP[SR[s]] = 1
+    for (i = 1; i <= TN[s]; i++) {
+      if (TT[s, i] == "r" || TT[s, i] == "R") continue
+      p = TP[s, i]
+      if (p ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+      if (TT[s, i] == "w" && ((p in KW) || p ~ /^(for|select|case|function|coproc)$/)) RGRP[SR[s]] = 1
+      break
+    }
+  }
+}
+# cdlike(s): the segment may change the directory in a way a leading plain cd does not: a cd, pushd,
+# popd, chdir, eval or source word anywhere, a dot script, or an opaque command word
+function cdlike(s,   i) {
+  for (i = 1; i <= TN[s]; i++) if (TT[s, i] == "w" && tolower(TP[s, i]) ~ /^(cd|pushd|popd|chdir|eval|source)$/) return 1
+  cmdword(s)
+  return (CWI > 0 && (TT[s, CWI] == "o" || TP[s, CWI] == "."))
+}
+# pfxcd(s): a plain `cd <target>` or `pushd <target>`: exactly those two words, no option, no redirect
+function pfxcd(s) {
+  if (TN[s] != 2 || TT[s, 1] != "w" || (TP[s, 1] != "cd" && TP[s, 1] != "pushd")) return 0
+  if (TT[s, 2] != "w" && TT[s, 2] != "o") return 0
+  return (TP[s, 2] != "" && TP[s, 2] !~ /^[-+]/)
+}
+function nset(A,   x, n) { n = 0; for (x in A) n++; return n }
+# cwdplan(): CSS, the directories every relative word in the command may be relative to. Only a leading
+# run of plain cd/pushd segments of the top-level command moves it, each joined to the next by && (the
+# set is replaced) or by ; or a newline (old and new unioned); a top-level separator after the run other
+# than && or a pipe brings back the directories a failed cd leaves. Unknown ("") for the whole command,
+# substitutions included: a cd-like word anywhere else (cdlike), a run cd joined by || | or &, or, with a
+# run, a group, compound, ! or quoted newline, a || anywhere, or CDPATH or cdpath text (any case); past
+# 32 directories. PFX[s] marks a run cd, PNW[s, 1..PNN[s]] where it went (for the cd taint). Any
+# aliasseg segment anywhere sets NORES.
+function cwdplan(   s, inpx, npx, x, sp, tail, ALT) {
+  split("", CSS); split("", PFX); split("", PNN); split("", ALT)
+  CSS[PCWD] = 1; RELOK = 1; inpx = 1; npx = 0; tail = 0
+  for (s = 1; s <= NS; s++) {
+    if (TN[s] == 0) continue
+    if (aliasseg(s)) NORES = 1
+    if (SR[s] == "0" && inpx && pfxcd(s)) {
+      PFX[s] = 1; npx++; sp = SEP[s]
+      if (sp != "&&" && sp != ";" && sp != "\n" && sp != "") RELOK = 0
+      continue
+    }
+    if (SR[s] == "0") { inpx = 0; if (SEP[s] != "&&" && SEP[s] != "|" && SEP[s] != "|&" && SEP[s] != "") tail = 1 }
+    if (cdlike(s)) RELOK = 0
+  }
+  if (npx > 0) {
+    if (RGRP["0"] || index(tolower(ENVIRON["RG_CMD"]), "cdpath")) RELOK = 0
+    for (s = 1; s <= NS; s++) if (SR[s] == "0" && (SEP[s] == "||" || SEP[s] == "?")) RELOK = 0
+  }
+  if (!RELOK) { split("", CSS); CSS[""] = 1; return }
+  for (s = 1; s <= NS; s++) {
+    if (!(s in PFX)) continue
+    cmdword(s); cdnew(s, TP[s, 1])
+    PNN[s] = 0; for (x in NEWS) PNW[s, ++PNN[s]] = x
+    if (SEP[s] == "&&") { for (x in CSS) ALT[x] = 1; split("", CSS); for (x in NEWS) CSS[x] = 1 }
+    else { for (x in NEWS) CSS[x] = 1; for (x in ALT) CSS[x] = 1; split("", ALT) }
+    if (nset(CSS) + nset(ALT) > 32) { split("", CSS); CSS[""] = 1; split("", PNN); return }
+  }
+  if (tail) for (x in ALT) CSS[x] = 1
+}
+# cdnew(s, cw): NEWS = the directories the cd/pushd segment s goes to ("" = unknown)
+function cdnew(s, cw,   i, t, p, dd, tg, to, x, h) {
+  split("", NEWS)
+  h = ENVIRON["HOME"]; if (h !~ /^\// || index(h, "\n") || index(h, "\t")) h = ""
+  dd = 0; tg = ""; to = -1
+  for (i = CWI + 1; i <= TN[s]; i++) {
+    t = TT[s, i]; if (t != "w" && t != "o") continue
+    p = TP[s, i]
+    if (!dd && t == "w" && p == "--") { dd = 1; continue }
+    if (!dd && t == "w" && cw == "cd" && p ~ /^-[LPe@]+$/) continue
+    tg = p; to = (t == "o"); break
+  }
+  if (to < 0) { NEWS[cw == "cd" ? h : ""] = 1; return }
+  if (tg == "" || tg == "-" || (!dd && tg ~ /^[-+]/) || index(tg, "\n") || index(tg, "\t")) { NEWS[""] = 1; return }
+  if (to) {
+    if (tg ~ /^~(\/|$)/ && tg !~ /[$`*?[{]/ && h != "") NEWS[h substr(tg, 2)] = 1
+    else NEWS[""] = 1
+    return
+  }
+  if (tg ~ /^\//) { NEWS[tg] = 1; return }
+  # CDPATH set in the hook env, or named anywhere in the command (CDPATH=x cd, export CDPATH)
+  if ((ENVIRON["CDPATH"] != "" || index(ENVIRON["RG_CMD"], "CDPATH")) && tg !~ /^\.\.?(\/|$)/) { NEWS[""] = 1; return }
+  for (x in CSS) NEWS[x == "" ? "" : x "/" tg] = 1
+}
+# setexempt(s, cw): segment s is a jq, echo or printf (no -v), or a git commit/tag/notes with a message,
+# at top level outside any group or compound, with no write redirect, whose output goes nowhere or only
+# into pure readers: it writes no file, so the stand-down key word rule does not apply to it
+function setexempt(s, cw,   i, t, p, op, tg, j, ok, ni, b) {
+  if (SR[s] != "0" || RGRP["0"] || SEP[s] == "?") return 0
+  for (i = 1; i <= TN[s]; i++) {
+    t = TT[s, i]; p = TP[s, i]
+    if (t == "r" || t == "R") {
+      op = p; sub(/ .*/, "", op); tg = p; sub(/^[^ ]* /, "", tg)
+      if (op ~ />/ && !(t == "r" && (tg == "/dev/null" || (op ~ />&$/ && tg ~ /^[12]$/)))) return 0
+    }
+  }
+  # a bare command word only: a path (./jq) is some other program that happens to share the name
+  b = (index(cw, "/") ? "" : cw); ok = 0
+  if (b == "jq" || b == "echo") ok = 1
+  else if (b == "printf") { ok = 1; for (i = CWI + 1; i <= TN[s]; i++) if (TP[s, i] ~ /^-[A-Za-z]*v/) ok = 0 }
+  else if (b == "git") {
+    ni = 0
+    for (i = CWI + 1; i <= TN[s]; i++) if (TT[s, i] == "w" || TT[s, i] == "o") { ni = i; break }
+    if (ni && TT[s, ni] == "w" && TP[s, ni] ~ /^(commit|tag|notes)$/)
+      for (i = ni + 1; i <= TN[s]; i++) if (TT[s, i] == "w" && (TP[s, i] ~ /^-[A-Za-z]*m/ || TP[s, i] ~ /^--message/)) ok = 1
+  }
+  if (!ok) return 0
+  j = s
+  while (SEP[j] == "|" || SEP[j] == "|&") {
+    j++
+    if (j > NS || SR[j] != SR[s] || !pureread(j, cmdword(j))) { ok = 0; break }
+  }
+  cmdword(s)
+  return ok && SEP[j] != "?"
+}
+function prot_scan(   s, prev, i, t, w, o, x, cw, tw, twi, tfl, kn, iscd, k) {
+  prev = SUBSEP; split("", CSS); split("", CEM); split("", CDD); split("", NEWS)
+  PCWD = ENVIRON["RG_PCWD"]; if (PCWD !~ /^\// || index(PCWD, "\n") || index(PCWD, "\t")) PCWD = ""
+  NORES = 0; NC = 0; SEGNR = 0; CARRY = 0; NCDD = 0; RELOK = 0
+  mksep(); mkgrp(); cwdplan()
+  for (s = 1; s <= NS; s++) {
+    if (SR[s] != prev) { prev = SR[s]; CARRY = 0; NCDD = 0; split("", CDD) }
+    if (TN[s] == 0) continue
+    SEGNR = segnr(s)
     cw = cmdword(s)
-    if (cw == "cd" || cw == "pushd") {
-      # the write redirects of the cd segment itself are judged before it is skipped
+    iscd = (cw == "cd" || cw == "pushd")
+    if (iscd) {
+      # the write redirects of the cd segment itself are judged
       for (i = 1; i <= TN[s]; i++) {
         t = TT[s, i]; w = TP[s, i]
         if ((t != "r" && t != "R") || !wredir(t, w)) continue
         sub(/^[^ ]* /, "", w)
-        if (protword(w) != "") { print "PROT\t" protword(w); return 1 }
+        if ((x = protword(w)) != "" && !place("f", w, t == "R", x, 0)) { print "PROT\t" x; return 1 }
         if (issetjson(w)) { print "PROTS\t" base(w); return 1 }
-        if (isprotname(w)) { print "PROT\t" base(w); return 1 }
+        if (isprotname(w) && !place("f", w, t == "R", base(w), 0)) { print "PROT\t" base(w); return 1 }
       }
-      if (carry && haswr(s)) { print "PROT\t(cwd)"; return 1 }
-      tw = ""
-      for (i = CWI + 1; i <= TN[s]; i++) if ((TT[s, i] == "w" || TT[s, i] == "o") && TP[s, i] !~ /^-/) { tw = TP[s, i]; break }
-      if (hit != "" || tolower(tw) ~ /\.state\/off\/?$/) carry = 1
+      if (haswr(s)) { if (CARRY) { print "PROT\t(cwd)"; return 1 } for (k = 1; k <= NCDD; k++) emitc("d", CDD[k], "(cwd)") }
+      # taint: a flagged word, a stand-down key word or a .state/off target makes every later segment
+      # with a command word or a write redirect a protected write. The directory is where cwdplan placed
+      # this cd (a leading plain cd only; anything else, or an unknown target, is CARRY), tested when
+      # such a segment comes; a flagged word that is not the target taints outright.
+      if (settings_hit(ST[s])) CARRY = 1
+      tw = ""; twi = 0; tfl = 0
+      for (i = 1; i <= TN[s]; i++) {
+        t = TT[s, i]; w = TP[s, i]
+        if (t != "w" && t != "o") continue
+        if (tw == "" && i > CWI && w !~ /^-/) { tw = w; twi = i }
+        if (protword(w) != "") { if (i == twi) tfl = 1; else CARRY = 1 }
+      }
+      if (tolower(tw) ~ /\.state\/off\/?$/) tfl = 1
+      if (tfl) {
+        if (!(s in PNN) || PNN[s] == 0) CARRY = 1
+        else for (k = 1; k <= PNN[s]; k++) { if (PNW[s, k] == "") CARRY = 1; else CDD[++NCDD] = PNW[s, k] }
+      }
       continue
     }
-    if (hit == "" && carry && (CWI > 0 || haswr(s))) hit = "(cwd)"
-    if (hit != "" && !pureread(s, cw)) { print "PROT\t" hit; return 1 }
-    if ((sw = setw(s, 0, "")) != "") { print "PROTS\t" sw; return 1 }
-    if ((sw = setw(s, 1, "r")) != "") { print "PROT\t" sw; return 1 }
-    if (((sw = setw(s, 1, "w")) != "" || (sw = namew(s)) != "") && !rdrseg(s)) { print "PROT\t" sw; return 1 }
+    if (!pureread(s, cw)) {
+      # a flagged word is placed only where the guard knows the path it denotes: a write redirect
+      # target or a write verb operand (kpos); any other flagged word denies by name
+      kpos(s)
+      for (i = 1; i <= TN[s]; i++) {
+        t = TT[s, i]; w = TP[s, i]; o = (t == "o" || t == "R"); kn = 0
+        if (t == "r" || t == "R") { kn = wredir(t, w); sub(/^[^ ]* /, "", w) }
+        else if (t != "w" && t != "o") continue
+        else kn = (i in KP)
+        if ((x = protword(w)) == "") continue
+        if (kn && KP[i] == "dd") w = substr(w, 4)
+        if (!kn || !place("f", w, o, x, (t != "r" && t != "R" && KP[i] == "g"))) { print "PROT\t" x; return 1 }
+      }
+      if (settings_hit(ST[s]) && !setexempt(s, cw)) { print "PROT\tsettings"; return 1 }
+      if (CWI > 0 || haswr(s)) { if (CARRY) { print "PROT\t(cwd)"; return 1 } for (k = 1; k <= NCDD; k++) emitc("d", CDD[k], "(cwd)") }
+    }
+    if ((x = setw(s, 0, "")) != "") { print "PROTS\t" x; return 1 }
+    NC = 0; setw(s, 1, "r"); if (flushc()) return 1
+    NC = 0; setw(s, 1, "w"); namew(s); if (NC > 0 && !rdrseg(s) && flushc()) return 1
   }
   return 0
 }
@@ -1067,20 +1371,38 @@ function unsure_now(s, why, whyt) {
   L = "unsure"; WHY = why; WHYT = whyt
   if (segcwn(s)) { PRG = CWW; GRP = CWG[CWW] } else { PRG = "opaque"; GRP = "unknown" }
 }
-# hidden(x): text that spells a word the guard cannot read: ANSI-C $'..', a \x or octal escape, ${..} with an operator
+# hidden(x): text that spells a word the guard cannot read: an ANSI-C dollar-quote, a \x or octal escape, ${..} with an operator
 function hidden(x) {
   return (index(x, "$\047") || x ~ /\\x[0-9A-Fa-f]/ || x ~ /\\[0-7]/ || x ~ /\$\{[^}]*[^A-Za-z0-9_}]/)
 }
 # opaque_cmd(s, p): an opaque word at command position. A plain parameter (a dollar sign and a bare name or digit, braced or not), a
-# leading ~ path, and a path whose directory part holds only plain parameters and whose last component
-# is literal ("$HOME/bin/tool") keep the class-word rule; anything else (substitution, $'..', ${..} with an operator,
-# a glob) is unsure whatever its text.
+# leading ~ path, a path whose directory part holds only plain parameters and whose last component
+# is literal ("$HOME/bin/tool"), and a glob globcmd accepts keep the class-word rule; anything else
+# (substitution, an ANSI-C dollar-quote, ${..} with an operator, any other glob) is unsure whatever its text.
 function opaque_cmd(s, p) {
   if (p == "[" || p == "[[") return 0
   if (p !~ /\$__RG/ && (p ~ /^\$([A-Za-z_][A-Za-z0-9_]*|[0-9]|\{[A-Za-z_][A-Za-z0-9_]*\})$/ || p ~ /^~[^$`*?[{]*$/ || \
       (p ~ /^(\$([A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})|[A-Za-z0-9_.~\/-])*\/[A-Za-z0-9_.-]+$/)))
     unsure_cw(s, "opaque-command", "the command word is a variable")
+  else if (globcmd(p)) unsure_cw(s, "opaque-command", "the command word is a glob")
   else unsure_now(s, "opaque-command", "the command word is built at run time")
+  return 1
+}
+# globcmd(p): a glob command word that can expand to no class program or wrapper name: its directory
+# part (none, or one ending in /) is literal [A-Za-z0-9_.~/-], its last component holds only those
+# literals, * ? and plain [..] classes (no range, no negation), and that component, lowercased, matches
+# no CW or WRW name lowercased (a case-insensitive filesystem) and no shell name classify treats as a
+# shell (bash sh zsh dash ksh). Anything else is not accepted.
+function globcmd(p,   d, c, re, w) {
+  if (p ~ /\$__RG/) return 0
+  c = p; d = ""
+  if (index(c, "/")) { d = c; sub(/[^\/]*$/, "", d); c = substr(c, length(d) + 1) }
+  if (d !~ /^[A-Za-z0-9_.~\/-]*$/ || c !~ /^([A-Za-z0-9_.*?-]|\[[A-Za-z0-9_.]+\])+$/ || c !~ /[*?[]/) return 0
+  re = glob2re(tolower(c))
+  for (w in CW) if (tolower(w) ~ re) return 0
+  for (w in WRW) if (tolower(w) ~ re) return 0
+  # the shells classify reads specially (a shell reading a pipe), wrapper rows or not
+  if ("bash" ~ re || "sh" ~ re || "zsh" ~ re || "dash" ~ re || "ksh" ~ re) return 0
   return 1
 }
 function setl(l, why, whyt) { L = l; WHY = why; WHYT = whyt }
@@ -1120,6 +1442,51 @@ function argv_walk(j, k, s,   skip, f, p, nm) {
     return k
   }
   return k
+}
+# xargs_walk(k): the word where the program xargs (at k) runs starts, or 0 when the guard cannot show that
+# words xargs appends from its input leave the verdict unchanged. Its own strict option parser, exact
+# names only: `--` ends the options; long --null --no-run-if-empty --verbose --exit --open-tty
+# --interactive take no value, --arg-file --delimiter --max-args --max-procs --max-chars take =v or the
+# next word; a short word is read letter by letter, 0 r t p x take no value, a d E n P L s take the rest of
+# the word or the next word. Any other option (replace-style -I -i --replace, -J, the optional-argument
+# -l -e, a long prefix, an opaque option word) refuses. The program word must be literal, no wrapper,
+# of the docker-remote shape with no gh-api row, and its first positional literal, not `context`, with
+# no unknown option before it. Appended words then land after that positional, where shape_docker reads
+# no daemon flag, assignment or context verb; classify turns any decision shape_docker still makes on
+# the given words into unsure.
+function xargs_walk(k,   m, p, nm, li, c, b2, ss2) {
+  ss2 = ""
+  for (m = k + 1; m <= NW; m++) {
+    if (WT[m] != "w") return 0
+    p = WP[m]
+    if (p == "--") { m++; break }
+    if (substr(p, 1, 2) == "--") {
+      nm = p; if (index(nm, "=")) nm = substr(nm, 1, index(nm, "=") - 1)
+      if (nm == p && nm ~ /^--(null|no-run-if-empty|verbose|exit|open-tty|interactive)$/) continue
+      if (nm ~ /^--(arg-file|delimiter|max-args|max-procs|max-chars)$/) { if (nm == p) m++; continue }
+      return 0
+    }
+    if (p !~ /^-./) break
+    for (li = 2; li <= length(p); li++) {
+      c = substr(p, li, 1)
+      if (index("0rtpx", c)) continue
+      if (index("adEnPLs", c)) { if (li == length(p)) m++; break }
+      return 0
+    }
+  }
+  if (m > NW || WT[m] != "w") return 0
+  b2 = base(WP[m])
+  if (!(b2 in CW) && !(b2 in WRW) && !(b2 in NOEX) && ((tolower(b2) in CW) || (tolower(b2) in WRW))) b2 = tolower(b2)
+  if (b2 in WRW) return 0
+  for (li = 1; li <= NPR; li++) {
+    if (PRG_P[li] != b2 || !GON[PRG_G[li]]) continue
+    if (PRG_S[li] == "gh-api") return 0
+    if (ss2 == "") ss2 = PRG_S[li]
+  }
+  if (ss2 != "docker-remote") return 0
+  parse_args(b2, m)
+  if (NP < 1 || POSO[1] || UB[1] || POS[1] == "context") return 0
+  return m
 }
 function addflag(nm, v, vo) { NFN++; FN[NFN] = nm; FV[NFN] = v; FVO[NFN] = vo; FPOS[NFN] = NP }
 function parse_args(prog, k,   m, t, p, oa, nm, v, vo, letters, li, fl, unl, endopt, took) {
@@ -1362,8 +1729,8 @@ function shape_ghapi(s,   ep, h, j, n, v) {
   }
   setl("ro", "gh-get", "a GET of " ep " with no body flag")
 }
-function classify(s,   n, i, t, p, k, j, b, strip, two, mstr, mstd, marg, m, op) {
-  L = "none"; GRP = ""; PRG = ""; VPL = "-"; VPR = ""; TGT = ""; NOALLOW = 0; WHY = ""; WHYT = ""; ISCMD = 0; NAS = 0
+function classify(s,   n, i, t, p, k, j, b, strip, two, mstr, mstd, marg, m, op, xa) {
+  xa = 0; L = "none"; GRP = ""; PRG = ""; VPL = "-"; VPR = ""; TGT = ""; NOALLOW = 0; WHY = ""; WHYT = ""; ISCMD = 0; NAS = 0
   n = TN[s]; split("", WT); split("", WP); split("", ASG)
   for (i = 1; i <= n; i++) if (TT[s, i] == "u") { ISCMD = 1; unsure_cwn(s, "unbalanced", "an unbalanced quote or substitution"); return }
   i = 1
@@ -1414,8 +1781,10 @@ function classify(s,   n, i, t, p, k, j, b, strip, two, mstr, mstd, marg, m, op)
     }
     if (mstr || mstd) {
       if (hidden(segtext(s))) { unsure_now(s, "hidden-string", b " is given an escaped or expanded string this guard cannot read"); return }
-      if (mstr) unsure_cwn(s, "string-wrapper", b " runs a command string this guard does not read into")
-      else unsure_cwn(s, "stdin-wrapper", b " runs commands built from its input")
+      if (mstr) { unsure_cwn(s, "string-wrapper", b " runs a command string this guard does not read into"); return }
+      # xargs alone is walked, and only into a program shape its appended words cannot widen (xargs_walk)
+      if (b == "xargs" && (m = xargs_walk(k)) > 0) { k = m; strip = 0; xa = 1; continue }
+      unsure_cwn(s, "stdin-wrapper", b " runs commands built from its input")
       return
     }
     if (!marg) break
@@ -1456,7 +1825,11 @@ function classify(s,   n, i, t, p, k, j, b, strip, two, mstr, mstd, marg, m, op)
   GRP = gs
   if (ss == "remote-shell") shape_ssh(s, b, k)
   else if (ss == "transfer") shape_transfer(s, b, k)
-  else if (ss == "docker-remote") shape_docker(s, b, k)
+  else if (ss == "docker-remote") {
+    shape_docker(s, b, k)
+    # under xargs, a remote daemon named in the given words is unsure: appended words may pick the verb
+    if (xa && L != "none") { setl("unsure", "stdin-wrapper", "xargs runs commands built from its input"); TGT = ""; VPL = "-"; VPR = "" }
+  }
   else shape_subcmd(s, b, k)
 }
 # covered(r): every target allowlisted, or (ro only) an exact (group, target) session grant; XGU[r] = a grant was used
@@ -1527,6 +1900,7 @@ mode == "coarse" {
   exit
 }
 /^R\t/ { CUR = substr($0, 3); next }
+/^T\t/ { p = substr($0, 3); gsub(/\035/, "\n", p); gsub(/\037/, "\t", p); RECT[CUR] = p; next }
 /^S\t/ { NS++; SR[NS] = CUR; ST[NS] = substr($0, 3); TN[NS] = 0; next }
 /^B\t/ { p = substr($0, 3); j = index(p, "\t"); BO[substr(p, 1, j - 1)] = substr(p, j + 1); next }
 /^C\t/ { p = substr($0, 3); j = index(p, "\t"); NCAP++; CAPT[NCAP] = substr(p, j + 1); next }
@@ -1667,8 +2041,10 @@ coarse() { # coarse <why-code> <why-text> <note|"">: protection raw scan, then c
 case "$CMD" in *"$(printf '\035')"* | *"$(printf '\037')"*) coarse "control-byte" "the command holds a 0x1D or 0x1F control byte" "" ;; esac
 
 # session grants (read-only Bash reach): honoured only for the attended Lead with an id-shaped session_id
-BJ="$(printf '%s' "$INPUT" | jq -r '[(.tool_use_id // ""), (.session_id // "")] | .[] | tostring | gsub("[\n\r]"; " ")' 2>/dev/null)"
-{ IFS= read -r TUID; IFS= read -r RSID; } <<EOF
+BJ="$(printf '%s' "$INPUT" | jq -r '[(.tool_use_id // ""), (.session_id // ""),
+  (.cwd // "" | tostring | if test("[\n\r\t]") then "" else . end)] | .[] | tostring | gsub("[\n\r]"; " ")' 2>/dev/null)"
+TUID=""; RSID=""; PCWD=""
+{ IFS= read -r TUID; IFS= read -r RSID; IFS= read -r PCWD; } <<EOF
 $BJ
 EOF
 SIDOK=0; case "$RSID" in "" | *[!A-Za-z0-9._-]*) ;; *) [ -n "$STATE" ] && SIDOK=1 ;; esac
@@ -1680,7 +2056,7 @@ C2="$(guard_strip_heredocs "$CMD")"
 OUT="$(printf '%s' "$C2" | awk "$SUBS" 2>/dev/null | while IFS="$TAB" read -r k id rest; do
   case "$k" in
     (R)
-      printf 'R\t%s\n' "$id"
+      printf 'R\t%s\nT\t%s\n' "$id" "$rest"
       t="$(printf '%s' "$rest" | tr '\035\037' '\n\t')"
       guard_split_segments_qsafe "$t" | while IFS= read -r seg; do
         printf 'S\t%s\n' "$seg"
@@ -1688,23 +2064,95 @@ OUT="$(printf '%s' "$C2" | awk "$SUBS" 2>/dev/null | while IFS="$TAB" read -r k 
       done ;;
     (*) printf '%s\t%s\t%s\n' "$k" "$id" "$rest" ;;
   esac
-done | RG_CMD="$CMD" RG_KF="$KF" RG_UCF="$UCF" RG_UAF="$UAF" RG_RGF="$RGF" awk -v mode=cls -v builtin=0 "$AWK" 2>/dev/null)"
+done | RG_CMD="$CMD" RG_KF="$KF" RG_UCF="$UCF" RG_UAF="$UAF" RG_RGF="$RGF" RG_PCWD="$PCWD" awk -v mode=cls -v builtin=0 "$AWK" 2>/dev/null)"
 
-DEC=""
+deny_prot() { # deny_prot <label>: a Bash protected write
+  rg_log "deny: protected-write route=Bash file=$(clean "$1")$(agl)"
+  emit deny "reach-guard: this command writes to or acts on reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, or a settings stand-down key ($1), and it is not a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
+  exit 0
+}
+# bp_check <CAND lines> <count>: prints HIT TAB the label of the first candidate that lands in the Bash protected set:
+# any of its forms (lexical; resolved like resolve(), readlink -f only for a symlinked file; the path and
+# its directory through cd -P), lowercased, inside the running kit (any depth), the user reach-guard dir
+# or the state dir; a file candidate also when it holds one of those; a glob directory also when it is
+# the user dir parent. The roots take the same forms. One pipeline for all candidates: cd and test are
+# builtins inside one subshell, so the cost does not grow with a process chain per form per root.
+# CLEAR only when none lands there, exactly <count> candidate headers (H) came through and every
+# candidate got a resolved form (X); anything else is a deny.
+BPAWK='function lexnorm(x,   n, a, i, k, s, o) {
+  n = split(x, a, "/"); k = 0
+  for (i = 1; i <= n; i++) { if (a[i] == "" || a[i] == ".") continue; if (a[i] == "..") { if (k > 0) k--; continue }; o[++k] = a[i] }
+  s = ""; for (i = 1; i <= k; i++) s = s "/" o[i]
+  return (s == "" ? "/" : s)
+}'
+bp_check() {
+  {
+    for q in "$KIT" "$UDIR" "$STATE"; do [ -n "$q" ] && printf 'R\t-\tp\t-\t%s\n' "$q"; done
+    printf 'R\t-\tu\t-\t%s\n' "${UDIR%/*}"
+    bi=0
+    printf '%s\n' "$1" | while IFS="$TAB" read -r bk bl bp; do
+      [ -n "$bp" ] || continue
+      bi=$((bi + 1))
+      case "$bp" in "~") bp="$HOME" ;; "~/"*) bp="$HOME/${bp#"~/"}" ;; esac
+      printf 'C\t%s\t%s\t%s\t%s\n' "$bi" "$bk" "$bl" "$bp"
+    done
+  } | awk -F '\t' "$BPAWK"' { print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" lexnorm($5) }' 2>/dev/null | (
+    CDPATH=
+    while IFS="$TAB" read -r bt bid bk bl braw bn; do
+      [ "$bt" = C ] && printf 'H\t%s\n' "$bid"
+      printf '%s\t%s\t%s\t%s\t%s\tL\n' "$bt" "$bid" "$bk" "$bl" "$bn"
+      bd="$bn"; brest=""; br=""
+      while [ "$bd" != / ] && [ ! -e "$bd" ] && [ ! -L "$bd" ]; do brest="/${bd##*/}$brest"; bd="${bd%/*}"; [ -n "$bd" ] || bd=/; done
+      if [ -d "$bd" ]; then cd -P "$bd" 2>/dev/null && br="$PWD"
+      elif [ -L "$bd" ]; then br="$(readlink -f "$bd" 2>/dev/null)"
+      elif cd -P "${bd%/*}/" 2>/dev/null; then br="$PWD/${bd##*/}"; fi
+      [ -n "$br" ] && printf '%s\t%s\t%s\t%s\t%s\tX\n' "$bt" "$bid" "$bk" "$bl" "${br%/}$brest"
+      br=""; [ -d "$braw" ] && cd -P "$braw" 2>/dev/null && br="$PWD"
+      [ -n "$br" ] && printf '%s\t%s\t%s\t%s\t%s\tP\n' "$bt" "$bid" "$bk" "$bl" "$br"
+      br=""; [ -d "${braw%/*}/" ] && cd -P "${braw%/*}/" 2>/dev/null && br="$PWD/${braw##*/}"
+      [ -n "$br" ] && printf '%s\t%s\t%s\t%s\t%s\tP\n' "$bt" "$bid" "$bk" "$bl" "$br"
+    done
+  ) | awk -F '\t' -v want="$2" "$BPAWK"'
+    function hit(k, f,   r) {
+      for (r in P) {
+        if (f == r || index(f, r "/") == 1) return 1
+        if (k == "f" && (f == "/" || index(r, f "/") == 1)) return 1
+      }
+      return (k == "g" && (f in U))
+    }
+    $1 == "H" { nh++; next }
+    { f = tolower(lexnorm($5)) }
+    $1 == "R" { if ($3 == "p") { P[f] = 1; np++ } else U[f] = 1; next }
+    $6 == "X" { RES[$2] = 1 }
+    hit($3, f) { print "HIT\t" $4; done = 1; exit }
+    END {
+      if (done) exit
+      ok = (np > 0 && nh == want)
+      for (i = 1; i <= want; i++) if (!(i in RES)) ok = 0
+      print (ok ? "CLEAR" : "HIT\t(unresolved)")
+    }' 2>/dev/null
+}
+
+DEC=""; CANDS=""; NCAND=0
 while IFS= read -r line; do
   case "$line" in
     "BAD$TAB"*) badnote "${line#BAD"$TAB"}" ;;
     "PROTS$TAB"*) deny_setwrite "${line#PROTS"$TAB"}" ;;
-    "PROT$TAB"*)
-      f="${line#PROT"$TAB"}"
-      rg_log "deny: protected-write route=Bash file=$(clean "$f")$(agl)"
-      emit deny "reach-guard: this command writes to or acts on reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, or a settings stand-down key ($f), and it is not a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
-      exit 0 ;;
+    "PROT$TAB"*) deny_prot "${line#PROT"$TAB"}" ;;
+    "CAND$TAB"*)
+      # cap: past 32 placed candidates in one command, deny as an unplaceable word would be (fail closed)
+      NCAND=$((NCAND + 1)); [ "$NCAND" -le 32 ] || deny_prot "(more than 32 paths)"
+      CANDS="$CANDS${line#CAND"$TAB"}$NLC" ;;
     "DEC$TAB"*) DEC="${line#DEC"$TAB"}" ;;
   esac
 done <<EOF
 $OUT
 EOF
+if [ -n "$CANDS" ]; then
+  BPHIT="$(bp_check "$CANDS" "$NCAND")"
+  # anything but CLEAR (a hit, or a check that did not see every candidate) denies
+  [ "$BPHIT" = CLEAR ] || { BPHIT="${BPHIT#HIT"$TAB"}"; deny_prot "${BPHIT:-(unresolved)}"; }
+fi
 [ -n "$DEC" ] || exit 0
 
 IFS="$TAB" read -r D_DEC D_LVL D_GRP D_PRG D_VPL D_VPR D_TGT D_TGTS D_GU D_MG D_MT D_POL D_WHY D_WHYT <<EOF

@@ -14,14 +14,14 @@ pick the groups at install time ([levels and groups](#levels-and-groups)).
 
 | Hook | Group | What it does |
 |---|---|---|
-| `resume-inject` | core | Re-injects `RESUME_SESSION.md` |
+| `resume-inject` | core | Re-injects `RESUME_SESSION.md` at session start, compact, resume and clear, plus the version stamp, the loaded-doctrine manifest, the band line and the SessionStart advisories |
 | `codex-home-isolate` | core | Per-session `CODEX_HOME` |
 | `guard-summary` | core | SessionEnd stderr line counting the session's guard blocks from `.state/guards.log`, the durable record |
 | `dangerous-actions-blocker` | safety | Hard-denies force-push to main/master, `DROP`/`TRUNCATE DATABASE`, `dd`/`mkfs`, publishes, secret shapes on a command line |
 | `security-gate` | safety | Scans content being written - every file type - for secrets and injection-prone patterns |
 | `reach-guard` | safety | Denies an agent command that reaches another machine or a logged-in account (`ssh`, remote copies, cloud CLIs, `gh api`) and hands it back for you to run yourself as `! <command>`; a read-only one is asked about instead |
 | `grep-footgun-guard` | shell_footguns | Blocks recursive raw `grep`, which silently skips NUL-byte files |
-| `review-gate-guard` | commit_review | Asks at the repo's ship point (commit and push by default; push only when `review_gate: push`) when no reviewer/advisor spawn exists this session |
+| `review-gate-guard` | commit_review | Asks at the repo's ship point (`git commit`, `git push`, `gh pr create`, `gh pr merge`; push and PR only when `review_gate: push`) when no reviewer, advisor or codex-read spawn exists this session |
 | `codex-guard` | delegation | Denies bare `codex`; routes through the `codex-run.sh` wrapper and its secrets scan |
 | `peer-guard` | multi_session | Notes, once per change, another live Claude Code session in the same repo; denies a session's first file edit in a different repo (read its docs, then retry), or asks when a live session already works there. Linux only (reads `/proc`); fails open elsewhere |
 | `simple-rules-guard` | multi_session | Small literal rules on one hook row (the script header lists them all). Rule F denies a main-session `SendMessage` to another agent that carries neither `NOOP-IF-DONE` nor `RESUME-OK`, because a message to a finished agent resumes it; Rule D denies an `AskUserQuestion` question whose first option (any option, for multiSelect) lacks `(Recommended)`; Rule G denies waking a long-idle peer session without `WAKE-OK:` and a reason |
@@ -108,13 +108,13 @@ a payload the same way that example does.
 **The silent-grep footgun** (`grep-footgun-guard`) denies with the fix in the message:
 
 > Recursive GNU grep without -a/--text silently skips files it deems binary (NUL/invalid bytes;
-> plain CJK is fine) - documented CLAUDE.md footgun. Re-run with 'rg' (preferred) or add '-a' to grep.
+> plain CJK is fine) - a known footgun (the result looks complete and is not). Re-run with 'rg' (preferred) or add '-a' to grep.
 
 **The lost-exit-code strand** (`long-run-guard`) denies a long check/build/commit that is piped,
 backgrounded, under-timed, or polled in a while/until+sleep loop:
 
-> deny: piping or redirecting a long check/build/commit's own output discards its exit code. run
-> it foreground, no pipe, timeout: 900000 on the tool call, and read the exit code directly.
+> deny: a pipe discards the exit code; run it foreground and read $?. run it foreground, no pipe,
+> timeout: 900000 on the tool call, and read the exit code directly [...]
 
 It also denies a stranded poll loop (rule e), whatever it waits on: a while/until + sleep loop that
 watches a sub-agent's or background command's output file is denied even with a bound (the harness

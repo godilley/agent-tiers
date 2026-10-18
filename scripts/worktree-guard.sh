@@ -79,7 +79,7 @@ SEGMENTS="$(guard_split_segments_qsafe "$CMD_HD")"
 WT_ADD_FRAG="git[[:space:]]+(${CMDPOS_GITOPTS})*worktree[[:space:]]+add([[:space:]]|\$)"
 WT_REMOVE_FRAG="git[[:space:]]+(${CMDPOS_GITOPTS})*worktree[[:space:]]+remove([[:space:]]|\$)"
 
-REMEDY="use ~/.claude/agent-tiers/scripts/worktree.sh up <name> [--base <ref>] or worktree.sh down <name> [--merge|--discard], where <name> is the directory under .claude/worktrees/ whatever its branch (plan-<id>, agent-<hex> and detached worktrees included): down removes it once its checked-out branch is merged into its base (--base, else the recorded one, else the default branch) and the tree is clean, then deletes that branch unless it is the base or the default branch; a throwaway review target may use git worktree add --detach (or -d) and, to tear it down, either git worktree remove <path> directly (a detached target placed outside .claude/worktrees/ is allowed by this guard) or rm -rf <path> && git worktree prune"
+REMEDY="use ${SELFDIR:-~/.claude/agent-tiers/scripts}/worktree.sh up <name> [--base <ref>] or worktree.sh down <name> [--merge|--discard], where <name> is the directory under .claude/worktrees/ whatever its branch (plan-<id>, agent-<hex> and detached worktrees included): down removes it once its checked-out branch is merged into its base (--base, else the recorded one, else the default branch) and the tree is clean, then deletes that branch unless it is the base or the default branch; a throwaway review target may use git worktree add --detach (or -d) and, to tear it down, either git worktree remove <path> directly (a detached target placed outside .claude/worktrees/ is allowed by this guard) or rm -rf <path> && git worktree prune"
 
 unquote_tok() {
   t="$1"

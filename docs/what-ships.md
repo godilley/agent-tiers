@@ -56,7 +56,7 @@ install - staleness stamps, gated curation, VCS policy, the private-notes seam -
 **A spawn's check-in line** identifies its role and definition version, so a stale
 definition is visible. It does not certify the model or effort:
 
-> Hi, I'm worker - Worker tier, def-v8. Task: create and verify a slugify shell script.
+> Hi, I'm worker - Worker tier, def-v9. Task: create and verify a slugify shell script.
 
 Model/effort evidence is separate: requested settings are declared; adapter resolution and
 runtime observations name their sources. Missing runtime evidence is labelled unverified.

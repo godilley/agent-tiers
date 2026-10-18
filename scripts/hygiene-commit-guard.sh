@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # kit-scope: shared
 # agent-tiers PreToolUse(Bash) guard: run the output-hygiene scan (em/en dash, curly quotes, NBSP,
-# ZWSP, ellipsis glyph - the global CLAUDE.md hard rule) against everything about to enter the
+# ZWSP, ellipsis glyph - the kit output-hygiene rule) against everything about to enter the
 # commit - staged diff, ALL unstaged changes to tracked files repo-wide, new untracked files `git add`
 # would pick up, and the commit MESSAGE itself - chained to the commit it guards, so it can never run
 # unchained again.
@@ -43,7 +43,7 @@
 # written as a heredoc body, `-m "$(cat <<'EOF' ... EOF)"`, since heredoc bodies are stripped before
 # any scan - see bypass set).
 #
-# ponytail: same glyph list as the global CLAUDE.md rule (em dash U+2014, en dash U+2013, NBSP
+# ponytail: same glyph list as the output-hygiene rule (em dash U+2014, en dash U+2013, NBSP
 # U+00A0, ZWSP U+200B, curly quotes U+2018/2019/201C/201D, ellipsis U+2026), matched as literal UTF-8
 # BYTE sequences via `grep -aF` - not a `-P`/Unicode-escape dependent match, so this does not silently
 # no-op on a grep built without PCRE support. Known bypass set (accurate, not aspirational,
@@ -339,7 +339,7 @@ if [ "$HSCOPE" = narrow ] && [ "$COMMIT_ALL" != 1 ] && [ "$ADD_WHOLE_TREE" != 1 
 else
   SCOPE_CLAUSE="the staged diff, ALL unstaged changes to already-tracked files repo-wide (not just this commit's own changes - the hit may be in an unrelated dirty file, not something this commit introduces; if that scope is wrong for this repo, that is the OPERATOR's call to change, not yours), "
 fi
-REASON="A commit is about to introduce an output-hygiene violation (em/en dash, curly quote, NBSP, ZWSP, or ellipsis glyph) - the global CLAUDE.md hard rule. Scanned ${SCOPE_CLAUSE}${ADD_CLAUSE}and the commit message text. First offending line: $SNIPPET . Fix it (ASCII hyphen/straight quotes/two periods) and re-run."
+REASON="A commit is about to introduce an output-hygiene violation (em/en dash, curly quote, NBSP, ZWSP, or ellipsis glyph) - the kit's output-hygiene rule. Scanned ${SCOPE_CLAUSE}${ADD_CLAUSE}and the commit message text. First offending line: $SNIPPET . Fix it (ASCII hyphen/straight quotes/two periods) and re-run."
 note "deny: output-hygiene glyph - $(printf '%s' "$SNIPPET" | cut -c1-80) [sid=$(sid)]"
 jq -n --arg r "$REASON" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'

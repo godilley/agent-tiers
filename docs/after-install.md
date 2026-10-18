@@ -64,7 +64,8 @@ level; for a read-only Bash command, that group and target); the prompt says whi
 labels `POLICY CHANGE` yourself, as a `!` command in Claude Code or in a terminal:
 `printf '<group>\t<target>\t<read|all>\n' >> ~/.claude/reach-guard/allow.tsv` (the prompt adds
 `mkdir -p` first while that directory is missing, and uses `$CLAUDE_CONFIG_DIR` in place of `~/.claude`
-when that is set). Nothing else writes the file, and agents are denied writing it. `agent-tiers reach list` shows the rows; to undo one, delete its line from `allow.tsv` in an
+when that is set). Typing the line by hand, write a `%` in the target as `%%` and a `\` as `\\`, since
+printf reads both in its format; the prompt's own line already does. Nothing else writes the file, and agents are denied writing it. `agent-tiers reach list` shows the rows; to undo one, delete its line from `allow.tsv` in an
 editor. `all` on `remote_shell` lets agents run any plain remote command on matching hosts without
 asking; `all` on `cloud` or `gh_api` lets them run that group's act calls (writes, deletes, deploys)
 against matching targets without asking. A line labelled `RUN` is a one-off command handed back for you

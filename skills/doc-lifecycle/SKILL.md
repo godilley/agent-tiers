@@ -66,6 +66,10 @@ top-level `- **title**` bullet with these label lines (each at the start of its 
 - `Forced by:` the concrete trigger, or the literal `nothing named`. Optionally one typed token the
   reader can evaluate: `[session: S5]` (fires when that plan row is DONE), `[exists: path]`,
   `[date: YYYY-MM-DD]`, `[grep>=N: regex @ path]`.
+  Anchor it. "The next publish" is true the day it is written and unreadable a week later: nobody can
+  tell whether that next has already passed. Name what it is next after (a date, a sha, a version) or
+  use a typed token (a count goes in a `[grep>=N: ...]` token), and give the command that checks it. ledger-check flags an untyped
+  trigger saying "next" with no anchor (L6).
 - `Probe:` the cheapest check that would settle it now, and its result or `not run`.
 - `Source:` where it was found (a review, a session, a path:line).
 Retire with a line-start `DONE <date> [<session id or sha>]: <the check that proves it>`. Never delete
@@ -75,7 +79,7 @@ AskUserQuestion at the time. A `Deferred:` line is for an out-of-scope find whos
 before the session ends; one that can fire is a fork, not a deferral.
 
 `scripts/ledger-check.sh` (SessionStart, advisory) reads every live ledger: typed triggers that now
-hold, untyped trigger lines naming a DONE plan session, DONE lines with no check or a qualifier,
+hold, untyped trigger lines naming a DONE plan session, unanchored "next" triggers, DONE lines with no check or a qualifier,
 cited shas not in HEAD's history, DONE lines for a plan row that is not DONE, and the cap. Prose
 triggers are counted, never judged; entries with no labels are counted as legacy and listed only when
 their trigger line names a finished session. The plan it reads, when present: the first live

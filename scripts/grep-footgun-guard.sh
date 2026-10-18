@@ -4,7 +4,7 @@
 # GNU grep used RECURSIVELY without -a/--text silently skips files it deems binary (trigger is
 # NUL/invalid bytes, NOT plain CJK text - probe, GNU grep 3.12: `printf '<CJK> needle\n'` matches as
 # text; `printf 'needle\0\n'` and `printf 'needle \xff\n'` both report "binary file matches", i.e.
-# are skipped silently under -r without a match), returning wrong-but-quiet results. This is a global CLAUDE.md landmine
+# are skipped silently under -r without a match), returning wrong-but-quiet results. This is a known landmine
 # that sub-agents (which don't carry that memory) kept tripping - hence a hook, not per-brief text,
 # so the ONE mechanism covers every agent type AND the Lead.
 #
@@ -69,7 +69,7 @@ done)"
 [ "$HIT" = BAD ] || exit 0
 
 logdec "deny: recursive grep without -a"
-REASON="Recursive GNU grep without -a/--text silently skips files it deems binary (NUL/invalid bytes; plain CJK is fine) - documented CLAUDE.md footgun. Re-run with 'rg' (preferred) or add '-a' to grep."
+REASON="Recursive GNU grep without -a/--text silently skips files it deems binary (NUL/invalid bytes; plain CJK is fine) - a known footgun (the result looks complete and is not). Re-run with 'rg' (preferred) or add '-a' to grep."
 jq -n --arg r "$REASON" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
 exit 0

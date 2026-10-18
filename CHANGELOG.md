@@ -5,6 +5,19 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.18 - 2026-10-18
+
+- Reach-guard now lets edits to a development copy of the kit through. Only the kit that is actually running is protected, and a flagged path is resolved before the check (symlinks, `cd`, relative paths).
+- Reach-guard now lets `xargs docker <subcommand>` through when the given words name no remote daemon. Other `xargs` use is still flagged as unsure.
+- Reach-guard now accepts a glob command word such as `./*.sh` unless it could match a class program or wrapper name.
+- The "persist this allowlist row" command that reach-guard prints now escapes `'`, `%` and `\` in the group and target. This keeps the row written to `allow.tsv` exact. If you type that line by hand, write `%` as `%%` and `\` as `\\`.
+- `lint-doctrine` has a new check 12. It flags a `case` pattern written without its leading `(` inside `$( )`, `<( )` or `>( )`, which bash 3.2 (macOS `/bin/sh`) misparses. Run it on its own with `lint-doctrine.sh --case-parens FILE...`. The linter now also exits 2 when an input can't be read.
+- `ledger-check` has a new check, L6. It flags a "Forced by:" trigger that says "next" with no anchor (a date, a sha, a version or a typed token). `doc-lifecycle` documents the rule.
+- `review-gate-guard` now also asks before `gh pr create` and `gh pr merge`, not only `git commit` and `git push`. A codex-read spawn now counts as a review.
+- Docs and guard messages are reworded: the `grep-footgun-guard` and hygiene-commit-guard denials no longer cite a private CLAUDE.md, and the `long-run-guard` example is shortened. The `resume-inject` description is expanded, the worker check-in example now reads `def-v9`, and the `simple-rules-guard` "main" branch denial is clearer.
+- The wiring notes in `authorship-record`, `memory-content-lint`, `notify`, `plan-graduate-nudge` and `precompact-guard` now say how each is enabled, by options row and group for the plugin route and by `install-flat.sh` for the flat route.
+- The worktree-guard remedy now points at the running kit's own `worktree.sh`. The plan-wave docs describe `STOPPED (a)` as a guard or permission stop.
+
 ## v2026.10.16.2 - 2026-10-16
 
 - Added a new "Using the kit" guide (`docs/usage.md`) showing day-to-day work with the kit: why it delegates, common work shapes (long sessions, read-only sweeps, routine changes, design questions, parallel plans, guarded commands), and the rarer Boss and cross-lab Codex paths.

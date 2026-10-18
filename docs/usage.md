@@ -343,7 +343,7 @@ times. Two guards that act only inside the kit's own checkout are left out of th
 Real capture, trimmed. `grep-footgun-guard`:
 
 > Recursive GNU grep without -a/--text silently skips files it deems binary (NUL/invalid bytes; plain
-> CJK is fine) - documented CLAUDE.md footgun. Re-run with 'rg' (preferred) or add '-a' to grep.
+> CJK is fine) - a known footgun (the result looks complete and is not). Re-run with 'rg' (preferred) or add '-a' to grep.
 
 Real capture, trimmed. `long-run-guard`, on a `git commit` with no `timeout`:
 

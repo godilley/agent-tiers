@@ -5,7 +5,8 @@
 # whichever delivery this terminal actually supports, with enough content to say WHICH session
 # needs you and (on notify-send, with the configured terminal + focus command - i3 + alacritty by
 # default) a click-to-focus action on the notification.
-# Consent row - install-flat.sh --with-notify.
+# Wiring: options.tsv row, group attention: the plugin route turns it on with that group in the plugin options; the
+# flat route wires it with `install-flat.sh --with-notify`.
 #
 # Content (both delivery paths):
 #   title: "Claude Code: <basename of cwd>" - degrades to plain "Claude Code" with no cwd.

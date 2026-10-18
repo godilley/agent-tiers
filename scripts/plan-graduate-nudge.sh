@@ -3,7 +3,9 @@
 # agent-tiers PostToolUse(ExitPlanMode) nudge: graduate a just-approved plan-mode plan into the
 # project's notes dir, tied to the actual arrival event instead of a skill paragraph someone has
 # to remember to read (this project's own memory: a passive mention alone does not reliably fire -
-# rules-need-arrival-events.md). Consent row - install-flat.sh --with-plan-graduate-nudge.
+# rules-need-arrival-events.md).
+# Wiring: options.tsv row, group planning: the plugin route turns it on with that group in the plugin options; the
+# flat route wires it with `install-flat.sh --with-plan-graduate-nudge`.
 #
 # ~/.claude/plans/<random-name>.md is Claude Code's own working slot for the CURRENT plan-mode
 # plan - notes-sync.sh never touches it, and it is not necessarily safe across a second

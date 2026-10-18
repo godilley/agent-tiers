@@ -4,8 +4,10 @@
 # agent-tiers PreCompact guard: block a MANUAL /compact when this session has authored something
 # under this project (per authorship-record.sh's ledger) more recently than RESUME_SESSION.md was
 # last touched - a compact right before writing the handoff throws away exactly the state the
-# handoff exists to carry forward. Consent row - install-flat.sh --with-precompact-guard (the ledger
-# it reads is itself only recorded when authorship-record.sh is also wired).
+# handoff exists to carry forward. Wiring: options.tsv row, group planning: the plugin route turns it on with that group in the plugin options; the
+# flat route wires it with `install-flat.sh --with-precompact-guard`
+# (the ledger it reads is only recorded when authorship-record, group memory, is also on: options.tsv
+# `requires`).
 #
 # Auto-compact is NOT covered: `trigger != manual` always passes. Blocking an automatic compact
 # that recovers from a context-limit error fails the current request outright (hooks.md), which is

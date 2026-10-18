@@ -18,10 +18,15 @@
 #      terminal would wait on the TTY; the kit form skips the read there (`[ -t 0 ] || cat`).
 #  11. plugin.json userConfig and hooks/hooks.json match what gen-plugin-manifests.sh generates from
 #      install/options.tsv (drift = edited by hand or options.tsv changed without a --write).
+#  12. no unparenthesised `case` pattern (`R)` instead of `(R)`) inside a `$( )`, `<( )` or `>( )` in any
+#      shell file that runs on macOS: scripts/*.sh, scripts/lib/*.sh, .githooks/*.sh (selfchecks and this
+#      file included), extensionless scripts/ and .githooks/ files with a sh/dash/bash shebang, and
+#      .publish-check / .publish-ci. bash 3.2 (macOS /bin/sh) misparses the file. `lint-doctrine.sh --case-parens FILE...` runs only this check
+#      (exit 1 findings, 2 unreadable file).
 #   7. agents/*.md: every `def-v<M>` quoted in prose (the check-in line) equals the file's `def-version: N` -
 #      the cksum stamp catches edit-without-bump; this catches bump-without-updating-the-check-in (MASTER B6).
 #      Deliberately strict: an agent file may quote NO def-v number but its own (keep examples version-free).
-# Exit 0 = clean; exit 1 = findings. Checks 1-2 are hard (block); check 3 is a shrinking baseline during v4.1.
+# Exit 0 = clean; exit 1 = findings; exit 2 = an input could not be read. Checks 1-2 are hard (block); check 3 is a shrinking baseline during v4.1.
 #
 # Deliberately bash (arrays/pipefail); everything else in scripts/ is POSIX sh. `sh scripts/lint-doctrine.sh`
 # previously died rc 2 "Illegal option -o pipefail" - the same rc as file-not-found (cold-review F6). Re-exec
@@ -32,6 +37,141 @@ set -euo pipefail
 # the kit from THIS script's location, never from the profile config dir - under a second profile the
 # latter points at a directory with no kit in it and every invocation dies "file not found".
 KIT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# --- check 12 scanner (defined up here so `--case-parens FILE...` can run it alone; see check 12) -----
+# POSIX awk, no apostrophe inside (the program is single-quoted; the apostrophe arrives as -v q).
+# States: qs quote (0 none, 1 single, 2 double); fd = open $( ) frames; cs[] case stack with its frame
+# in cf[] (1 want-in, 2 want-pattern, 3 in-pattern, 4 body); w = current unquoted word, with a Q marker
+# appended for anything quoted/escaped/substituted so it can never equal a keyword.
+CASE_PARENS_AWK='
+function topst() { return (cn > 0 && cf[cn] == fd) ? cs[cn] : 0 }
+function push(ar) { fq[fd + 1] = qs; fw[fd + 1] = w; fa[fd + 1] = ar; fp[fd + 1] = 0; fd++; qs = 0; w = "" }
+function pop() { qs = fq[fd]; w = fw[fd] "Q"; fd--; while (cn > 0 && cf[cn] > fd) cn-- }
+function flush(   x, t) {
+  if (w == "") return
+  x = w; w = ""; t = topst()
+  if (t == 1) { if (x == "in") cs[cn] = 2 }
+  else if (t == 2) {
+    if (x == "esac") cn--
+    else {
+      if (fd > 0 && !flagged) { printf "%s:%d: %s\n", FILENAME, FNR, substr(line, 1, 90); flagged = 1 }
+      cs[cn] = 3
+    }
+  }
+  else if (t == 4 && x == "esac") cn--
+  else if ((t == 4 || t == 0) && x == "case") { cn++; cs[cn] = 1; cf[cn] = fd }
+}
+FNR == 1 { qs = 0; fd = 0; cn = 0; hd = ""; hdq = 0; hdfd = 0; inbody = 0; w = "" }
+{
+  line = $0; n = length(line); flagged = 0
+  inbody = 0
+  if (hd != "") {
+    t = line
+    if (hdd) while (substr(t, 1, 1) == "\t") t = substr(t, 2)
+    if (hdq) { if (t == hd) hd = ""; next }
+    if (fd == hdfd && t == hd) { hd = ""; next }
+    inbody = 1
+  }
+  for (i = 1; i <= n; i++) {
+    c = substr(line, i, 1)
+    prev = (i > 1) ? substr(line, i - 1, 1) : " "
+    if (inbody && fd == hdfd) {
+      w = ""
+      if (c == "\\") { i++; continue }
+      if (c == "$" && substr(line, i + 1, 1) == "(") {
+        if (substr(line, i + 2, 1) == "(") { push(1); i += 2 } else { push(0); i++ }
+      }
+      continue
+    }
+    if (qs == 1) { if (c == q) qs = 0; continue }
+    if (qs == 2) {
+      if (c == "\\") { i++; continue }
+      if (c == "\"") { qs = 0; continue }
+      if (c == "$" && substr(line, i + 1, 1) == "(") {
+        if (substr(line, i + 2, 1) == "(") { push(1); i += 2 } else { push(0); i++ }
+      }
+      continue
+    }
+    if (c == "\\") { w = w "Q"; i++; continue }
+    if (c == q) { w = w "Q"; qs = 1; continue }
+    if (c == "\"") { w = w "Q"; qs = 2; continue }
+    if (c == "#" && w == "" && (i == 1 || index(" \t;&|()", prev) > 0)) break
+    if (c == " " || c == "\t") { flush(); continue }
+    if (c == "$" && substr(line, i + 1, 1) == "(") {
+      if (substr(line, i + 2, 1) == "(") { push(1); i += 2 } else { push(0); i++ }
+      continue
+    }
+    if (c == "(") {
+      flush()
+      if (topst() == 2) cs[cn] = 3
+      else if (fd > 0) fp[fd]++
+      continue
+    }
+    if (c == ")") {
+      flush()
+      if (topst() == 3) { cs[cn] = 4; continue }
+      if (fd > 0) {
+        if (fp[fd] > 0) fp[fd]--
+        else { if (fa[fd] && substr(line, i + 1, 1) == ")") i++; pop() }
+      }
+      continue
+    }
+    if (c == ";") {
+      flush()
+      if (topst() == 4) {
+        if (substr(line, i, 3) == ";;&") { cs[cn] = 2; i += 2 }
+        else if (substr(line, i, 2) == ";;" || substr(line, i, 2) == ";&") { cs[cn] = 2; i++ }
+      }
+      continue
+    }
+    if (c == "<") {
+      flush()
+      if (substr(line, i, 3) == "<<<") { i += 2; continue }
+      if (substr(line, i + 1, 1) == "(" && !(fd > 0 && fa[fd])) { push(0); i++; continue }
+      if (substr(line, i, 2) == "<<" && !(fd > 0 && fa[fd])) {
+        j = i + 2; dd = 0; qd = 0
+        if (substr(line, j, 1) == "-") { dd = 1; j++ }
+        while (substr(line, j, 1) == " " || substr(line, j, 1) == "\t") j++
+        d = ""
+        while (j <= n) {
+          ch = substr(line, j, 1)
+          if (ch == q || ch == "\"") {
+            qd = 1; j++
+            while (j <= n && substr(line, j, 1) != ch) { d = d substr(line, j, 1); j++ }
+            j++; continue
+          }
+          if (ch == "\\") { qd = 1; j++; continue }
+          if (index(" \t;&|()<>", ch) > 0) break
+          d = d ch; j++
+        }
+        if (d != "" && hd == "") { hd = d; hdq = qd; hdd = dd; hdfd = fd }
+        i = j - 1
+      }
+      continue
+    }
+    if (c == ">" && substr(line, i + 1, 1) == "(" && !(fd > 0 && fa[fd])) { flush(); push(0); i++; continue }
+    if (c == ">" || c == "&" || c == "|") { flush(); continue }
+    w = w c
+  }
+  flush()
+}'
+CP_FAIL="FAIL case pattern without its leading ( inside a \$( ) - bash 3.2 (macOS /bin/sh) misparses this file; write (pat) instead of pat)"
+CP_OK="ok  every case pattern inside a command substitution is parenthesised (bash 3.2 parse hazard)"
+# usage: case_parens_check FILE... ; prints findings plus the FAIL/ok line; returns 1 on findings
+case_parens_check() {
+  local f cp_out="" o
+  local n=$#
+  for f in "$@"; do
+    [ -r "$f" ] || { echo "lint: cannot read $f" >&2; exit 2; }
+    o="$(awk -v q='\047' "$CASE_PARENS_AWK" "$f")" || { echo "lint: awk failed on $f" >&2; exit 2; }
+    [ -n "$o" ] && cp_out="$cp_out$o
+"
+  done
+  if [ -n "$cp_out" ]; then printf '%s' "$cp_out"; echo "$CP_FAIL"; return 1; fi
+  echo "$CP_OK ($n files)"
+}
+if [ "${1:-}" = "--case-parens" ]; then shift
+  [ $# -gt 0 ] || { echo "lint: --case-parens needs at least one FILE" >&2; exit 2; }
+  case_parens_check "$@" || exit 1; exit 0; fi
 # `--stamp` REWRITES every provenance cksum instead of checking them; it is the one-command fix for a
 # check-5 finding, so the drift is machine-repaired rather than hand-computed.
 STAMP_MODE=0
@@ -328,5 +468,41 @@ else
     printf '%s\n' "$gen_out"; rc=1
   else echo "ok  plugin manifests match install/options.tsv"; fi
 fi
+
+# --- 12. bash-3.2 parse hazard: a `case` pattern without its leading ( INSIDE a $( ) ----------------
+# bash 3.2 (macOS /bin/sh) pre-scans a `$( )` body for its closing paren and counts a bare pattern's
+# `)` (`R)`) as that close, so the script dies at run time; `bash -n` on bash 4+ accepts it. Incident:
+# a bare `R)` inside a multi-line `$( )` in a guard script made it die on macOS with "id: unbound
+# variable" and pass everything. Fixed by writing `(R)`. A top-level bare pattern is fine.
+# The scanner (CASE_PARENS_AWK above) is a character scanner with state carried across lines: quote
+# state, a frame stack for `$(` and process substitution `<(` / `>(`, comments, heredoc bodies (a quoted
+# delimiter skips the body; an unquoted body is literal text except for `$(` which opens a frame), and a
+# case stack (want-in / want-pattern / in-pattern / body). Over-flag tolerance: a false positive costs one
+# added `(`, a miss costs a guard that silently fails open on macOS. Most doubts resolve toward flagging,
+# but the desyncs listed below can hide the REST of a file, so a clean run is evidence, not proof.
+# DISCLOSED MISSES / WRONG GUESSES: backtick substitutions are not tracked at all. `$'...'` ANSI-C
+# quoting desyncs the quote state. `sh -c '...'` and `eval '...'` strings are not scanned. A `${...}`
+# holding a paren (`${x:-(}`, `${x//)/}`) is scanned as plain text and can desync the frame depth. `case`
+# or `esac` as a plain argument word (`echo case`) is read as the keyword. Script text that only runs
+# later (a quoted heredoc body, a `\$(` in an unquoted one, a fixture a selfcheck writes and then runs)
+# is not scanned. `$((` is treated as arithmetic closed by the first unmatched `)` (plus an adjacent
+# second one), so `$((cmd) ...)` (a subshell opening a substitution) desyncs; a
+# `<<` in bare `(( ))` reads as a heredoc; either hides later lines. Only one heredoc may be pending at a
+# time (a second `<<` before the first body ends is ignored). `#` after `<` or `>` is plain text.
+# One finding per line. The macOS CI leg remains the real backstop.
+set --
+for f in "$KIT_ROOT"/scripts/*.sh "$KIT_ROOT"/scripts/lib/*.sh "$KIT_ROOT"/.githooks/*.sh; do
+  [ -f "$f" ] && set -- "$@" "$f"
+done
+# extensionless scripts whose first line is a shell shebang (sh, dash, bash)
+for f in "$KIT_ROOT"/scripts/* "$KIT_ROOT"/.githooks/*; do
+  [ -f "$f" ] || continue
+  case "${f##*/}" in *.*) continue ;; esac
+  head -n 1 "$f" | grep -aqE '^#![^ ]*/(env +)?(-S +)?(sh|dash|bash)( |$)' && set -- "$@" "$f"
+done
+for f in "$KIT_ROOT"/.publish-check "$KIT_ROOT"/.publish-ci; do
+  [ -f "$f" ] && set -- "$@" "$f"
+done
+case_parens_check "$@" || rc=1
 
 exit $rc

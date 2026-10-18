@@ -21,7 +21,8 @@
 # text. Falsifiable: if the 2.1% baseline does not move, this failed and the narrow ship-block earns its
 # turn. Never blocks, never reverts a write, always exits 0.
 #
-# NOT auto-wired: consent row - `install-flat.sh --with-authorship-record`. Fail-open on every tooling gap
+# Wiring: options.tsv row, group memory: the plugin route turns it on with that group in the plugin options; the
+# flat route wires it with `install-flat.sh --with-authorship-record`. Fail-open on every tooling gap
 # (no jq, unparseable payload, unwritable state dir) with a breadcrumb in .state/guards.log. Ceilings, all
 # stated: the trust-class test is a PATH regex, so an obfuscated surface is missed (anti-accident, not
 # anti-adversary); the ledger records that an edit happened, never that a reviewer read it; and a sub-agent

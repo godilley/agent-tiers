@@ -153,6 +153,34 @@ column-0 wrapped check paragraph.
 - **PLANT-L3-COLON-BLANK title**
   DONE 2026-01-02:
 
+
+## Anchor
+
+- **PLANT-L6-BARE title**
+  Deferred: thing.
+  Forced by: the next publish.
+- **CTRL-L6-DATE title**
+  Deferred: thing.
+  Forced by: the next publish after 2026-10-16.
+- **CTRL-L6-SHA title**
+  Deferred: thing.
+  Forced by: the next edit after kit 52d21b5.
+- **CTRL-L6-VERSION title**
+  Deferred: thing.
+  Forced by: the next publish after v2026.10.16.
+- **CTRL-L6-TOKEN title**
+  Deferred: thing.
+  Forced by: the next publish [grep>=99: ^## v @ some-file.txt]
+- **CTRL-L6-WORD title**
+  Deferred: thing.
+  Forced by: a nextgen rewrite lands.
+- **CTRL-L6-DEFV title**
+  Deferred: thing.
+  Forced by: the next bump after def-v9.
+- **CTRL-L6-LEGACY title** this would force the next migration.
+- **PLANT-L6-HEXWORD title**
+  Deferred: thing.
+  Forced by: the next feedback round.
 EOF
 
 cat > "$FX/docs/_local/2026-01-01-old-outstanding-work-ledger.md" <<'EOF'
@@ -186,7 +214,7 @@ done
   || bad "more than 6 detail lines: $ctx"
 printf '%s\n' "$ctx" | grep -qE '^agent-tiers ledger: \+[0-9]+ more$' && ok "+N more line present when over cap" \
   || bad "no +N more line: $ctx"
-has "agent-tiers ledger: $L open 16, labelled 11, no trigger 6, nothing-named 1, legacy 5, closed 14" \
+has "agent-tiers ledger: $L open 25, labelled 19, no trigger 6, nothing-named 1, legacy 6, closed 14" \
   && ok "counts line correct" || bad "counts line wrong: $ctx"
 has "2026-01-01-old-outstanding-work-ledger.md" && bad "STATUS: ARCHIVE ledger was read" || ok "non-LIVE ledger ignored"
 
@@ -195,14 +223,14 @@ section() { # $1 = section heading; prints a LIVE ledger with only that section
   printf 'STATUS: LIVE\n'
   awk -v h="## $1" '$0 == h { on = 1; print; next } /^## / { on = 0 } on' "$FX/docs/_local/$L"
 }
-for sec in Typed Untyped Trigger Closed; do
+for sec in Typed Untyped Trigger Closed Anchor; do
   mkdir -p "$T/$sec/docs/_local" && cp "$FX/docs/_local/2026-01-01-plan.md" "$T/$sec/docs/_local/"
   section "$sec" > "$T/$sec/docs/_local/$L"
   cp "$FX/present-file.txt" "$FX/some-file.txt" "$T/$sec/"
   rm -rf "$T/$sec/.git"; cp -r "$FX/.git" "$T/$sec/.git"
 done
 sctx() { printf '%s' "$PAYLOAD" | run "$T/$1" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null; }
-ty="$(sctx Typed)"; un="$(sctx Untyped)"; tr="$(sctx Trigger)"; cl="$(sctx Closed)"
+ty="$(sctx Typed)"; un="$(sctx Untyped)"; tr="$(sctx Trigger)"; cl="$(sctx Closed)"; an="$(sctx Anchor)"
 in_() { printf '%s\n' "$1" | grep -qF -- "$2"; }
 
 # Mutation: drop the session branch of the token loop -> L1 session missing.
@@ -288,6 +316,15 @@ in_ "$cl" "$HEADSHA" && bad "L4 reported the real HEAD sha: $cl" || ok "L4 HEAD 
 # Mutation: require an exact-length match instead of a prefix (grep -q "^$sha") -> an abbreviated
 # 7-char real sha is reported as missing even though it is a real ancestor.
 in_ "$cl" "$GOODSHA7" && bad "L4 reported an abbreviated real sha as missing: $cl" || ok "L4 abbreviated real sha silent"
+# Mutation: drop the L6 branch in emit_trigger -> a bare "next" trigger goes unflagged.
+in_ "$an" "L6 $L:4: unanchored 'next' trigger: PLANT-L6-BARE" && ok "L6 flags a bare next trigger" || bad "L6 bare: $an"
+# Controls: a date, a sha, a version or a typed token anchors it; "nextgen" is not the word next.
+for c in DATE SHA VERSION TOKEN WORD DEFV LEGACY; do
+  in_ "$an" "CTRL-L6-$c" && bad "L6 fired on anchored CTRL-L6-$c: $an" || ok "L6 silent on CTRL-L6-$c"
+done
+# Mutation: drop the trailing boundary on the sha pattern -> "feedback" reads as a sha, L6 goes silent.
+in_ "$an" "PLANT-L6-HEXWORD" && ok "L6 does not take a hex-letter word for a sha" || bad "L6 hexword: $an"
+
 # Mutation: compare against DONE rows instead of non-DONE rows -> F5 missing.
 finding "$cl" F5 'DONE S2 (abc): check' && ok "F5 DONE line naming a not-DONE row fires" || bad "F5: $cl"
 # Mutation: compare against non-DONE rows the wrong way round (DONE rows instead) -> F5 fires on

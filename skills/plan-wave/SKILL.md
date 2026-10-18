@@ -110,7 +110,8 @@ an ignored notes dir needs none.
 
 ## On a final return, by its outcome line
 - `STOPPED (fork)`: as above.
-- `STOPPED (a)` (an unsettled decision): settle it, then resume with the answer; not an attempt.
+- `STOPPED (a)` (a guard or permission stop, quoted verbatim): settle it (the human's call or a different
+  route), then resume with the answer; not an attempt.
 - `STOPPED (b)` (a check it could not fix): repair once by resume with the failing check quoted, or
   re-shape; a further try is the third attempt, so stop and ask the human first.
 - No outcome line at all: it stopped early. Read its last report, then resume it once.

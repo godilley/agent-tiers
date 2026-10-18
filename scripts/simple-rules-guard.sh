@@ -168,7 +168,7 @@ rule_c() { # $1 = segments, $2 = payload cwd -> stdout: deny reason, empty if no
   fi
 
   if grep -av '^[[:space:]]*#' "$NSFILE" 2>/dev/null | grep -av '^[[:space:]]*$' | grep -Fxq "$owner"; then
-    printf "agent-tiers: creating a branch named main in %s is denied - this is one of the operator's own repos and the default branch here is master, not main. Use master, or pick a different name for this new branch.\n" "$resolved"
+    printf "agent-tiers: creating a branch named main in %s is denied - this repo's owner is in the own-namespaces list, whose repos use master, not main. Use master, or pick a different name for this new branch.\n" "$resolved"
   fi
 }
 

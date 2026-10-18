@@ -22,7 +22,8 @@
 # the colon plus following lines, up to a blank line, EOF, column-0 "- ", "#", or a DONE/label line, or
 # "no check after DONE" when there is no colon at all) is empty - flagged and closed; L4 sha not found
 # in `git rev-list HEAD` (prefix match, shas may be abbreviated 7+ chars); F5 DONE line names a plan row
-# not DONE; L5 ledger over 1500 lines or 150000 bytes. At most 6 detail lines, then one counts line per
+# not DONE; L5 ledger over 1500 lines or 150000 bytes; L6 untyped trigger saying "next" with no anchor
+# (date, 7+ hex sha, version like v2026.10.16, or a typed token), unreadable once that next has passed. At most 6 detail lines, then one counts line per
 # ledger.
 #
 # Disclosed ceilings: prose triggers are counted, never judged; legacy entries are listed only when
@@ -126,6 +127,14 @@ function emit_trigger(   line, untyped, tok, cp, kind, val, p, q, re, path, i) {
     }
   }
   if (plan != "") for (i = 1; i <= ndone; i++) if (hasword(untyped, doneid[i])) { print "F\tL1b\t" eline "\t" title; break }
+  # L6: "next X" on a Forced by: line with nothing to measure it from. A typed token, a date, a 7+ hex
+  # sha (a whole token, so "feedback" is no sha) or a version (v2026.10.16, def-v9) is an anchor; the
+  # bare word only (nextgen does not count). Legacy and loose-match triggers stay unjudged.
+  if (untyped == trig && trig ~ /^[ \t]*Forced by:/ && tolower(untyped) ~ /(^|[^a-z])next([^a-z]|$)/ &&
+      untyped !~ /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
+      untyped !~ /(^|[^0-9A-Za-z])[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*([^0-9A-Za-z]|$)/ &&
+      untyped !~ /(^|[^A-Za-z])v[0-9]/)
+    print "F\tL6\t" eline "\tunanchored '\''next'\'' trigger: " title
 }
 function flush() {
   if (!inent) return

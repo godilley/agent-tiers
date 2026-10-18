@@ -1359,7 +1359,8 @@ for pv in 1 ''; do
   penv "$pv" "$(pe "$T/rg2/lnk/settings.json" '"env":{}' '"env":{"AGENT_TIERS_OFF":"1"}')"
   if [ "$D" = deny ]; then pass "rg2-env: symlinked settings edit still denied with internals set to '$pv'"; else bad "rg2-env: symlinked settings edit with internals '$pv'" "got $D"; fi
 done
-# Bash: writes onto a protected script name (basename only, any cwd)
+# Bash: writes onto a protected script name given as a relative path with no payload cwd (unplaceable,
+# so denied by name; the running-kit and dev-copy forms are in the RGP1 block below)
 tD_prot "rg2-b1: cp onto scripts/kit-gate.sh denied" "cp /tmp/x scripts/kit-gate.sh"
 R_has "rg2-b1: ...reason names the scripts" "reach-guard's own scripts, kit-gate.sh, the install options file"
 tD_prot "rg2-b2: redirect onto scripts/reach-guard.sh denied" "printf 'exit 0' > scripts/reach-guard.sh"
@@ -1446,6 +1447,137 @@ tN "rg2-ssh2: Ssh vps rm x denied" "Ssh vps 'rm x'"
 tP "rg2-ssh3: bash -c echo Docker is up passes" 'bash -c "echo Docker is up"'
 tP "rg2-ssh4: sh -c echo SSH keys are fine passes" "sh -c 'echo SSH keys are fine'"
 tU "rg2-ssh5: bash -c with lowercase ssh stays unsure" "bash -c 'ssh vps uptime'"
+# RGP1: Bash protection anchored at the running kit
+GK="$KIT"; DV="$T/rgp1/dev"
+mkdir -p "$DV/scripts" "$DV/install" "$DV/data" "$DV/.state/off" "$DV/.claude"
+ln -s "$KIT/scripts" "$T/rgp1/lnk"
+pbc() { jq -n -c --arg c "$1" --arg d "$2" '{session_id:"s1",tool_name:"Bash",tool_input:{command:$c},cwd:$d}'; }
+tc() { # tc <label> <want> <cwd> <cmd>: one assertion on a Bash payload carrying a cwd
+  run "$(pbc "$4" "$3")"
+  if [ "$D" = "$2" ]; then pass "$1"; else bad "$1" "got $D, want $2 for: [$3] $(short "$4") $(short "$R")"; fi
+}
+# a dev copy (same names, another directory) passes
+tc "rgp1-p1: sed -i on a dev copy reach-guard.sh, absolute, passes" pass "$T" "sed -i s/a/b/ $DV/scripts/reach-guard.sh"
+tc "rgp1-p2: sed -i on scripts/reach-guard.sh with cwd = the dev copy passes" pass "$DV" "sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-p3: cd <dev> && sed -i scripts/reach-guard.sh passes (cwd the running kit)" pass "$KIT" "cd $DV && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-p4: cp onto data/reach-classes.tsv in the dev copy passes" pass "$DV" "cp /tmp/x data/reach-classes.tsv"
+tc "rgp1-p5: rm of a reach-guard*.sh glob in the dev copy passes" pass "$T" "rm $DV/scripts/reach-guard*.sh"
+tc "rgp1-p6: rm of the dev copy .state/off/reach-guard passes" pass "$T" "rm $DV/.state/off/reach-guard"
+tc "rgp1-p7: redirect onto the dev copy install/options.tsv passes" pass "$T" "printf x > $DV/install/options.tsv"
+tc "rgp1-p8: cp reach-guard.sh into the dev copy scripts/ passes" pass "$T" "cp /tmp/reach-guard.sh $DV/scripts/"
+tc "rgp1-p9: cd into the dev copy .state/off, then touch, passes" pass "$T" "cd $DV/.state/off && touch foo"
+tc "rgp1-p10: cp the running reach-guard.sh into a backup dir passes" pass "$T" "cp $KIT/scripts/reach-guard.sh /tmp/bk/"
+tc "rgp1-p11: tee onto the dev copy kit-gate.sh passes" pass "$T" "printf x | tee $DV/scripts/kit-gate.sh"
+# the running kit denies, however the path is spelled
+tc "rgp1-d1: sed -i on the running kit reach-guard.sh, absolute, denied" deny "$T" "sed -i s/a/b/ $KIT/scripts/reach-guard.sh"
+tc "rgp1-d2: relative with cwd = the running kit denied" deny "$KIT" "sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-d3: relative with cwd = the running kit scripts dir denied" deny "$KIT/scripts" "sed -i s/a/b/ reach-guard.sh"
+tc "rgp1-d4: cd \$KIT && sed -i scripts/reach-guard.sh denied" deny "$DV" "cd $KIT && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-d5: cd \$KIT/scripts; sed -i reach-guard.sh denied" deny "$DV" "cd $KIT/scripts; sed -i s/a/b/ reach-guard.sh"
+tc "rgp1-d6: through a symlinked dir into the kit scripts denied" deny "$T" "sed -i s/a/b/ $T/rgp1/lnk/reach-guard.sh"
+tc "rgp1-d7: cd into a symlinked dir, then a relative write, denied" deny "$DV" "cd $T/rgp1/lnk && sed -i s/a/b/ reach-guard.sh"
+tc "rgp1-d8: a \$VAR directory denied" deny "$DV" 'sed -i s/a/b/ $VAR/scripts/kit-gate.sh'
+t "rgp1-d9: relative with no payload cwd denied" deny "sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-d10: cd - then a relative write denied" deny "$DV" "cd - && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-d11: popd then a relative write denied" deny "$DV" "popd; sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-d12: a non-literal cd then a relative write denied" deny "$DV" 'cd "$X" && sed -i s/a/b/ scripts/reach-guard.sh'
+tc "rgp1-d13: rm of a reach-guard*.sh glob in the running kit denied" deny "$T" "rm $KIT/scripts/reach-guard*.sh"
+tc "rgp1-d14: the same glob relative to cwd = the running kit denied" deny "$KIT" "rm scripts/reach-guard*.sh"
+tc "rgp1-d15: timeout 5 sed -i onto the kit kit-gate.sh denied" deny "$T" "timeout 5 sed -i x $KIT/scripts/kit-gate.sh"
+tc "rgp1-d16: env -u X cp onto the kit options.tsv denied" deny "$T" "env -u X cp /tmp/x $KIT/install/options.tsv"
+tc "rgp1-d17: nice rm of the kit kit-gate.sh denied" deny "$T" "nice rm $KIT/scripts/kit-gate.sh"
+tc "rgp1-d18: find -exec cp onto the kit kit-gate.sh denied" deny "$T" "find /tmp -name x -exec cp {} $KIT/scripts/kit-gate.sh \\;"
+tc "rgp1-d19: xargs rm of the kit kit-gate.sh denied" deny "$T" "xargs rm $KIT/scripts/kit-gate.sh"
+tc "rgp1-d20: rm in the user reach-guard dir denied" deny "$T" "rm $CFG/reach-guard/allow.tsv"
+tc "rgp1-d21: touch the state dir kill switch denied" deny "$T" "touch $ST/off/reach-guard"
+tc "rgp1-d22: touch the kit kill switch denied" deny "$T" "touch $KIT/.state/off/reach-guard"
+tc "rgp1-d23: a failed cd leaves the old cwd (;) denied" deny "$KIT" "cd /nonexistent; sed -i x scripts/reach-guard.sh"
+tc "rgp1-d24: a subshell cd does not move the cwd denied" deny "$KIT" "(cd $DV && true); sed -i x scripts/reach-guard.sh"
+tc "rgp1-d25: git -C into the kit denied" deny "$DV" "git -C $KIT mv x scripts/reach-guard.sh"
+tc "rgp1-d26: env -C into the kit scripts denied" deny "$DV" "env -C $KIT/scripts sed -i x reach-guard.sh"
+tc "rgp1-d27: a symlink made earlier in the command denied" deny "$DV" "ln -s $KIT/scripts s && sed -i x s/reach-guard.sh"
+tc "rgp1-d28: cd to the config dir, then a write into reach-guard/, denied" deny "$T" "cd $CFG && echo x > reach-guard/allow.tsv"
+tc "rgp1-d29: cd into the kit .state/off, then touch, denied" deny "$T" "cd $KIT/.state/off && touch foo"
+tc "rgp1-d30: a path climbing out of the user dir onto its parent denied" deny "$T" "rm -rf $CFG/reach-guard/.."
+tc "rgp1-d31: SCRIPTS/Kit-Gate.SH (case) in the running kit denied" deny "$T" "printf x > $KIT/SCRIPTS/Kit-Gate.SH"
+tc "rgp1-d32: builtin cd into the kit, then a relative write, denied" deny "$DV" "builtin cd $KIT && sed -i x scripts/reach-guard.sh"
+tc "rgp1-d33: cp reach-guard.sh into the kit scripts/ denied" deny "$T" "cp /tmp/reach-guard.sh $KIT/scripts/"
+tc "rgp1-d34: a reach-gu* glob in the config dir denied" deny "$T" "rm -rf $CFG/reach-gu*"
+# the ~ form, with a fixture kit under the sandbox HOME
+buildkit "$HOME/kitp"; mkdir -p "$HOME/devp/scripts"; GK="$HOME/kitp"
+tc "rgp1-t1: ~/kitp/scripts/kit-gate.sh (the running kit) denied" deny "$T" "sed -i s/a/b/ ~/kitp/scripts/kit-gate.sh"
+tc "rgp1-t2: ~/devp/scripts/kit-gate.sh (a dev copy) passes" pass "$T" "sed -i s/a/b/ ~/devp/scripts/kit-gate.sh"
+tc "rgp1-t3: ~user form denied" deny "$T" "sed -i s/a/b/ ~nobody/scripts/kit-gate.sh"
+GK="$KIT"; rm -rf "$HOME/kitp" "$HOME/devp"
+# settings stand-down word rule: jq, echo, printf and git commit/tag/notes write no file
+tc "rgp1-s1: jq of enabledPlugins and pluginConfigs passes" pass "$T" "jq '{enabledPlugins, pluginConfigs}' $CFG/settings.json"
+tc "rgp1-s2: the same piped into head passes" pass "$T" "jq '{enabledPlugins, pluginConfigs}' $CFG/settings.json | head"
+tc "rgp1-s3: jq piped into a python writer denied" deny "$T" "jq '.pluginConfigs' s/settings.json | python3 -c 'import sys; open(\"s/settings.json\",\"w\").write(sys.stdin.read())'"
+tc "rgp1-s4: jq with a write redirect denied" deny "$T" "jq '.pluginConfigs' $CFG/settings.json > /tmp/o"
+tc "rgp1-s5: jq piped into tee denied" deny "$T" "jq '.pluginConfigs' $CFG/settings.json | tee /tmp/o"
+tc "rgp1-s6: jq inside a group piped into python denied" deny "$T" "{ jq '.pluginConfigs' s/settings.json; } | python3 -c x"
+tc "rgp1-s7: jq inside a substitution denied" deny "$T" 'x=$(jq .enabled settings.json)'
+tc "rgp1-s8: sponge onto a settings.json denied" deny "$T" "jq . x | sponge $CFG/settings.json"
+tc "rgp1-s9: sponge onto a dev copy settings.json denied" deny "$T" "jq . x | sponge $DV/.claude/settings.json"
+tc "rgp1-s10: sponge onto the kit kit-gate.sh denied" deny "$T" "jq . x | sponge $KIT/scripts/kit-gate.sh"
+tc "rgp1-s11: sponge onto a dev copy kit-gate.sh passes" pass "$T" "jq . x | sponge $DV/scripts/kit-gate.sh"
+tc "rgp1-s12: echo settings enabled passes" pass "$T" "echo settings enabled"
+tc "rgp1-s13: printf settings enabled passes" pass "$T" "printf '%s\\n' settings enabled"
+tc "rgp1-s14: echo settings enabled > file denied" deny "$T" "echo settings enabled > /tmp/o"
+tc "rgp1-s15: echo settings enabled | sh denied" deny "$T" "echo settings enabled | sh"
+tc "rgp1-s16: printf -v settings enabled denied" deny "$T" "printf -v x settings enabled"
+tc "rgp1-s17: git commit -m with the words passes" pass "$T" "git commit -m 'settings enabled flag'"
+tc "rgp1-s18: git tag -m with the words passes" pass "$T" "git tag -a v1 -m 'settings enabled'"
+tc "rgp1-s19: git notes add -m with the words passes" pass "$T" "git notes add -m 'settings enabled'"
+tc "rgp1-s20: git commit -m piped into sh denied" deny "$T" "git commit -m 'settings enabled' | sh"
+tc "rgp1-s21: git with a global option before commit denied" deny "$T" "git -c x=y commit -m 'settings enabled'"
+tc "rgp1-s22: an interpreter with the words denied" deny "$T" "python3 x.py settings enabled"
+tc "rgp1-s23: echo inside an if piped into sh denied" deny "$T" "if true; then echo settings enabled; fi | sh"
+tc "rgp1-s24: cp onto a dev copy settings.json denied (any location)" deny "$T" "cp /tmp/x $DV/.claude/settings.json"
+# anywhere inside the running kit or the state dir, find/xargs words, ~ after =, CDPATH, cap
+tc "rgp1-k1: cp kit-gate.sh into the kit install/ denied" deny "$T" "cp /tmp/evil/kit-gate.sh $KIT/install/"
+tc "rgp1-k2: the same into data/, relative to cwd = the running kit, denied" deny "$KIT" "cp /tmp/evil/kit-gate.sh data/"
+tc "rgp1-k3: cp kit-gate.sh into the kit .STATE/OFF/ (case) denied" deny "$T" "cp /tmp/evil/kit-gate.sh $KIT/.STATE/OFF/"
+tc "rgp1-k4: cp kit-gate.sh into the state dir off/ denied" deny "$T" "cp /tmp/evil/kit-gate.sh $ST/off/"
+tc "rgp1-k5: cp kit-gate.sh into the dev copy install/ passes" pass "$T" "cp /tmp/evil/kit-gate.sh $DV/install/"
+tc "rgp1-f1: find -name reach-guard -exec rm in the kit denied" deny "$T" "find $KIT/.state/off -name reach-guard -exec rm {} \\;"
+tc "rgp1-f2: find -path *off/reach-guard -delete denied" deny "$T" "find $KIT -path '*off/reach-guard' -delete"
+tc "rgp1-f3: a flagged word that is no write operand (touch) denied" deny "$T" "touch $DV/.state/off/reach-guard"
+tc "rgp1-e1: dd of=~/... (a ~ after =, unplaceable) denied" deny "$T" "dd if=/tmp/x of=~/x/install/options.tsv"
+tc "rgp1-e2: dd of= onto the dev copy reach-classes.tsv passes" pass "$T" "dd if=/tmp/x of=$DV/data/reach-classes.tsv"
+tc "rgp1-c1: CDPATH=... cd <bare name> then a relative write denied" deny "$DV" "CDPATH=$T cd kit && cp /tmp/x scripts/kit-gate.sh"
+tc "rgp1-c2: export CDPATH; cd <bare name> then a relative write denied" deny "$DV" "export CDPATH=$T; cd kit && cp /tmp/x scripts/kit-gate.sh"
+tc "rgp1-c3: CDPATH named, even with cd ./<dir> into the dev copy, denied" deny "$T" "CDPATH=/x cd ./rgp1/dev && cp /tmp/x scripts/kit-gate.sh"
+# review round: only a leading plain cd run moves the cwd; any other cd-like word makes every relative word unplaceable
+tc "rgp1-y1: (cd <dev> && true) && relative write, cwd the kit, denied" deny "$KIT" "(cd $DV && true) && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y2: test || cd <dev> && relative write denied" deny "$KIT" "test -f scripts/reach-guard.sh || cd $DV && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y3: ! cd /nonexistent && relative write denied" deny "$KIT" "! cd /nonexistent && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y4: a function body before cd \$KIT && f denied" deny "$DV" "f() { sed -i s/a/b/ scripts/reach-guard.sh; }; cd $KIT && f"
+tc "rgp1-y5: a loop with cd \$KIT after the write denied" deny "$DV" "for i in 1 2; do sed -i s/a/b/ scripts/reach-guard.sh; cd $KIT; done"
+tc "rgp1-y6: a loop with ln -sfn into the kit after the write denied" deny "$DV" "for i in 1 2; do sed -i s/a/b/ s/reach-guard.sh; ln -sfn $KIT/scripts s; done"
+tc "rgp1-y7: CDPATH=... cd reach-guard && rm allow.tsv denied (taint unknown)" deny "$DV" "CDPATH=$CFG cd reach-guard && rm allow.tsv"
+tc "rgp1-y8: chdir \$KIT && relative write denied" deny "$DV" "chdir $KIT && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y9: a quoted newline holding a fake cd, cwd the kit, denied" deny "$KIT" "echo \"note${NL}cd $DV\" && sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y10: env -iC (clustered -C) into the kit scripts denied" deny "$DV" "env -iC $KIT/scripts cp /tmp/x kit-gate.sh"
+tc "rgp1-y11: zsh cdpath=(...) then cd reach-guard denied" deny "$DV" "cdpath=($CFG); cd reach-guard && rm allow.tsv"
+tc "rgp1-y12: twelve ; cds past 32 possible directories denied" deny "$DV" "cd a; cd b; cd c; cd d; cd e; cd f; cd g; cd h; cd i; cd j; cd k; cd l; sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y13: a cd inside a substitution, cwd the kit, denied" deny "$KIT" "x=\$(cd $DV); sed -i s/a/b/ scripts/reach-guard.sh"
+tc "rgp1-y14: cwd = dev, cd scripts && relative write passes" pass "$DV" "cd scripts && sed -i s/a/b/ reach-guard.sh"
+tc "rgp1-y15: cd <dev>/scripts; relative write, cwd elsewhere, passes" pass "$T" "cd $DV/scripts; sed -i s/a/b/ reach-guard.sh"
+tc "rgp1-y16: git checkout anywhere makes no word placeable, denied" deny "$T" "git checkout x && sed -i s/a/b/ $DV/scripts/reach-guard.sh"
+tc "rgp1-y17: patch after the write still counts, denied" deny "$T" "sed -i s/a/b/ $DV/scripts/reach-guard.sh; patch -p1 < x.diff"
+tc "rgp1-y18: a glob as a redirect destination denied" deny "$T" "printf x > $DV/scripts/reach-gu*.sh"
+tc "rgp1-y19: a glob as a tee destination denied" deny "$T" "printf x | tee $DV/scripts/reach-gu*.sh"
+tc "rgp1-y20: run0 -D into the kit scripts denied" deny "$DV" "run0 -D $KIT/scripts cp /tmp/x kit-gate.sh"
+tc "rgp1-y21: env --chd= (a --chdir prefix) into the kit scripts denied" deny "$DV" "env --chd=$KIT/scripts cp /tmp/x kit-gate.sh"
+mkdir -p "$T/rgp1/nox/sub"; chmod 000 "$T/rgp1/nox"
+tc "rgp1-y22: a path whose directory cannot be entered (no resolved form) denied" deny "$T" "sed -i s/a/b/ $T/rgp1/nox/sub/reach-guard.sh"
+chmod 755 "$T/rgp1/nox"
+CAPC="rm"; n=0; while [ "$n" -lt 33 ]; do CAPC="$CAPC $DV/scripts/reach-guard-$n.sh"; n=$((n + 1)); done
+tc "rgp1-cap1: 33 placed dev-copy paths in one command denied (cap 32)" deny "$T" "$CAPC"
+CAPC="rm"; n=0; while [ "$n" -lt 32 ]; do CAPC="$CAPC $DV/scripts/reach-guard-$n.sh"; n=$((n + 1)); done
+tc "rgp1-cap2: 32 placed dev-copy paths pass" pass "$T" "$CAPC"
+rm -rf "$T/rgp1"
 # coarse fallback (no parser library): protected script names too
 buildkit "$T/rg2co"; rm -f "$T/rg2co/scripts/guard-cmdpos.sh"; GK="$T/rg2co"
 tD_prot "rg2-co1: fallback: cp onto kit-gate.sh denied" "cp /tmp/x scripts/kit-gate.sh"
@@ -1454,6 +1586,85 @@ tD_prot "rg2-co3: fallback: redirect onto Options.TSV denied" "printf x > instal
 tP "rg2-co4: fallback: ls scripts passes" "ls scripts"
 GK="$KIT"
 rm -rf "$T/rg2" "$T/rg2co"
+
+# RGP1: classifier false positives and POLICY quoting
+uclear
+# xargs is walked only into docker with no remote daemon and a literal first positional other than context
+tP "rgp1-x0: docker rm abc passes (the direct form)" "docker rm abc"
+tP "rgp1-x1: docker ps -q | xargs docker rm passes" "docker ps -q | xargs docker rm"
+tP "rgp1-x2: docker ps -q | xargs docker rm -f passes" "docker ps -q | xargs docker rm -f"
+tP "rgp1-x3: xargs -r docker rm passes" "docker ps -q | xargs -r docker rm"
+tP "rgp1-x4: xargs -n 1 docker rm passes" "docker ps -q | xargs -n 1 docker rm"
+tP "rgp1-x5: sub-agent: docker rm abc passes" "docker rm abc" worker a1
+tP "rgp1-x6: sub-agent: xargs docker rm passes, as the direct form" "docker ps -q | xargs docker rm" worker a1
+tN "rgp1-x7: xargs docker (no subcommand) denied" "printf x | xargs docker"
+L "rgp1-x7: ...as unsure" "level=unsure why=stdin-wrapper"
+tN "rgp1-x8: xargs ssh denied" "printf x | xargs ssh"
+tN "rgp1-x9: xargs ssh host denied" "printf x | xargs ssh host"
+tN "rgp1-x10: xargs -I{} docker -H {} ps denied" "printf x | xargs -I{} docker -H {} ps"
+tN "rgp1-x11: xargs -i ssh {} uptime denied" "printf x | xargs -i ssh {} uptime"
+tN "rgp1-x12: xargs kubectl denied" "printf x | xargs kubectl"
+tN "rgp1-x13: xargs sh -c 'ssh h' denied" "printf x | xargs sh -c 'ssh h'"
+tN "rgp1-x14: xargs -a list ssh denied" "xargs -a list ssh"
+tN "rgp1-x15: xargs gh api denied" "printf x | xargs gh api"
+tN "rgp1-x16: xargs docker context denied" "printf x | xargs docker context"
+tN "rgp1-x17: xargs -l ssh docker rm denied (-l takes no separate value)" "printf x | xargs -l ssh docker rm"
+tN "rgp1-x18: xargs -e ./x docker rm denied" "printf x | xargs -e ./x docker rm"
+tN "rgp1-x19: xargs -0I{} docker {} ps denied (combined replace flag)" "printf x | xargs -0I{} docker {} ps"
+tN "rgp1-x20: xargs --replace docker -H {} ps denied" "printf x | xargs --replace docker -H {} ps"
+tN "rgp1-x21: xargs docker -H tcp://x rm denied" "printf x | xargs docker -H tcp://x rm"
+L "rgp1-x21: ...as unsure, not act" "level=unsure why=stdin-wrapper"
+tN "rgp1-x22: xargs DOCKER -H x ps denied" "printf x | xargs DOCKER -H x ps"
+tN "rgp1-x23: xargs sudo docker rm denied" "printf x | xargs sudo docker rm"
+tN "rgp1-x24: xargs docker \$(echo context) use denied" 'printf x | xargs docker $(echo context) use'
+tN "rgp1-x25: sub-agent: xargs ssh host denied" "printf x | xargs ssh host" worker a1
+tN "rgp1-x26: sub-agent: xargs docker -H x rm denied" "printf x | xargs docker -H x rm" worker a1
+# the xargs option parser is strict: exact names, known letters only
+tP "rgp1-x27: xargs -0 docker rm passes" "docker ps -q | xargs -0 docker rm"
+tP "rgp1-x28: xargs --null docker rm passes" "docker ps -q | xargs --null docker rm"
+tP "rgp1-x29: xargs -n1 -P 4 --max-args=2 docker rm passes" "docker ps -q | xargs -n1 -P 4 --max-args=2 docker rm"
+tN "rgp1-x30: xargs -rE docker ssh vps rm denied (-E takes docker)" "printf x | xargs -rE docker ssh vps rm -rf /srv"
+tN "rgp1-x31: xargs -0E docker ssh vps rm denied" "printf x | xargs -0E docker ssh vps rm x"
+tN "rgp1-x32: xargs --process-slot-var docker ssh denied (unknown long option)" "printf x | xargs --process-slot-var docker ssh vps rm x"
+tN "rgp1-x33: xargs --r=XX docker XX rm denied (long prefix)" "printf x | xargs --r=XX docker XX rm abc"
+tN "rgp1-x34: xargs --repl docker {} rm denied" "printf x | xargs --repl docker {} rm abc"
+tN "rgp1-x35: xargs --replace=XX docker XX rm denied" "printf x | xargs --replace=XX docker XX rm abc"
+tN "rgp1-x36: xargs docker --tlscert rm denied (unknown option before the subcommand)" "printf x | xargs docker --tlscert rm"
+tN "rgp1-x37: /usr/bin/ks? denied (can name a shell)" "printf x | /usr/bin/ks?"
+tN "rgp1-x38: ./jq settings enabled denied (a path, not the bare jq)" "./jq settings enabled"
+tP "rgp1-x39: jq settings enabled passes (the bare jq)" "jq settings enabled"
+# glob command word: a plain script path unless it could name a class program or wrapper
+tP "rgp1-g1: ./*.sh passes" "./*.sh"
+tP "rgp1-g2: scripts/*.sh passes" "scripts/*.sh"
+tP "rgp1-g3: ./run-*.sh passes" "./run-*.sh"
+tP "rgp1-g4: sub-agent: ./*.sh passes" "./*.sh" worker a1
+tN "rgp1-g5: ./*.sh ssh h denied (class word beside it)" "./*.sh ssh h"
+tN "rgp1-g6: ./* denied" "./*"
+L "rgp1-g6: ...as unsure opaque-command" "level=unsure why=opaque-command"
+tN "rgp1-g7: /usr/bin/ss? denied" "/usr/bin/ss?"
+tN "rgp1-g8: /usr/bin/s[s]h h denied" "/usr/bin/s[s]h h"
+tN "rgp1-g9: /usr/bin/[S]sh h denied (case-insensitive)" "/usr/bin/[S]sh h"
+tN "rgp1-g10: ./*/ssh denied" "./*/ssh"
+tN "rgp1-g11: \$(echo ssh) h denied" '$(echo ssh) h'
+tN "rgp1-g12: ./[!x]sh denied (negated class)" "./[!x]sh"
+tN "rgp1-g13: /usr/bin/ba* denied (can name a wrapper)" "/usr/bin/ba*"
+# policy(): group and target escaped for the single-quoted printf format; the printed line, run, writes them back
+PF="$T/rgp1-policy.sh"; PD="$T/rgp1-pol"; TB1="$(printf '\t')"
+sed -n '/^policy() {$/,/^}$/p' "$SCRIPTS/reach-guard.sh" > "$PF"
+if [ "$(grep -c . "$PF")" -gt 5 ]; then pass "rgp1-q0: policy() extracted"; else bad "rgp1-q0: policy() extracted" "$(cat "$PF")"; fi
+PT="a'b%c\\d"
+rgp1pol() { # rgp1pol <group> <target>: run the printed POLICY line inside the sandbox
+  PL="$(UREF=0 UDIR="$PD/reach-guard" CLAUDE_CONFIG_DIR="$PD" "$SHBIN" -c '. "$1"; policy "$2" "$3" read' x "$PF" "$1" "$2")"
+  CLAUDE_CONFIG_DIR="$PD" sh -c "${PL#*: ! }"
+}
+rgp1pol remote_shell "$PT"
+GOT="$(sed -n 1p "$PD/reach-guard/allow.tsv" 2>/dev/null)"
+if [ "$GOT" = "remote_shell${TB1}$PT${TB1}read" ]; then pass "rgp1-q1: a target holding ' % and \\ is written back exactly"; else bad "rgp1-q1: target row" "got: $GOT"; fi
+rgp1pol "g'r%s\\q" "$PT"
+GOT="$(sed -n 2p "$PD/reach-guard/allow.tsv" 2>/dev/null)"
+if [ "$GOT" = "g'r%s\\q${TB1}$PT${TB1}read" ]; then pass "rgp1-q2: a group holding ' % and \\ is written back exactly"; else bad "rgp1-q2: group row" "got: $GOT"; fi
+rm -rf "$PD" "$PF"
+uclear
 
 printf 'reach-guard selfcheck: %s passed, %s failed\n' "$P" "$F"
 [ "$F" -eq 0 ] || exit 1

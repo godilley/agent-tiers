@@ -45,7 +45,8 @@
 # consumers pass the resolver different project dirs, so a narrower disagreement survives where the host
 # does not export `CLAUDE_PROJECT_DIR` - see that library's header for the exact residue.
 #
-# NOT auto-wired: consent row - `install-flat.sh --with-memory-content-lint`, which writes the machine's
+# Wiring: options.tsv row, group memory: the plugin route turns it on with that group in the plugin options; the
+# flat route wires it with `install-flat.sh --with-memory-content-lint`, which writes the machine's
 # user-level settings.json (so "installed" here means machine-wide, not scoped to one project - see
 # `cards/MEMORY.md` for the exact wording this replaced). Kill switch checked first:
 # .state/off/memory-content-lint. Fail-open on every tooling gap (no jq, unreadable file, missing library,
