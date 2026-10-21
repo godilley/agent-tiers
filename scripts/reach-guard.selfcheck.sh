@@ -1401,8 +1401,8 @@ tP "rg2-p6: grep -n rm options.tsv passes" "grep -n rm install/options.tsv"
 tP "rg2-p7: git log -p reach-guard.sh passes" "git log -p scripts/reach-guard.sh"
 tP "rg2-p8: git diff kit-gate.sh passes" "git diff scripts/kit-gate.sh"
 tP "rg2-p9: cat kit-gate.sh > /tmp/kg.sh passes" "cat scripts/kit-gate.sh > /tmp/kg.sh"
-tP "rg2-p10: cp onto a project hooks/hooks.json passes (no Bash rule)" "cp /tmp/x /tmp/proj/hooks/hooks.json"
-tP "rg2-p11: cp onto guard-cmdpos.sh passes (no Bash rule)" "cp /tmp/x /tmp/proj/guard-cmdpos.sh"
+tP "rg2-p10: cp onto a project hooks/hooks.json passes (outside the running kit)" "cp /tmp/x /tmp/proj/hooks/hooks.json"
+tP "rg2-p11: cp onto a project guard-cmdpos.sh passes (outside the running kit)" "cp /tmp/x /tmp/proj/guard-cmdpos.sh"
 tP "rg2-p12: cd scripts && ls passes" "cd scripts && ls"
 tP "rg2-p13: cd . > /tmp/out passes" "cd . > /tmp/out"
 tP "rg2-p14: less of allow.tsv passes" "less $CFG/reach-guard/allow.tsv"
@@ -1665,6 +1665,267 @@ GOT="$(sed -n 2p "$PD/reach-guard/allow.tsv" 2>/dev/null)"
 if [ "$GOT" = "g'r%s\\q${TB1}$PT${TB1}read" ]; then pass "rgp1-q2: a group holding ' % and \\ is written back exactly"; else bad "rgp1-q2: group row" "got: $GOT"; fi
 rm -rf "$PD" "$PF"
 uclear
+
+# =======================================================================================================
+# RGP2-P: heredoc delimiter words
+GK="$KIT"; uclear
+# The delimiter is the whole shell word after quote removal. Bypass shape per form: opener, the shell's
+# real closer, a real command, then a line equal to the first chunk only (where the old regex ended the
+# body, hiding the real command from every route).
+SQP="'"; TABP="$(printf '\t')"
+rgpp() { # rgpp <label> <opener word> <shell closer line>
+  tN "rgp2-p: $1: real command after the closer of <<$2 denied" "cat <<$2${NL}$3${NL}ssh vps \"rm x\"${NL}E"
+}
+rgpp p1 'E"F"' EF
+rgpp p2 '"E"F' EF
+rgpp p3 'E\F' EF
+rgpp p4 '\EOF' EOF
+rgpp p5 "${SQP}E${SQP}\"F\"G" EFG
+rgpp p6 '-"E"F' "${TABP}EF"
+# a partly quoted delimiter makes the body literal text; an unquoted one runs its substitutions (hd_rule)
+tP "rgp2-p7: <<E\"F\" body holding \$(ssh vps ls) passes (quoted delimiter, body is text)" "cat <<E\"F\"${NL}\$(ssh vps ls)${NL}EF"
+tN "rgp2-p8: <<EF body holding \$(ssh vps ls) denied" "cat <<EF${NL}\$(ssh vps ls)${NL}EF"
+L "rgp2-p8: ...as unsure heredoc-subst" "level=unsure why=heredoc-subst"
+# library missing: the AWK text gets the hd_word stub and still compiles, so the coarse route denies
+buildkit "$T/rgpp"; rm -f "$T/rgpp/scripts/guard-cmdpos.sh"; GK="$T/rgpp"
+tU "rgp2-p9: library missing, coarse route denies ssh vps \"rm x\"" 'ssh vps "rm x"'
+GK="$KIT"; rm -rf "$T/rgpp"
+# RGP2-P end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-C: class words in another case on fallback routes, control bytes, the segment cap, $NAME command
+# words, heredoc delimiter words
+GK="$KIT"
+# tE <label> <want> <cmd> <env assignment or ->: like t, with one variable set (or RGPROG removed for "-") in the guard environment
+tE() {
+  if [ "$4" = "-" ]; then e="-u RGPROG"; else e="$4"; fi
+  [ "$KEEP" = 1 ] || : > "$LOG"
+  OUT="$(pb "$3" | env $e PATH="${RPATH:-$PATH}" "$SHBIN" "$GK/scripts/reach-guard.sh" 2>/dev/null)"
+  D="$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+  if [ -z "$OUT" ]; then D=pass; elif [ -z "$D" ]; then D=garbage; fi
+  if [ "$D" = "$2" ]; then pass "$1"; else bad "$1" "got $D, want $2 for: $(short "$3")"; fi
+}
+uclear
+tD "rgp2c-1: env -i SSH is denied" 'env -i SSH vps "rm x"'
+tD "rgp2c-2: nice -5 SSH is denied" 'nice -5 SSH vps "rm x"'
+tD "rgp2c-3: sudo -E SSH is denied" 'sudo -E SSH vps "rm x"'
+# the launcher operand is matched in lowercase only (rm -rf Docker, du -sh AWS must pass): a disclosed ceiling
+tP "rgp2c-4: unknown launcher with a caps class operand passes (lowercase-only rule)" 'foo SSH vps ls'
+PAD="$(head -c 20001 /dev/zero | tr '\0' a)"
+tN "rgp2c-5: length-cap route denies SSH at command position" "echo $PAD; SSH vps \"rm x\""
+tP "rgp2c-5b: length-cap route passes prose" "echo $PAD; echo SSH"
+B1D="$(printf '\035')"; B1A="$(printf '\032')"
+tN "rgp2c-6: 0x1D byte plus SSH is denied" "echo x${B1D}y; SSH vps \"rm x\""
+tN "rgp2c-7: 0x1A inside quotes then ssh is denied" "echo \"x${B1A}y\"; ssh vps \"rm x\""
+tP "rgp2c-7b: 0x1A with no class word passes" "echo \"x${B1A}y\"; echo hi"
+tN "rgp2c-8: long command, early 0x1A, ssh after it is denied" "echo ${B1A}; echo $PAD; ssh vps \"rm x\""
+SEG="$(awk 'BEGIN { for (i = 0; i < 6000; i++) printf "a;" }')"
+tN "rgp2c-9: 6000 segments then ssh is denied (segment cap)" "${SEG}ssh vps \"rm x\""
+SEG="$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "true;" }')"
+tP "rgp2c-9b: 300 segments with no class word pass" "${SEG}true"
+tN "rgp2c-10: depth-4 substitution holding SSH is denied" 'echo $(echo $(echo $(echo $(SSH vps rm))))'
+tE "rgp2c-11: \$RGPROG with RGPROG=ssh in the environment is denied" deny '$RGPROG vps uptime' RGPROG=ssh
+tE "rgp2c-11b: \${RGPROG} with RGPROG=SSH is denied" deny '${RGPROG} vps uptime' RGPROG=SSH
+tE "rgp2c-12: \$RGPROG unset passes" pass '$RGPROG vps uptime' -
+tE "rgp2c-13: \$RGPROG=echo passes" pass '$RGPROG vps uptime' RGPROG=echo
+tP "rgp2c-14: prose SSH in a commit message passes" 'git commit -m "Fix SSH key handling"'
+tP "rgp2c-15: echo SSH passes" 'echo SSH'
+tE "rgp2c-16: \$CMD with CMD=ssh exported is denied" deny '$CMD vps uptime' CMD=ssh
+tE "rgp2c-17: \$CMD with CMD=echo passes" pass '$CMD vps uptime' CMD=echo
+# RGP2-C end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-X: Bash protection of the parser library and hooks wiring; interpreter inline code
+GK="$KIT"
+DV="$T/rgp1/dev"
+mkdir -p "$KIT/hooks" "$DV/hooks" "$DV/scripts" "$T/proj/hooks"
+printf '{}\n' > "$KIT/hooks/hooks.json"; printf '{}\n' > "$DV/hooks/hooks.json"
+cp "$KIT/scripts/guard-cmdpos.sh" "$DV/scripts/guard-cmdpos.sh"
+# the three shapes that passed before
+tc "rgp2x-m1: cd \$KIT && sed -i scripts/guard-cmdpos.sh denied" deny "$DV" "cd $KIT && sed -i s/a/b/ scripts/guard-cmdpos.sh"
+tc "rgp2x-m2: python3 -c writing the kit kit-gate.sh by absolute path denied" deny "$T" "python3 -c \"open('$KIT/scripts/kit-gate.sh','w').write('')\""
+tc "rgp2x-m3: rm of the kit hooks/hooks.json denied" deny "$T" "rm $KIT/hooks/hooks.json"
+# each new name: the running kit denies, the dev copy passes
+for f in scripts/guard-cmdpos.sh hooks/hooks.json; do
+  for w in "sed -i s/a/b/ @" "rm @" "cp /tmp/x @" "printf x > @" "printf x | tee @"; do
+    ck="$(printf '%s' "$w" | sed "s|@|$KIT/$f|")"; cd2="$(printf '%s' "$w" | sed "s|@|$DV/$f|")"
+    tc "rgp2x-n: $w on the kit $f denied" deny "$T" "$ck"
+    tc "rgp2x-n: $w on the dev copy $f passes" pass "$T" "$cd2"
+  done
+done
+tc "rgp2x-p1: jq into an unrelated project hooks/hooks.json passes" pass "$T" "jq . x > $T/proj/hooks/hooks.json"
+tc "rgp2x-p2: cd <dev> && sed -i scripts/guard-cmdpos.sh passes" pass "$KIT" "cd $DV && sed -i x scripts/guard-cmdpos.sh"
+# interpreter inline code
+tc "rgp2x-i1: python3 -c writing the dev copy kit-gate.sh by absolute path passes" pass "$T" "python3 -c \"open('$DV/scripts/kit-gate.sh','w').write('')\""
+tc "rgp2x-i2: python3 -c writing scripts/kit-gate.sh with cwd = the kit denied" deny "$KIT" "python3 -c \"open('scripts/kit-gate.sh','w').write('')\""
+tc "rgp2x-i3: python3 -c writing scripts/kit-gate.sh with cwd = the dev copy passes" pass "$DV" "python3 -c \"open('scripts/kit-gate.sh','w').write('')\""
+tc "rgp2x-i4: python3 -c with os.chdir into the kit, then a relative write, denied" deny "$T" "python3 -c \"import os; os.chdir('$KIT'); open('scripts/kit-gate.sh','w')\""
+tc "rgp2x-i5: a \$HOME-built path inside the code denied by name" deny "$T" 'python3 -c "open('"'"'$HOME/devp/scripts/kit-gate.sh'"'"','"'"'w'"'"')"'
+tc "rgp2x-i6: python3 heredoc writing the kit hooks.json denied" deny "$T" "python3 - <<'EOF'${NL}open('$KIT/hooks/hooks.json','w').write('')${NL}EOF"
+tc "rgp2x-i7: python3 heredoc writing the dev copy hooks.json passes" pass "$T" "python3 - <<'EOF'${NL}open('$DV/hooks/hooks.json','w').write('')${NL}EOF"
+tc "rgp2x-i8: perl -pi -e on the kit guard-cmdpos.sh denied" deny "$T" "perl -pi -e s/a/b/ $KIT/scripts/guard-cmdpos.sh"
+tc "rgp2x-i9: perl -pi -e on the dev copy guard-cmdpos.sh passes" pass "$T" "perl -pi -e s/a/b/ $DV/scripts/guard-cmdpos.sh"
+tc "rgp2x-i10: node -e writeFileSync onto the kit hooks.json denied" deny "$T" "node -e \"require('fs').writeFileSync('$KIT/hooks/hooks.json','')\""
+tc "rgp2x-i11: bash -c rm of the kit hooks.json denied" deny "$T" "bash -c \"rm $KIT/hooks/hooks.json\""
+# floor: running a script, an input redirect, code naming nothing, git add on the dev copy
+tc "rgp2x-f1: sh <kit>/scripts/kit-gate.sh passes" pass "$T" "sh $KIT/scripts/kit-gate.sh"
+tc "rgp2x-f2: python3 -m json.tool < the kit hooks.json passes" pass "$T" "python3 -m json.tool < $KIT/hooks/hooks.json"
+tc "rgp2x-f3: python3 -c print(1) passes" pass "$T" 'python3 -c "print(1)"'
+tc "rgp2x-f4: git add scripts/guard-cmdpos.sh with cwd = the dev copy passes" pass "$DV" "git add scripts/guard-cmdpos.sh"
+# the ~ form, with a fixture kit under the sandbox HOME
+buildkit "$HOME/kitp"; mkdir -p "$HOME/devp/scripts"; GK="$HOME/kitp"
+tc "rgp2x-t1: python3 -c on ~/kitp/scripts/kit-gate.sh (the running kit) denied" deny "$T" "python3 -c \"import os; open(os.path.expanduser('~/kitp/scripts/kit-gate.sh'),'w')\""
+tc "rgp2x-t2: python3 -c on ~/devp/scripts/kit-gate.sh (a dev copy) passes" pass "$T" "python3 -c \"import os; open(os.path.expanduser('~/devp/scripts/kit-gate.sh'),'w')\""
+GK="$KIT"; rm -rf "$HOME/kitp" "$HOME/devp" "$KIT/hooks"
+# RGP2-X end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-J: a newline inside quotes stays inside its segment
+GK="$KIT"
+# a multi-line quoted argument that mentions a class program passes (each fails on the per-line rule)
+tP "rgp2j-p1: multi-line commit message saying ssh passes" "git commit -m \"fix: ssh x y${NL}second line\""
+tP "rgp2j-p2: the same with escaped quotes inside passes" "git commit -m \"fix: ssh \\\"x\\\" y${NL}second \\\"line\\\"\""
+tP "rgp2j-p3: single-quoted multi-line message saying ssh passes" "git commit -m 'a${NL}ssh vps rm x'"
+tP "rgp2j-p4: a message holding gh and docker passes" "git commit -m \"gh pr notes${NL}docker build is slow${NL}done\""
+tP "rgp2j-p5: an escaped quote keeps the string open over the ssh line, passes" "echo \"a\\\"${NL}ssh vps rm x${NL}\""
+# bypass probes: what the shell runs as a command must still be seen
+tN "rgp2j-d1: ssh with a multi-line quoted remote command denied" "ssh vps \"rm x${NL}y\""
+tN "rgp2j-d2: a joined string, then a real ssh line, denied" "echo \"a${NL}b\"${NL}ssh vps \"rm x\""
+tN "rgp2j-d3: \$'..' with an escaped quote (refused), then ssh, denied" "echo \$'it\\'s'${NL}ssh vps \"rm x\"${NL}echo '"
+tN "rgp2j-d4: an apostrophe in a comment, then ssh, denied" "ls # it's${NL}ssh vps \"rm x\"${NL}# '"
+tN "rgp2j-d5: a quote inside \${..} (refused), then ssh, denied" "x=\"\${y:-'}\"${NL}ssh vps \"rm x\"${NL}'"
+tN "rgp2j-d6: an escaped quote outside quotes, then ssh, denied" "echo \\'${NL}ssh vps \"rm x\"${NL}'"
+tN "rgp2j-d7: an escaped backslash ends the string, then ssh, denied" "echo \"a\\\\\"${NL}ssh vps \"rm x\"${NL}\""
+tN "rgp2j-d8: a joined string, then ; ssh, denied" "echo 'a${NL}b'; ssh vps \"rm x\""
+tN "rgp2j-d9: a quoted newline in a \$( ) body, then a real ssh line, denied" "echo \$(printf \"a${NL}b\")${NL}ssh vps \"rm x\""
+tc "rgp2j-d10: cd <dev> && multi-line commit && relative write, cwd the running kit, denied" deny "$KIT" "cd $DV && git commit -m \"a${NL}b\" && sed -i x scripts/reach-guard.sh"
+# further probes
+tN "rgp2j-d11: bash -c with a multi-line string holding ssh denied" "bash -c \"echo a${NL}ssh vps rm x\""
+tN "rgp2j-d12: a comment quote over a joined line with ; ssh denied" "ls # it\"s${NL}echo \"a${NL}b\"; ssh vps \"rm x\""
+tN "rgp2j-d13: backslash-newline keeps word start, comment apostrophe, then ssh, denied" "a \\${NL}# it's${NL}ssh vps \"rm x\"${NL}'"
+tN "rgp2j-d14: a dq line continuation closes the string, then ssh, denied" "echo \"a\\${NL}\"${NL}ssh vps \"rm x\""
+tN "rgp2j-d15: a backslash in single quotes is literal, then ssh, denied" "echo 'a\\'${NL}ssh vps \"rm x\"${NL}'"
+tN "rgp2j-d16: an apostrophe inside double quotes, joined, then ssh, denied" "echo \"it's${NL}b\"${NL}ssh vps \"rm x\""
+tN "rgp2j-d17: a backtick (refused), then ssh, denied" "echo \"\`a${NL}b\"${NL}ssh vps \"rm x\""
+tN "rgp2j-d18: a comment ending in a backslash, then ssh, denied" "ls # a\\${NL}ssh vps \"rm x\""
+tN "rgp2j-d19: a comment with an apostrophe, then ssh, denied" "ls # it's fine${NL}ssh vps \"rm x\""
+tN "rgp2j-d20: a # after ( inside \${ }, then ; ssh, denied" 'echo ${x:-(#)}; ssh vps "rm x"'
+tN "rgp2j-d21: a # after a blank inside \${ }, then ; ssh, denied" 'echo ${x:- #}; ssh vps "rm x"'
+# RGP2-J end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-R: review rework (capcw redirects, capped bodies, coarse interpreter code, shell -o)
+GK="$KIT"
+RPAD="$(head -c 20001 /dev/zero | tr '\0' a)"
+RGS="$(printf '\035')"
+# (a) capcw skips a leading redirect and its target word
+tN "rgp2r-a1: a redirect whose target is the 20,001-character pad, then SSH, denied" "> $RPAD SSH vps \"rm x\""
+tN "rgp2r-a2: > f SSH padded past 20,000 denied" "> f SSH vps \"rm x\" # $RPAD"
+tN "rgp2r-a3: an attached redirect target (>f), then SSH, padded, denied" ">f SSH vps \"rm x\" # $RPAD"
+tN "rgp2r-a4: 2> f SSH padded denied" "2> f SSH vps \"rm x\" # $RPAD"
+tP "rgp2r-a5: a padded echo SSH still passes" "echo SSH # $RPAD"
+# (b) F2: a body nested deeper than 3 gets the blind protection scan
+tN "rgp2r-b1: depth-4 rm of the running kit-gate.sh denied" "x=\$(a \$(b \$(c \$(rm $KIT/scripts/kit-gate.sh))))"
+# accepted: a capped body is judged by name, so a dev copy path there is denied too
+tN "rgp2r-b2: depth-4 rm of a dev copy kit-gate.sh denied by name (accepted)" "x=\$(a \$(b \$(c \$(rm $T/devr/scripts/kit-gate.sh))))"
+tP "rgp2r-b3: depth-4 echo hi passes" "x=\$(a \$(b \$(c \$(echo hi))))"
+# (b) F3: a coarse route with interpreter code naming a protected file
+tN "rgp2r-b4: a 0x1D byte plus python3 -c opening kit-gate.sh denied" "printf x$RGS; python3 -c \"open('$KIT/scripts/kit-gate.sh','w')\""
+tN "rgp2r-b5: padded bash -c naming hooks.json denied" "bash -c \"cat $KIT/hooks/hooks.json\" # $RPAD"
+tP "rgp2r-b6: a padded python3 -c print(1) passes" "python3 -c \"print(1)\" # $RPAD"
+# (c) shell -o values before -c
+tN "rgp2r-c1: bash -o pipefail -c rm hooks.json denied" "bash -o pipefail -c \"rm $KIT/hooks/hooks.json\""
+tN "rgp2r-c2: bash -euo pipefail -c rm hooks.json denied" "bash -euo pipefail -c \"rm $KIT/hooks/hooks.json\""
+tN "rgp2r-c3: zsh -eo pipefail -c rm hooks.json denied" "zsh -eo pipefail -c \"rm $KIT/hooks/hooks.json\""
+tN "rgp2r-c4: sh +o noglob -c rm hooks.json denied" "sh +o noglob -c \"rm $KIT/hooks/hooks.json\""
+tN "rgp2r-c5: dash --norc -o pipefail -c rm hooks.json denied" "dash --norc -o pipefail -c \"rm $KIT/hooks/hooks.json\""
+tP "rgp2r-c6: bash -o pipefail -c echo hi passes" "bash -o pipefail -c \"echo hi\""
+tP "rgp2r-c7: bash -o pipefail -c rm of a dev copy passes" "bash -o pipefail -c \"rm $T/devr/hooks/hooks.json\""
+# (d) an inherited value holding a newline and NAME=... makes no phantom envcw entry
+RGPX="a${NL}PHANTOMX=ssh"; export RGPX; unset PHANTOMX
+tP "rgp2r-d1: \$PHANTOMX (not inherited, only text inside another value) passes" "\$PHANTOMX x"
+REALX=ssh; export REALX
+tN "rgp2r-d2: \$REALX inherited as ssh still denied" "\$REALX x"
+unset RGPX REALX
+# RGP2-R end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-S: second review rework
+GK="$KIT"
+for rk in "$KIT" "$T/devs"; do
+  if [ "$rk" = "$KIT" ]; then rt=tN; rl="running kit, denied"; else rt=tP; rl="dev copy, passes"; fi
+  $rt "rgp2s-1: python3 -c with the path as an argv operand ($rl)" "python3 -c 'import os,sys; os.unlink(sys.argv[1])' $rk/hooks/hooks.json"
+  $rt "rgp2s-2: node -pe writing hooks.json ($rl)" "node -pe \"require('fs').writeFileSync('$rk/hooks/hooks.json','')\""
+  $rt "rgp2s-3: node --eval=CODE unlinking hooks.json ($rl)" "node --eval=\"require('fs').unlinkSync('$rk/hooks/hooks.json')\""
+  $rt "rgp2s-4: perl -eCODE unlinking kit-gate.sh ($rl)" "perl -e'unlink \"$rk/scripts/kit-gate.sh\"'"
+  $rt "rgp2s-5: perl -leCODE unlinking kit-gate.sh ($rl)" "perl -le'unlink \"$rk/scripts/kit-gate.sh\"'"
+  $rt "rgp2s-6: python3 -c fed by a heredoc substitution ($rl)" "python3 -c \"\$(cat <<'EOF'${NL}open('$rk/scripts/kit-gate.sh','w')${NL}EOF${NL})\""
+  $rt "rgp2s-7: code piped into python3 on stdin ($rl)" "printf \"open('$rk/scripts/kit-gate.sh','w')\" | python3"
+done
+tP "rgp2s-8: cd Docker passes (cd is noexec)" "cd Docker"
+tP "rgp2s-9: mkdir AWS passes (mkdir is noexec)" "mkdir AWS"
+tP "rgp2s-10: python3 -c print(1) with argv operands passes" "python3 -c \"print(1)\" a b"
+tN "rgp2s-11: env -u node python3 -c unlinking hooks.json denied (every interpreter word is tried)" "env -u node python3 -c \"import os; os.unlink('$KIT/hooks/hooks.json')\""
+tN "rgp2s-12: env -u sh bash -c rm hooks.json denied" "env -u sh bash -c \"rm $KIT/hooks/hooks.json\""
+tN "rgp2s-13: bash -O extglob -c rm hooks.json denied (-O takes a value)" "bash -O extglob -c \"rm $KIT/hooks/hooks.json\""
+tP "rgp2s-14: python3 --version && cat hooks.json passes (an option means no stdin code)" "python3 --version && cat $KIT/hooks/hooks.json"
+tP "rgp2s-15: which python3 passes" "which python3"
+tN "rgp2s-16: python3 - with a heredoc opening kit-gate.sh denied" "python3 - <<'EOF'${NL}open('$KIT/scripts/kit-gate.sh','w')${NL}EOF"
+# timing shape: 190 units of echo with 43 words then node; the raw command is scanned at most once
+RSU="echo"; i=0; while [ $i -lt 43 ]; do RSU="$RSU a"; i=$((i + 1)); done; RSU="$RSU node;"
+RSB=""; i=0; while [ $i -lt 190 ]; do RSB="$RSB$RSU"; i=$((i + 1)); done
+tP "rgp2s-17: 190 x echo a.. node; (18,240 characters) passes" "$RSB"
+# RGP2-S end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-T: third review rework
+GK="$KIT"
+RTC="$(awk 'BEGIN { printf "git commit -m \"subject"; for (i = 1; i <= 250; i++) printf "\nline %d ssh vps docker gh", i; printf "\"" }')"
+tP "rgp2t-1: a 250-line git commit -m message naming ssh passes (one segment, under the cap)" "$RTC"
+RTG="$(awk 'BEGIN { printf "gh pr create --title t --body \"$(cat <<\047EOF\047"; for (i = 1; i <= 120; i++) printf "\nline %d `ssh vps` and `gh api x`", i; printf "\nEOF\n)\"" }')"
+tP "rgp2t-2: gh pr create with a heredoc body of 120 lines of backtick spans passes" "$RTG"
+RTA="$(awk 'BEGIN { for (i = 0; i < 6000; i++) printf "a;"; printf "ssh vps \"rm x\"" }')"
+tN "rgp2t-3: 6000 x a; then ssh vps rm x denied (segment cap)" "$RTA"
+RTP="$(head -c 20010 /dev/zero | tr '\0' x)"
+tN "rgp2t-4: 2>&1 SSH vps rm x padded past 20,000 denied (capcw drops the redirect &)" "2>&1 SSH vps \"rm x\" # $RTP"
+tP "rgp2t-5: du -sh AWS passes (launcher operand is lowercase only)" "du -sh AWS"
+tP "rgp2t-6: rm -rf Docker passes" "rm -rf Docker"
+RTH="$(awk 'BEGIN { printf "x \"$(echo \")\" "; for (i = 0; i < 3000; i++) printf ";a"; printf ";ssh vps \"rm x\" \")\" )\"" }')"
+tN "rgp2t-7: 3000 separators hidden from the estimate in a double-quoted body denied (loop counter)" "$RTH"
+unset RTC RTG RTA RTP RTH
+# RGP2-T end
+# =======================================================================================================
+
+# =======================================================================================================
+# RGP2-U: blind_scan cost and small gaps
+GK="$KIT"
+RUQ="$(awk 'BEGIN { printf "ssh vps \"rm x\"; cat"; for (i = 0; i < 10000; i++) printf " sh x" }')"
+tN "rgp2u-1: 10000 x sh x on the coarse route denied (blind_scan is linear)" "$RUQ"
+# 2b: a no-value flag keeps the stdin rule on; any other option still turns it off
+tN "rgp2u-2: code piped into python3 -u denied" "printf \"open('$KIT/scripts/kit-gate.sh','w')\" | python3 -u"
+tN "rgp2u-3: code piped into node --no-warnings denied" "printf \"require('fs').writeFileSync('$KIT/scripts/kit-gate.sh','')\" | node --no-warnings"
+tN "rgp2u-4: code piped into perl -w denied" "printf \"open(F,'>$KIT/scripts/kit-gate.sh')\" | perl -w"
+tN "rgp2u-5: code piped into python3 still denied" "printf \"open('$KIT/scripts/kit-gate.sh','w')\" | python3"
+tN "rgp2u-6: python3 heredoc writing hooks.json still denied" "python3 <<'EOF'${NL}open('$KIT/hooks/hooks.json','w')${NL}EOF"
+tP "rgp2u-7: printf piped into python3 -u x.py passes (a script operand)" "printf hi | python3 -u x.py"
+# 2a, disclosed: an interpreter name as an operand counts as a stdin interpreter (accepted false deny)
+tN "rgp2u-8: cat hooks.json | tee /tmp/python3 denied (accepted)" "cat $KIT/hooks/hooks.json | tee /tmp/python3"
+# 2c: envcw reads the value as a command (capcw), not for a class word anywhere in it
+RUASK=/usr/lib/ssh/ssh-askpass; RUDK=/usr/bin/docker; export RUASK RUDK
+tP "rgp2u-9: \$RUASK (a path holding /ssh/) passes" "\$RUASK foo"
+tN "rgp2u-10: \$RUDK (a docker path) still denied" "\$RUDK ps"
+RUB="$(awk 'BEGIN { while (i++ < 40000) printf "a" }')"; RUB1="$RUB"; RUB2="$RUB"; RUB3="$RUB"; RUB4="$RUB"; export RUB1 RUB2 RUB3 RUB4
+tN "rgp2u-11: with an inherited environment over 100000 bytes ssh vps rm x still denied (no fail open)" "ssh vps \"rm x\""
+tP "rgp2u-12: with that environment \$RUDK ps passes (env snapshot dropped, accepted)" "\$RUDK ps"
+unset RUQ RUASK RUDK RUB RUB1 RUB2 RUB3 RUB4
+# RGP2-U end
+# =======================================================================================================
 
 printf 'reach-guard selfcheck: %s passed, %s failed\n' "$P" "$F"
 [ "$F" -eq 0 ] || exit 1

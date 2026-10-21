@@ -35,10 +35,15 @@ description: >-
 - **Never** delegate synthesis/understanding - plan from agents' findings yourself.
 - **Always verify** output (re-run tests for code; spot-check files) - a summary ≠ truth.
 - **Self-contained prompts** - agents start blind: include paths, build/test commands, conventions.
+  A sub-agent does not carry `RESUME_SESSION.md` (probed 2026-10-21: absent from both a custom-type
+  `worker` and a built-in `Explore`; the worker had the CLAUDE.md stack and the memory indexes, the
+  Explore had neither), so session state the job needs goes in the brief.
   Sub-agents rarely invoke the `Skill` tool directly (measured via a session-transcript scan:
   11/153 `Skill` calls logged came from a non-main agent, small relative to 216 total
   subagent-transcript rows), so a Bash-less tier's brief has to carry skill content inline rather
   than relying on it to self-invoke.
+- **A numeric bar says what a near miss means.** A brief handing over "under 200 s build X, else Y" also
+  states how a near miss is judged: read literally, a 15 s miss once chose an option 4.5x worse.
 - Agents return a resumable `agentId` → iterate by resuming it, not re-briefing from scratch (where the
   harness supports it; some harnesses don't expose `SendMessage` - then spawn a fresh minimal agent).
 - **Authorization: see Spawn Contract step 3** (the `agent-tiers` skill) - three orthogonal permissions

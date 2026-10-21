@@ -5,6 +5,18 @@ release notes](https://github.com/godilley/agent-tiers/releases)); the Bundle en
 them are the pre-public review-bundle era. The wave-by-wave development history behind each
 entry is kept privately by the maintainer.
 
+## v2026.10.21 - 2026-10-21
+
+- Docs overhaul: README and docs pages rebuilt with a shared layout (tab bar, summary tables, section headings). New Glossary, Levels, Work shapes and Plan waves pages. `after-install.md`, `private-notes.md` and `uninstall.md` are merged into Install and Extending.
+- New docs tooling: `docs-lint.sh` checks links and markdown traps, and `docs-nav.sh` generates the tab bar. `docs-lint.sh` now runs in CI.
+- New `contention-guard` (shell_footguns): denies archive or decompile loops over globs and recursive searches rooted at `/` or home. It fires once per target per session. Commands run under `nice` or `ionice` pass.
+- New `handback-tag-guard` (attention): sends a reply back once when it hands you a `!` command without an `operator:run|kind:policy|oneoff` tag. The chat badge now shows "YOU RUN" for each tag kind, and notifications wait while the guard is about to block.
+- New `oos-disposition-guard` (delegation): sends a turn back while a sub-agent's numbered `OOS-<n>` items have no disposition line. `inbox` dispositions are appended once to `.state/oos-inbox.log`. All agent definitions (including `sublead`) and templates now end returns with an `Out-of-slice finds` section, and doctrine adds SC-6.5.
+- `codex-guard`: a pipe or `;` inside a quoted string is no longer read as a command separator. Command words inside `$(...)` and backticks still deny.
+- `reach-guard`: protects `guard-cmdpos.sh` and `hooks.json` from Bash writes, reads inline interpreter code (python, node, perl and others) for protected file names, and catches uppercase class names (`SSH`) and variable command words that expand to a class program. It also handles multi-line quoted arguments and caps parsing at 200 segments.
+- Shared shell parsing fixes: heredoc delimiters are read as the whole shell word, comments are handled in command splitting, and a stray 0x1A byte no longer breaks quote stripping.
+- Doctrine and delegation: new "Re-tier, same job" rule and scope-matrix row, and an "Answered fork" rule (a settled decision is not re-asked). Fork spawns are costed at the Lead's model. Delegation notes add that sub-agents never carry `RESUME_SESSION.md`.
+
 ## v2026.10.18 - 2026-10-18
 
 - Reach-guard now lets edits to a development copy of the kit through. Only the kit that is actually running is protected, and a flagged path is resolved before the check (symlinks, `cd`, relative paths).

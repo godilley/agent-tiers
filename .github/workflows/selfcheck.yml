@@ -64,6 +64,8 @@ jobs:
           git config --global init.defaultBranch master
       - name: lint-doctrine
         run: bash scripts/lint-doctrine.sh
+      - name: docs-lint
+        run: bash scripts/docs-lint.sh
       - name: selfchecks
         run: |
           # A SKIP line counts as fail too (opus reviewer 2026-08-24, MEDIUM: the local share preflight
@@ -125,6 +127,8 @@ jobs:
           git config --global init.defaultBranch master
       - name: lint-doctrine
         run: bash scripts/lint-doctrine.sh
+      - name: docs-lint
+        run: bash scripts/docs-lint.sh
       - name: selfchecks
         run: |
           # scoring (incl. SKIP counts as fail) lives in scripts/selfcheck-all.sh, shared by both jobs

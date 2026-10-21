@@ -11,7 +11,7 @@ description: >-
 ---
 
 # Agent tiers v4 - Lead / Sublead / Worker / Advisor / Reviewer / Boss
-*doctrine-v32 c=4027606369-45092 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
+*doctrine-v35 c=602859537-47918 - bump on every normative edit (see MAINT-2); quote it when a review or return leans on these rules.*
 
 **v4 doctrine: the Lead routes and decides; intelligence is metered.** The Lead converses, routes,
 writes tight briefs, verifies returns, and gates; work it need not hold itself is bought per call from
@@ -97,8 +97,14 @@ deviation - state it and get approval first, `see ROUTE-3`):
 | Lead one independent slice of a larger task over its own children (GATED, `[sublead-approved:<why>]` tag) | Sublead | opus | high |
 | Clever CODE, session pref = codex (per-host, authed) | `codex-write` (isolated worktree) | codex tier (XLAB-11) | low-high |
 | Clever CODE otherwise / no codex this host | Worker with `model: opus` | opus | medium-high |
+| Re-run of a job whose return missed what its brief stated (SC-6.3 Re-tier) | same type with `model: opus` | opus | medium-high |
 | Stuck circuit-breaker (gated) | Boss | different from the Lead (opus; fable if opus implicated) | xhigh |
 | Exceptional hardest-reasoning call (gated, explicit) | Advisor/Boss with `model: fable` | fable | xhigh |
+
+A `subagent_type: fork` spawn is no row of this table: it runs the Lead's own model (a `model:` override is
+ignored, per the host's own Agent tool description) on the Lead's inherited context, billed mostly as cache
+reads (observed in two projects), so cost it as the Lead's model on that context, never as a cheap fresh
+spawn on a short brief; its spend rung follows from that (SC-3.1).
 
 `SC-2.2` **Band:** an **interface-band** Lead routes reasoning DOWN to the Advisor; a **reasoning-band** Lead reaches
 OUT for independence (see Lead capability-band). A trust-class VERDICT is owned only by a **reasoning-band
@@ -112,7 +118,8 @@ Cost is not the only gate. Check each that applies:
   STOP and load the XLAB card before authorizing it. **The built-in `Explore` agent inherits the Lead's
   model** (measured over two reviewed session corpora, 2026-08-10 and 2026-08-15: every observed case):
   a 2+ Explore fan-out under an opus Lead IS a rung-3 opus fan-out - pass `model: sonnet` (the scope
-  matrix's own row for it) or gate it. A `sublead` spawn is rung 3 too (an opus coordinator plus its
+  matrix's own row for it) or gate it. A fork cannot be moved off the Lead's model at all: 2+ forks under
+  an opus Lead are rung 3, and any fork under a fable Lead is gated. A `sublead` spawn is rung 3 too (an opus coordinator plus its
   own children), and so is a `transcript-miner` (a project-defined coordinator of the same shape; the
   kit does not ship one); task-spawn-guard Rule D gates both alike: the Lead is asked unless
   the prompt carries the `[sublead-approved:]` tag, a subagent caller is denied, and neither may spawn
@@ -301,10 +308,21 @@ carve-out is a disclosed residual overlap (the external example and the kit read
   (Count it: after a failed repair this restart IS the 3rd execution attempt - Stop + ask fires FIRST.)
 - **Re-shape to Advisor** - output reveals a reasoning task mislabeled mechanical (also the backstop for
   shape-misclassification) -> re-route as an Advisor ask, not another Worker attempt.
+- **Re-tier, same job** - the return misses or garbles what the brief STATED (a stated rule implemented
+  wrong, a check reported green that is not) -> the same brief to a fresh spawn with `model: opus` (the
+  scope matrix's Re-tier row; one opus call, announce-only, SC-3.1; a worker prompt carries
+  `[opus-worker:re-tier <the stated rule it missed>]` or task-spawn-guard denies it), counted like a
+  restart. Already on opus -> this is a Restart; a fork ignores `model:`, so re-tier it as a non-fork
+  type. The defects are ones the brief never covered -> the brief
+  was wrong and opus would repeat it: Restart on a corrected brief, or Re-shape (an Advisor ask, or a
+  different review mode).
 - **Partial return** - a worker stopped under its definition's Stopping rule: (a) an unsettled decision ->
   settle it and brief the remainder, not counted as an attempt; (b) a check it could not fix -> Repair or
   Re-shape on that check, counted; a run the harness cut off -> re-dispatch the remainder narrower, not
   counted; a stop citing anything else (size, effort, time) is a failed return -> Restart narrower, counted.
+- **Answered fork** - a decision already made (a question-box answer, a FORK answer) is written into the plan
+  and carried in every later brief as settled. A later sub-agent does not re-ask it; a fact that contradicts
+  it goes in its return under Deviations, never into a build that quietly overrides it.
 - **Quarantine** - a partial WRITER failed -> an isolated-worktree writer's output stays unmerged (inspect,
   salvage by hand or discard); a signed-off LIVE-tree Worker that broke the tree gets reverted before any retry.
 - **Stop + ask** - count each EXECUTION attempt (the original + repair + restart = 3). BEFORE a 3rd attempt,
@@ -312,11 +330,23 @@ carve-out is a disclosed residual overlap (the external example and the kit read
   card before spawning), a re-shape, or one final retry. This is the same threshold as the step-1 "3rd+
   attempt" tripwire (one counter, one action).
 
-`SC-6.4` **Then:** repeat the agent's role/definition check-in (`name . tier . def-v<N>`) as the
-FIRST line of its FINAL message. Keep model/effort out of the greeting. Apply the identity-evidence
+`SC-6.4` **Then:** repeat the agent's role/definition check-in (`Hi, I'm <name> - <tier or role>,
+def-vN.`, as its definition words it) as the FIRST line of its FINAL message. Keep model/effort out of the greeting. Apply the identity-evidence
 contract in "The check-in line" below before reporting runtime identity; declarations are not proof.
 After editing a definition, compare its returned `def-v<N>` to disk before trusting behaviour-dependent
 results (staleness protocol: see MAINT-2). A matching stamp does not verify model or effort.
+
+`SC-6.5` **Every handed-back item is numbered, and every number gets a disposition.** A return's
+`Out-of-slice finds` section (finds not fixed, gaps left, proposed changes to a definition or brief) lists
+one item per line, `OOS-<n>: <one line>`, numbered from 1 per return; a resumed return continues its
+numbering. The receiver answers each id with one line, `OOS-<n>: fixed|ledgered|routed|inbox|wontfix
+<why or where>`, adding `@<q>` (the 8-character qualifier the guard prints) when two returns share a
+number. `inbox` appends it to the kit's `.state/oos-inbox.log`; no reader ships in the kit, so a setup
+that uses `inbox` adds its own SessionStart reader, and anyone without one writes `ledgered` instead.
+Measured over 29 days of sessions, before this rule: 28% of handed-back out-of-slice items were neither
+acted on nor recorded, and 77 of those 82 needed only a ledger line. `oos-disposition-guard` (delegation
+group, Stop) sends the turn back once per distinct set of open ids, again after 10 minutes if ignored;
+Stop does not fire for sub-agents, so a sublead disposes its children's ids in its own return.
 
 *Everything below is COLD REFERENCE - the Spawn Contract's unpacked bodies (long form + evidence of the hot
 rules), the tier vocabulary, the capability-band dial, routing rationale (ROUTE card), cross-provider handoff,

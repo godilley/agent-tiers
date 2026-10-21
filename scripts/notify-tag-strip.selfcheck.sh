@@ -4,7 +4,9 @@
 # (original renders unchanged), both valid tags being replaced with their ANSI-coloured badge (raw
 # operator: text never leaking through, an ESC byte present, the right colour code for each tag), a
 # delta that is ONLY the tag collapsing to JUST the badge, a replacement being logged with a [sid=],
-# the pre-jq fast-bail never breaking a real match, and the kill switch standing it down.
+# the pre-jq fast-bail never breaking a real match, the two hand-back tags (run|kind:policy and
+# run|kind:oneoff) each getting their own badge with the command line below intact, and the kill
+# switch standing it down.
 set -u
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "SKIP notify-tag-strip: jq absent (hook fails open by design)"; exit 0; }
@@ -63,6 +65,51 @@ done
 OUT="$(run "$(printf 'Three options.\noperator:ask_next\n')")"
 printf '%s' "$OUT" | jq -r '.hookSpecificOutput.displayContent' | grep -q 'QUESTION NEXT' || fail "ask_next should be replaced with the QUESTION NEXT badge"
 printf '%s' "$OUT" | jq -r '.hookSpecificOutput.displayContent' | grep -q 'operator:ask_next' && fail "the raw ask_next line must not survive"
+
+# Hand-back tags: each kind gets its own badge and colour, the command line below survives untouched,
+# and an unknown kind is left alone (it renders as plain text, never as a wrong badge).
+OUT="$(run "$(printf 'Run this.\noperator:run|kind:policy\n! agent-tiers allow x\nDone.\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "run|kind:policy tag leaked into displayContent"
+printf '%s' "$OUT" | grep -qF 'YOU RUN: POLICY CHANGE, PERSISTS' || fail "run|kind:policy should be replaced with the POLICY CHANGE badge"
+printf '%s' "$OUT" | grep -qF "$(printf '\033[1;31m')" || fail "the policy badge should carry the red SGR code, ESC byte included"
+printf '%s' "$OUT" | grep -qxF '! agent-tiers allow x' || fail "the handed-back command line below the policy tag must survive unchanged"
+printf '%s' "$OUT" | grep -qF 'ONE-OFF' && fail "a policy tag must not render the one-off badge"
+OUT="$(run "$(printf 'Run this.\noperator:run|kind:oneoff\n! ls -la /tmp\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "run|kind:oneoff tag leaked into displayContent"
+printf '%s' "$OUT" | grep -qF 'YOU RUN: ONE-OFF' || fail "run|kind:oneoff should be replaced with the ONE-OFF badge"
+printf '%s' "$OUT" | grep -qF "$(printf '\033[1;36m')" || fail "the one-off badge should carry the cyan SGR code, ESC byte included"
+printf '%s' "$OUT" | grep -qxF '! ls -la /tmp' || fail "the handed-back command line below the one-off tag must survive unchanged"
+printf '%s' "$OUT" | grep -qF 'POLICY CHANGE' && fail "a one-off tag must not render the policy badge"
+for k in policy oneoff; do
+  OUT="$(NO_COLOR=1 run "$(printf 'x\noperator:run|kind:%s\n' "$k")" | jq -r '.hookSpecificOutput.displayContent')"
+  printf '%s' "$OUT" | grep -qF 'YOU RUN: ' || fail "NO_COLOR=1: run|kind:$k badge text should stay"
+  printf '%s' "$OUT" | grep -qF "$(printf '\033')" && fail "NO_COLOR=1: run|kind:$k badge must carry no ESC byte"
+  OUT="$(NO_COLOR= run "$(printf 'x\noperator:run|kind:%s\n' "$k")" | jq -r '.hookSpecificOutput.displayContent')"
+  printf '%s' "$OUT" | grep -qF "$(printf '\033')" || fail "NO_COLOR= (empty): run|kind:$k badge should keep its colour"
+done
+[ -z "$(run "$(printf 'x\noperator:run|kind:other\n')")" ] || fail "an unknown run kind should produce no output (rendered unchanged, no badge)"
+OUT="$(run "$(printf 'x\n  operator:run|kind:policy\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "an indented run tag leaked into displayContent"
+printf '%s' "$OUT" | grep -q '^  .*YOU RUN: POLICY CHANGE' || fail "an indented run tag should be badged with its indentation kept"
+OUT="$(run "$(printf '\toperator:run|kind:oneoff\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'YOU RUN: ONE-OFF' || fail "a tab-indented run tag should be badged"
+[ -z "$(run "$(printf '  operator:want_input\n')")" ] || fail "an indented turn-end tag is still not a tag line"
+OUT="$(run "$(printf 'x\noperator:run|kind:oneoff  \n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "a run tag with trailing spaces leaked into displayContent"
+printf '%s' "$OUT" | grep -q 'YOU RUN: ONE-OFF' || fail "a run tag with trailing spaces should be badged"
+OUT="$(run "$(printf 'x\noperator:run|kind:policy\r\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "a run tag with a trailing CR leaked into displayContent"
+printf '%s' "$OUT" | grep -q 'YOU RUN: POLICY CHANGE' || fail "a run tag with a trailing CR should be badged"
+# Anchored at both ends: next to a real tag, a line that only STARTS with a run tag keeps its text.
+OUT="$(run "$(printf 'operator:run|kind:oneoffs\noperator:run|kind:policy-x\noperator:want_input\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -qxF 'operator:run|kind:oneoffs' || fail "a longer run|kind:oneoff... line must not be partly badged"
+printf '%s' "$OUT" | grep -qxF 'operator:run|kind:policy-x' || fail "a longer run|kind:policy... line must not be partly badged"
+printf '%s' "$OUT" | grep -qF 'INPUT NEEDED' || fail "the turn-end tag next to those lines should still be badged"
+# The realistic final batch: run tag, command, turn-end tag in one delta gets BOTH badges.
+OUT="$(run "$(printf 'Run this.\noperator:run|kind:policy\n! agent-tiers allow x\noperator:want_input\n')" | jq -r '.hookSpecificOutput.displayContent')"
+printf '%s' "$OUT" | grep -qF 'YOU RUN: POLICY CHANGE' || fail "run tag plus turn-end tag in one batch: the run badge is missing"
+printf '%s' "$OUT" | grep -qF 'INPUT NEEDED' || fail "run tag plus turn-end tag in one batch: the turn-end badge is missing"
+printf '%s' "$OUT" | grep -q 'operator:' && fail "run tag plus turn-end tag in one batch: a raw tag leaked"
 
 OUT="$(run "operator:want_input")"
 printf '%s' "$OUT" | jq -r '.hookSpecificOutput.displayContent' | grep -q 'INPUT NEEDED' \

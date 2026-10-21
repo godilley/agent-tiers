@@ -9,6 +9,18 @@
 set -u
 fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
+# 0. Parse check, BEFORE the source below: ~30 hooks dot-source this library, and a syntax error makes
+# sh (bash in POSIX mode) and dash exit 2 at the source line, which blocks every PreToolUse(Bash) call.
+for psh in sh dash bash; do
+  if command -v "$psh" >/dev/null 2>&1; then
+    perr="$("$psh" -n "$(dirname "$0")/guard-cmdpos.sh" 2>&1)" || fail "$psh -n reports a parse error in guard-cmdpos.sh: $perr"
+    [ -z "$perr" ] || fail "$psh -n reports a parse error in guard-cmdpos.sh: $perr"
+  else
+    printf 'note: %s not installed, its parse check skipped\n' "$psh"
+  fi
+done
+printf 'ok   guard-cmdpos.sh parses under sh -n, dash -n and bash -n (where installed)\n'
+
 . "$(dirname "$0")/guard-cmdpos.sh" || fail "cannot source guard-cmdpos.sh"
 command -v guard_split_segments >/dev/null 2>&1 || fail "guard_split_segments undefined after source"
 
@@ -464,6 +476,39 @@ case "$GOT" in *"ssh vps rm x"*) true ;; *) false ;; esac || fail "guard_strip_h
 [ "$(guard_strip_heredocs "$HD1")" = "$EXP1" ] || fail "guard_strip_heredocs: default commit shape regressed under quote-aware openers (regression pin)"
 printf 'ok   guard_strip_heredocs: quoted << and herestring are not openers; default commit shape still strips\n'
 
+# 2026-10-18: the delimiter is the WHOLE shell word after quote removal (hd_word). Bypass shape per
+# form: opener, a body line, the shell's real closer, a real command, then a line equal to the first
+# chunk only (where the old regex ended the body, hiding the real command). Exact output pinned.
+TAB="$(printf '\t')"
+hd_case() { # $1=opener word $2=shell closer line $3=fake closer
+  got="$(guard_strip_heredocs "cat <<$1${NL}bodytext${NL}$2${NL}ssh vps rm x${NL}$3")"
+  [ "$got" = "cat <<$1${NL}ssh vps rm x${NL}$3" ] || fail "guard_strip_heredocs: delimiter <<$1 (closer [$2]) must drop the body and keep the real command: [$got]"
+}
+hd_case 'E"F"' EF E
+hd_case '"E"F' EF E
+hd_case 'E\F' EF E
+hd_case '\EOF' EOF E
+hd_case "${SQ}E${SQ}\"F\"G" EFG E
+hd_case '-"E"F' "${TAB}EF" E
+printf 'ok   guard_strip_heredocs: E"F", "E"F, E\\F, \\EOF, '"'"'E'"'"'"F"G, -"E"F (tab closer) read as the whole word\n'
+# refused words keep today's result: not an opener, every line scanned as a command.
+HD5="cat <<\$X${NL}ssh vps rm x${NL}\$X"
+[ "$(guard_strip_heredocs "$HD5")" = "$HD5" ] || fail "guard_strip_heredocs: <<\$X must stay a non-opener (input unchanged)"
+HD6="cat <<\"EF${NL}ssh vps rm x${NL}EF"
+[ "$(guard_strip_heredocs "$HD6")" = "$HD6" ] || fail "guard_strip_heredocs: <<\"EF (unterminated quote) must stay a non-opener (input unchanged)"
+printf 'ok   guard_strip_heredocs: <<$X and an unterminated <<"EF stay non-openers (regression pin)\n'
+# a delimiter starting with a digit is refused: $((1<<2)) is a shift, and a later line `2` must not
+# swallow the command between them as a heredoc body.
+HD7="x=\$((1<<2))${NL}ssh vps rm x${NL}2"
+[ "$(guard_strip_heredocs "$HD7")" = "$HD7" ] || fail "guard_strip_heredocs: \$((1<<2)) must not open a heredoc (input unchanged)"
+printf 'ok   guard_strip_heredocs: $((1<<2)) is not a heredoc opener\n'
+# guard_strip_quotes: a 0x1A byte inside quotes is content, not a record break.
+SUB="$(printf '\032')"
+GQ="$(guard_strip_quotes "echo \"a${SUB} | rm x\"")"
+case "$GQ" in *'| rm x'*) fail "guard_strip_quotes: a 0x1A byte ended the quoted region: [$GQ]" ;; esac
+[ "$GQ" = 'echo ""' ] || fail "guard_strip_quotes: 0x1A inside quotes not blanked as content: [$GQ]"
+printf 'ok   guard_strip_quotes: a 0x1A byte inside quotes stays quoted content\n'
+
 argv_is() { # $1=segment $2=expected tokens joined by |, RS shown as ~
   got="$(guard_argv "$1" | tr "${RS_B}" '~' | tr '\n' '|')"
   [ "$got" = "$2" ] || fail "guard_argv [$1]: want [$2] got [$got]"
@@ -493,6 +538,17 @@ printf 'ok   guard_argv: w/o/g/r/R/u tokens on the contract cases\n'
 [ "$(guard_split_segments_qsafe "true \\${NL}# it's${NL}git add -A${NL}# it's" | sed -n 2p)" = "git add -A" ] || fail "qsafe: a comment after a line continuation must not merge the next line"
 SUB_B="$(printf '\032')"
 [ "$(qn "echo '${SUB_B};x'; y")" -eq 2 ] || fail "qsafe: a 0x1A byte inside quotes must not reset quote state (want 2 segments)"
+# RGP2-K: comment awareness. A backslash in a comment is literal, so its newline still ends the segment.
+[ "$(qn "ls # a\\${NL}ssh vps \"rm x\"")" -eq 2 ] || fail "qsafe: a backslash at the end of a comment must not join the next line (want 2 segments)"
+[ "$(guard_split_segments_qsafe "ls # a\\${NL}ssh vps \"rm x\"" | sed -n 2p)" = 'ssh vps "rm x"' ] || fail "qsafe: the line after a backslash-ended comment must be intact"
+[ "$(qn 'echo a # x; rm -rf y')" -eq 1 ] || fail "qsafe: a ; inside a comment must not split (want 1 segment)"
+[ "$(qn 'echo a#b; rm y')" -eq 2 ] || fail "qsafe: a mid-word # must not start a comment (want 2 segments)"
+[ "$(qn 'echo ${#x}; rm y')" -eq 2 ] || fail "qsafe: \${#x} must not start a comment (want 2 segments)"
+[ "$(guard_split_segments_qsafe "ls # \"it's${NL}rm y; z" | sed -n 2p)" = 'rm y' ] || fail "qsafe: a quote inside a comment must not open a quote (the next line still splits)"
+[ "$(qn 'echo ${x:-(#)}; ssh vps "rm x"')" -eq 2 ] || fail "qsafe: a # after ( inside \${ } must not start a comment (want 2 segments)"
+[ "$(qn 'echo ${x:- #}; ssh vps "rm x"')" -eq 2 ] || fail "qsafe: a # after a blank inside \${ } must not start a comment (want 2 segments)"
+[ "$(guard_split_segments_qsafe 'echo ${x:- #}; ssh vps "rm x"' | sed -n 2p)" = ' ssh vps "rm x"' ] || fail "qsafe: the command after a \${ } holding # must be intact"
+printf 'ok   guard_split_segments_qsafe: comments at word start run to the newline, literal backslash and quotes, mid-word # ordinary\n'
 argv_is "echo '${SUB_B}' x" "wecho|w${SUB_B}|wx|"
 argv_is '{ssh,vps} x' 'o{ssh,vps}|wx|'
 argv_is '/usr/bin/ss[h] vps' 'o/usr/bin/ss[h]|wvps|'

@@ -40,6 +40,59 @@
 
 CMDPOS_PREFIX='(^|\$\(|`)[[:space:]]*((if|until|while|do|else|then|!)[[:space:]]+)?((sudo|command|env|time|nohup|bash|sh|timeout[[:space:]]+[0-9]+[a-zA-Z]?)[[:space:]]+)*([^[:space:]=]*/)?'
 
+# GUARD_AWK_HDWORD: awk function text (prepend it to an awk program) reading a heredoc DELIMITER the
+# way the shell does. Used by guard_strip_heredocs below and by reach-guard.sh's hd_rule (reach-guard
+# carries a stub of its own for when this library is missing). codex-guard.sh still holds its own
+# older regex copy.
+# hd_word(s, i), where substr(s, i, 2) is `<<`: reads an optional `-`, optional blanks/tabs, then ONE
+# shell word, ended outside quotes by end of s, a blank, a tab or one of ;&|<>(). '...' is copied
+# literally; "..." is copied to the next unescaped ", where \" \\ \$ \` drop the backslash; outside
+# quotes \X gives X. The delimiter is the whole word after quote removal (so `<<E"F"` ends at a line
+# `EF`, not `E`), and the body is literal when any part was quoted or escaped. Sets HD_TAG, HD_Q (1 =
+# some part quoted/escaped), HD_DASH (1 = `<<-`), HD_END (position after the word) and returns 1.
+# Returns 0 (not an opener, HD_END = i + 2) on: `<<<`; an empty delimiter (also `<<''`, which the
+# shell accepts - scanning that body as commands is the safe direction); an unterminated quote or a
+# trailing backslash within s; a raw word holding `$` or a backtick (the shell takes those literally
+# as delimiter text; refusing keeps the old, safe direction of scanning the body as commands); a raw
+# word whose first character is a digit (so the shift in `$((1<<2))` never opens a heredoc).
+GUARD_AWK_HDWORD='
+function hd_word(s, i,   j, n, c, d, t, q, st, k) {
+  HD_TAG = ""; HD_Q = 0; HD_DASH = 0; HD_END = i + 2
+  if (substr(s, i, 2) != "<<" || substr(s, i + 2, 1) == "<") return 0
+  j = i + 2; n = length(s)
+  if (substr(s, j, 1) == "-") { HD_DASH = 1; j++ }
+  while (j <= n && (substr(s, j, 1) == " " || substr(s, j, 1) == "\t")) j++
+  st = j; t = ""; q = 0
+  while (j <= n) {
+    c = substr(s, j, 1)
+    if (c == " " || c == "\t" || index(";&|<>()", c) > 0) break
+    if (c == "\047") {
+      k = index(substr(s, j + 1), "\047"); if (k == 0) return 0
+      t = t substr(s, j + 1, k - 1); q = 1; j += k + 1; continue
+    }
+    if (c == "\042") {
+      q = 1; j++
+      while (1) {
+        if (j > n) return 0
+        c = substr(s, j, 1)
+        if (c == "\042") { j++; break }
+        if (c == "\\" && j < n) {
+          d = substr(s, j + 1, 1)
+          if (d == "\042" || d == "\\" || d == "$" || d == "`") { t = t d; j += 2; continue }
+        }
+        t = t c; j++
+      }
+      continue
+    }
+    if (c == "\\") { if (j >= n) return 0; t = t substr(s, j + 1, 1); q = 1; j += 2; continue }
+    t = t c; j++
+  }
+  if (t == "" || substr(s, st, j - st) ~ /[$`]/ || substr(s, st, 1) ~ /[0-9]/) { HD_Q = 0; HD_DASH = 0; return 0 }
+  HD_TAG = t; HD_Q = q; HD_END = j
+  return 1
+}
+'
+
 # guard_has_heredoc <cmd> -> exit 0 if the raw command text contains ANY literal `<<` substring - a
 # heredoc redirect (`<<`/`<<-`), but also a herestring (`<<<`), a merge-conflict marker (`<<<<<<<`), a
 # left-shift operator inside a quoted code snippet, or `<<` appearing in ordinary text (a commit
@@ -86,8 +139,12 @@ guard_has_heredoc() {
 # where a false deny costs more than an unscanned heredoc-adjacent command; this helper is offered
 # for any of them to adopt later, not force-migrated here.
 #
-# Line-oriented, single heredoc opener recognised per source line (a bare TAG, or a TAG in matching
-# single/double quotes, right after `<<`/`<<-`) - two heredocs later in the SAME multi-line command
+# Line-oriented, single heredoc opener recognised per source line: only the FIRST opener on a line is
+# honoured (`found`). The delimiter is read by hd_word (GUARD_AWK_HDWORD above) as the whole shell
+# word after quote removal (2026-10-18; before, a regex took only the first bare or quoted chunk, so
+# `cat <<E"F"` ended the body at a line `E` while the shell ends it at `EF`, hiding a real command
+# between the two from every guard); a word hd_word refuses (`<<$X`, an unterminated quote) is not an
+# opener and the following lines are scanned as commands - two heredocs later in the SAME multi-line command
 # are both found in sequence (the scan resumes looking for a new opener once a body closes); two
 # heredocs opened on the ONE line (`diff <(cat <<A) <(cat <<B)`) only recognises the first - ponytail
 # ceiling, a real parser would be needed for that shape and it is not the incident this exists for.
@@ -110,7 +167,7 @@ guard_has_heredoc() {
 guard_strip_heredocs() {
   cmd="${1:-}"
   case "$cmd" in *'<<'*) : ;; *) printf '%s' "$cmd"; return 0 ;; esac
-  out="$(printf '%s\n' "$cmd" | awk '
+  out="$(printf '%s\n' "$cmd" | awk "$GUARD_AWK_HDWORD"'
     BEGIN { tag = ""; dash = 0; q = 0; dep = 0; sp = 0; SQ = "\047"; DQ = "\042" }
     {
       line = $0
@@ -138,15 +195,9 @@ guard_strip_heredocs() {
           i++; continue
         }
         if (substr(line, i, 3) == "<<<") { i += 3; while (substr(line, i, 1) == "<") i++; continue }
-        if (!found && substr(line, i, 2) == "<<" && match(substr(line, i), /^<<-?[ \t]*('"'"'[^'"'"']*'"'"'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)/)) {
-          seg = substr(line, i, RLENGTH)
-          dash = (seg ~ /^<<-/) ? 1 : 0
-          rest = seg
-          sub(/^<<-?[ \t]*/, "", rest)
-          gsub(/^'"'"'|'"'"'$/, "", rest)
-          gsub(/^"|"$/, "", rest)
-          tag = rest; found = 1
-          i += RLENGTH; continue
+        if (!found && hd_word(line, i)) {
+          dash = HD_DASH; tag = HD_TAG; found = 1
+          i = HD_END; continue
         }
         i++
       }
@@ -170,11 +221,16 @@ guard_strip_heredocs() {
 # a quoted argument (git-add-stash-guard.sh's own path/subcommand tokens) do their own narrow
 # per-token unquote instead of this blanket strip - this function is for guards that only need to
 # know a metacharacter is NOT really there, never for guards that need the value that was there.
+# The whole input is read as lines joined with "\n" and processed once in END (2026-10-18; before,
+# RS = "\032" made a 0x1A byte inside quotes end the record, reset the quote state and drop the byte,
+# so quoted text after it read as unquoted). A trailing newline of the input is not reproduced; every
+# caller reads the result through $( ), which drops it anyway.
 guard_strip_quotes() {
   printf '%s' "${1:-}" | awk '
-    BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
-    {
-      s = $0; n = length(s); state = 0; out = ""
+    BEGIN { SQ = "\047"; DQ = "\042" }
+    { s = s (NR > 1 ? "\n" : "") $0 }
+    END {
+      n = length(s); state = 0; out = ""
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
         if (state == 0) {
@@ -475,8 +531,16 @@ guard_split_segments() {
 #   newline inside its segment (an RS-byte encoding was tried) made any quote mis-track that balances
 #   out again (`echo "$(printf "it's")"`, then a newline, a real command, and a comment holding `'`)
 #   hide whole later lines from every consumer that matches at line start; a split quoted argument
-#   only costs a consumer an unbalanced fragment, which fails toward scanning more, not less. There is
-#   no `#` comment rule here either: a `#` mid-word (`$(x)#`) is not a comment to the shell.
+#   only costs a consumer an unbalanced fragment, which fails toward scanning more, not less.
+# - Comments: outside quotes and outside any `${ }`, a `#` at word start (first byte, or after a blank,
+#   tab, newline or one of `;&|`, a line continuation in between keeping that state) runs to the next
+#   newline and is copied verbatim: no backslash, quote or separator processing inside it, and the
+#   newline still ends the segment. Without this, `ls # a\` then a newline joined the next line into the
+#   comment's segment (sh, dash, bash and zsh all run that line). A `#` anywhere else (`$#`, `${#x}`,
+#   `a#b`, `$(x)#`, `${x:-(#)}`, `${x:- #}`) is ordinary. `${` opens and, while open, `}` closes a
+#   nesting depth counted outside quotes. `(`, `)`, `<` and `>` do not count as word start: the shells
+#   do treat `(#c`, `(x)#c` and `>#c` as a comment, but this scanner cannot tell a subshell paren from a
+#   `$( )` or a `(` inside `${ }`, and reading more text as commands is the safe side.
 # - Input is read as whole lines joined with \n, with no in-band record separator byte (an earlier
 #   RS of 0x1A let that byte inside quotes reset the quote state).
 # - Backslash: outside quotes `\X` is copied as both bytes and X is never a separator or a quote
@@ -494,21 +558,29 @@ guard_split_segments_qsafe() {
     BEGIN { SQ = "\047"; DQ = "\042"; RSB = "\036" }
     { s = s (NR > 1 ? "\n" : "") $0 }
     # scan(rs): rs=1 would map a newline inside quotes to RS; only rs=0 (raw newline) is used, see header.
-    function scan(rs,    n, state, out, i, p, c, c2) {
-      n = length(s); state = 0; out = ""; i = 1; p = ""
+    function scan(rs,    n, state, out, i, p, c, c2, ws, e, cm, bd) {
+      n = length(s); state = 0; out = ""; i = 1; p = ""; ws = 1; bd = 0
       while (i <= n) {
         c = substr(s, i, 1)
         if (state == 0) {
           c2 = substr(s, i, 2)
+          # ws: word start, for the comment rule (a line continuation leaves it as it was); bd: open ${ depth
+          if (c == "#" && ws && !bd) {
+            e = index(substr(s, i), "\n"); cm = (e ? substr(s, i, e - 1) : substr(s, i))
+            out = out cm; i += length(cm); p = "#"; ws = 0; continue
+          }
           if (c == "\\") {
-            if (c2 != "\\\n") out = out c2
+            if (c2 != "\\\n") { out = out c2; ws = 0 }
             i += 2; p = "\\"; continue
           }
-          if (c2 == "&&" || c2 == "||" || c2 == "|&") { out = out "\n"; i += 2; p = ""; continue }
-          if (c == "&" && (p == ">" || p == "<" || substr(s, i + 1, 1) == ">")) { out = out c; i++; p = c; continue }
-          if (c == "|" && p == ">") { out = out c; i++; p = c; continue }
-          if (c == "|" || c == ";" || c == "&") { out = out "\n"; i += 1; p = ""; continue }
+          if (c2 == "${") { out = out c2; i += 2; p = "{"; ws = 0; bd++; continue }
+          if (c == "}" && bd) bd--
+          if (c2 == "&&" || c2 == "||" || c2 == "|&") { out = out "\n"; i += 2; p = ""; ws = 1; continue }
+          if (c == "&" && (p == ">" || p == "<" || substr(s, i + 1, 1) == ">")) { out = out c; i++; p = c; ws = 0; continue }
+          if (c == "|" && p == ">") { out = out c; i++; p = c; ws = 0; continue }
+          if (c == "|" || c == ";" || c == "&") { out = out "\n"; i += 1; p = ""; ws = 1; continue }
           out = out c; p = c
+          ws = (c == " " || c == "\t" || c == "\n")
           if (c == SQ) state = 1
           else if (c == DQ) state = 2
           i += 1

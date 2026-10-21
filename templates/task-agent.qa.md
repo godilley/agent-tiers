@@ -146,8 +146,9 @@ End every return, in this order:
 1. A short markdown summary: mode, target, the results table, evidence artifacts, and any hand-back
    reason.
 2. The `Unverified` heading (may be empty, must be present).
-3. If this agent's procedure or the project brief looks wrong: the proposed change and why, in plain
-   prose (no self-edit, no return tag - see Anti-patterns).
+3. `Out-of-slice finds:` the proposed change and why if this agent's procedure or the project brief
+   looks wrong, plus anything noticed and not handled, one per line as `OOS-<n>: <one line>`, or
+   `none` (no self-edit - see Anti-patterns; agent-tiers SC-6.5).
 4. A trailing fenced JSON block, LAST, matching this shape:
 
 ```json
@@ -181,8 +182,9 @@ End every return, in this order:
   than it is.
 
 **Flag, don't self-edit:** if this agent's procedure or the project brief looks wrong, do NOT edit any
-file - end your return with the proposed change and why, in plain prose (no reserved return tag; this
-kit's own DEF-DELTA tag was cut for zero real use - see MAINT-3), for the Lead to apply (gated).
+file - put the proposed change and why in item 3 as an `OOS-<n>` item, for the Lead to apply (gated).
+Unlike the cut DEF-DELTA tag (zero real use, see MAINT-3), these ids are read by a Stop hook that makes
+the Lead answer each one (agent-tiers SC-6.5).
 
 **Self-maintained learnings (memory: local).** You have a persistent `local` memory dir
 (`.claude/agent-memory-local/{{PREFIX}}-qa/`). When you learn a durable, reusable fact about this

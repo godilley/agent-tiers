@@ -5,6 +5,7 @@ hook	ledger-check	core	SessionStart		10	-
 hook	guard-summary	core	SessionEnd		5	-
 hook	grep-footgun-guard	shell_footguns	PreToolUse	Bash	5	-
 hook	pgrep-footgun-guard	shell_footguns	PreToolUse	Bash	5	-
+hook	contention-guard	shell_footguns	PreToolUse	Bash	5	-
 hook	worktree-guard	safety	PreToolUse	Bash	5	-
 hook	long-run-guard	shell_footguns	PreToolUse	Bash	5	-
 hook	git-add-stash-guard	safety	PreToolUse	Bash	5	-
@@ -34,8 +35,10 @@ hook	read-basis-guard	planning	PreToolUse	ExitPlanMode	5	-
 hook	advisory-ack-guard	attention	Stop		5	-
 hook	precompact-guard	planning	PreCompact	manual	5	authorship-record
 hook	notify	attention	Notification	permission_prompt	5	-
-hook	notify-stop	attention	Stop		5	notify,notify-tag-guard
+hook	notify-stop	attention	Stop		5	notify,notify-tag-guard,handback-tag-guard
 hook	notify-tag-guard	attention	Stop		5	-
+hook	handback-tag-guard	attention	Stop		5	-
+hook	oos-disposition-guard	delegation	Stop		5	-
 hook	ask-gate	attention	PreToolUse	AskUserQuestion	5	-
 hook	notify-tag-strip	attention	MessageDisplay		10	-
 hook	reach-guard	safety	PreToolUse	^(Bash|Write|Edit|MultiEdit|NotebookEdit|mcp__chrome-devtools__.*|mcp__claudecodebrowser__.*)$	5	-
@@ -51,11 +54,11 @@ level	full	*	Every guard, including delegation, memory, attention, multi-session
 # kind	key	type	default	title	description
 option	enabled	boolean	true	Kit enabled	Turns the whole kit on or off, core hooks included. Off keeps it installed; each session start then shows one line saying it is off.
 option	group_safety	boolean	false	Safety guards	Blocks destructive commands and secrets in written content, bare git add -A and stash, hand-made worktrees; asks or denies agent reach to remote hosts and browser MCPs.
-option	group_shell_footguns	boolean	false	Shell footgun guards	Stops shell commands that fail quietly: recursive grep skipping binary files, pgrep/pkill -f, and long checks piped into tail or polled in a loop.
+option	group_shell_footguns	boolean	false	Shell footgun guards	Stops shell commands that fail quietly: recursive grep skipping binary files, pgrep/pkill -f, and long checks piped into tail or polled in a loop; and machine-wide searches or archive loops that compete with you for the machine.
 option	group_commit_review	boolean	false	Commit review guards	Asks before a commit or push with no independent review, flags commit hygiene problems and private text in a commit, denies undisclosed sed -i or tee writes to tracked files, and logs derived numbers.
-option	group_delegation	boolean	false	Delegation guards	Guards sub-agent spawns (model, framing, return-while-running), bare codex calls, and a sub-agent editing its own definition.
+option	group_delegation	boolean	false	Delegation guards	Guards sub-agent spawns (model, framing, return-while-running), bare codex calls, and a sub-agent editing its own definition; a Stop send-back for numbered OOS items a sub-agent handed back with no disposition line.
 option	group_memory	boolean	false	Memory guards	Gates new memory writes behind a coverage check, lints memory content, warns on unopenable path citations, and records what a session authored.
-option	group_attention	boolean	false	Attention hooks	Desktop notifications, plus a Stop block that ends every reply with an operator-tag line, ask-gate for questions, and advisory-ack and unattended-mode guards.
+option	group_attention	boolean	false	Attention hooks	Desktop notifications, plus a Stop block that ends every reply with an operator-tag line, a Stop send-back for a handed-back `!` command with no operator:run tag, ask-gate for questions, and advisory-ack and unattended-mode guards.
 option	group_multi_session	boolean	false	Multi-session guards	Asks before a write into a repo another live session is using, or outside this session's repo. Also simple-rules-guard: no codex resume --last, no sudo JDK switch, no main branch in your own repos, marked defaults, SendMessage rules.
 option	group_planning	boolean	false	Planning guards	Asks a plan to declare any tracked source file it names but never read, nudges to save approved plans, blocks CSS demo hacks, and blocks manual /compact before the handoff (needs authorship-record, Memory group).
 option	disabled_hooks	string[]		Disabled hooks	Hook ids to turn off one by one, whatever their group says. Set with: agent-tiers configure --set disabled_hooks=<id>,<id> (or settings.json pluginConfigs).

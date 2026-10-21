@@ -145,8 +145,8 @@ in step 6d).
   then run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/notes-sync.sh" setup --push <policy>` (creates the dir,
   adds the exclude, records `notes-sync.*` in `.git/config`). If the project already has stray private
   docs in a shared/tracked dir, offer `notes-sync.sh migrate <paths...>` to move + untrack them. Full
-  runbook: `${CLAUDE_PLUGIN_ROOT}/docs/private-notes.md` if present - it's a kit-local doc, not bundled to
-  recipients; proceed with the steps above without it if absent.
+  runbook: the Private notes section of `${CLAUDE_PLUGIN_ROOT}/docs/extending.md`; if that file is
+  absent, proceed with the steps above without it.
 
 ## 7. Report
 Summarise (terse, scannable): what was probed, the resolved resolution rules, and which per-project

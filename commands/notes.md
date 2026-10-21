@@ -27,11 +27,11 @@ Subcommands:
 - `save [msg]` - snapshot `docs/_local/**` -> `local/notes` (skips if unchanged).
 - `push` - push the ref to the configured remote (no-op when `push=local`).
 - `sync [msg]` - `save` then `push`.
-- `restore` - extract the ref back into `docs/_local/` (fresh clone / recovery; fetches first if remote).
+- `restore` - extract the ref back into `docs/_local/` (fresh clone / recovery; fetches from the remote only when the ref is missing locally, and overwrites same-named files).
 - `status` - dir file count, ref head, remote, push policy.
 - `migrate <path>...` - move stray docs into `docs/_local/` (untracking them if tracked), then `save`.
-  Full walkthrough: `${CLAUDE_PLUGIN_ROOT}/docs/private-notes.md` (ships with the kit since
-  2026-08-31; if somehow absent, the steps above are the whole procedure).
+  Full walkthrough: `${CLAUDE_PLUGIN_ROOT}/docs/extending.md`, section Private notes (if somehow absent, the
+  steps above are the whole procedure).
 - `new <slug> [--from <path>]` - create `<date>-<slug>.md` in `docs/_local/` (today's real UTC date,
   computed by the script, never caller-supplied), stub content `STATUS: LIVE` by default, or `--from`'s
   content with `STATUS: LIVE` prepended only if it lacks one. Always `mkdir`s + excludes the dir first,

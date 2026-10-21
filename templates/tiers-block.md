@@ -30,9 +30,9 @@ independent check from a Reviewer, and (for an interface-band Lead) deep reasoni
   (fable) delegate by TOKEN VOLUME, not difficulty. Full dial doctrine -> the `agent-tiers` skill.
 - This environment's per-agent model/effort resolution + scope matrix live in
   `.claude/agent-tiers.local.md` (run `/agent-tiers:init` to (re)probe, `/agent-tiers:doctor` for drift).
-- Every spawned agent repeats `name . tier . def-v<N>` as the first line of its final
-  return. Keep model/effort separate under agent-tiers' identity-evidence contract (SC-6.4):
-  requested settings are declared; runtime claims cite harness evidence; missing fields
+- Every spawned agent repeats its definition's check-in, `Hi, I'm <name> - <tier or role>, def-vN.`,
+  as the first line of its final return. Keep model/effort separate under agent-tiers'
+  identity-evidence contract (SC-6.4): requested settings are declared; runtime claims cite harness evidence; missing fields
   remain unverified. Definition stamps check staleness, not model identity.
 
 ## Building - universal seams over bespoke ⭐ (from the `agent-tiers` plugin)

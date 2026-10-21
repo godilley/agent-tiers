@@ -6,7 +6,7 @@ removal, one confirmed step at a time, following the kit's own checklist.
 ---
 
 I want to UNINSTALL the **agent-tiers** kit from this machine. Its own removal checklist is
-`~/.claude/agent-tiers/docs/uninstall.md` - read that first and follow it, with these rules:
+the "Remove" section of `~/.claude/agent-tiers/docs/install.md` (anchor `#remove`) - read that first and follow it, with these rules:
 
 1. INVENTORY (read-only). Work out what is actually installed here: does
    `~/.claude/agent-tiers/` exist, which hooks are on

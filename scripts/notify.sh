@@ -264,6 +264,30 @@ if [ "$HOOK_EVENT" = "Stop" ]; then
   if [ -n "$BASE" ] && [ -f "$TAG_LIB" ] && sh -n "$TAG_LIB" >/dev/null 2>&1; then
     . "$TAG_LIB"
   fi
+  # handback-tag-guard.sh blocks a reply that hands back an untagged `!` command ONCE; until that block
+  # has happened (no marker yet, or one written within the last few seconds by the parallel guard) stay
+  # silent too, else the reply pings, is sent back, and pings again. Skipped when the guard is switched
+  # off or stood down, since nothing would then send the turn back. Same lib-sourcing pattern as above.
+  HB_LIB="$BASE/scripts/lib/handback-tag.sh"
+  HB_HOLD=0
+  if [ -n "$BASE" ] && [ -f "$HB_LIB" ] && sh -n "$HB_LIB" >/dev/null 2>&1 \
+    && [ ! -f "$CLAUDE_DIR/agent-tiers/.state/off/handback-tag-guard" ] \
+    && [ "$(sh "$BASE/scripts/kit-gate.sh" "$BASE/scripts/handback-tag-guard.sh" </dev/null 2>/dev/null)" != standdown ]; then
+    . "$HB_LIB"
+    HB_FLAGGED="$(handback_tag_flagged "$LAST_MSG")"
+    if [ -n "$HB_FLAGGED" ]; then
+      HB_SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+      handback_tag_pending "$(handback_tag_marker "$BASE" "$HB_SID" "$HB_FLAGGED")" && HB_HOLD=1
+      # The guard skips unattended sessions and writes no marker, so without this the hold would
+      # never release and every such reply would go unpinged (same check as the guard).
+      HB_CMDPOS="$BASE/scripts/guard-cmdpos.sh"
+      if [ "$HB_HOLD" = 1 ] && [ -r "$HB_CMDPOS" ] && sh -n "$HB_CMDPOS" >/dev/null 2>&1 \
+        && ( . "$HB_CMDPOS" 2>/dev/null && command -v guard_unattended >/dev/null 2>&1 && guard_unattended "$HB_SID" ); then
+        HB_HOLD=0
+      fi
+    fi
+  fi
+  [ "$HB_HOLD" = 1 ] && exit 0
   if command -v notify_tag_classify >/dev/null 2>&1; then
     case "$(notify_tag_classify "$LAST_MSG")" in
       want_input) BODY_SRC="$(printf '%s' "$LAST_MSG" | sed '$d')" ;;
@@ -286,6 +310,8 @@ if [ "$HOOK_EVENT" = "Stop" ]; then
   # right before the tag line that was just stripped - a head-truncated body shows the opening line
   # instead. `tail -c` can split a leading multi-byte UTF-8 char; cosmetic only, same disclosed
   # class as this file's other byte-boundary ceilings.
+  # Hand-back tag lines are chat badges, not notification text.
+  BODY_SRC="$(printf '%s\n' "$BODY_SRC" | grep -aEv '^[[:space:]]*operator:run[|]kind:' || true)"
   MESSAGE="$(sanitize "$BODY_SRC")"
   MESSAGE="$(printf '%s' "$MESSAGE" | tail -c 200)"
   [ -n "$MESSAGE" ] || MESSAGE="Claude Code needs your attention"

@@ -4,6 +4,13 @@
 # `operator:no_input_required|reason:...` / `operator:ask_next` line, on screen only, with a small ANSI-coloured status
 # badge - a SECOND, persistent visual cue that stays in the chat transcript itself, so a missed
 # desktop notification still leaves an at-a-glance answer to "does the operator need to look at this."
+# Also badges the hand-back tag `operator:run|kind:policy` / `operator:run|kind:oneoff`, written on the
+# line above a command the operator is asked to run (policy: running it changes the kit's guard policy
+# or safety state, e.g. reach-guard's allowlist, grants, off switches, consent rows, kit settings;
+# oneoff: everything else, `git push` and read-only commands included; the chat twins
+# of reach-guard's plain-text `POLICY CHANGE (persists, you run it)` and `RUN (one-off, you run it)`
+# labels). Not a turn-end tag: notify-tag-guard's regex
+# (lib/notify-tag.sh) does not match it, so it never counts toward that guard's one-tag rule.
 # VERIFIED live 2026-09-17: Claude Code's terminal renderer passes raw ANSI SGR bytes in a
 # MessageDisplay `displayContent` straight through - both badges rendered correctly in the real
 # terminal, confirmed on the same session that first shipped this (both colours, not garbage
@@ -50,7 +57,8 @@ case "$INPUT" in *operator:*) ;; *) exit 0 ;; esac
 DELTA="$(printf '%s' "$INPUT" | jq -r '.delta // empty' 2>/dev/null || true)"
 [ -n "$DELTA" ] || exit 0
 
-TAG_RE='^operator:(want_input|ask_next|no_input_required\|reason:.+)$'
+# The run tags may be indented (a hand-back inside a list item; the indentation is kept in the badge line) and may carry trailing whitespace or a CR.
+TAG_RE='^(operator:(want_input|ask_next|no_input_required\|reason:.+)|[[:space:]]*operator:run\|kind:(policy|oneoff)[[:space:]]*)$'
 MATCHED="$(printf '%s' "$DELTA" | grep -aE "$TAG_RE" || true)"
 [ -n "$MATCHED" ] || exit 0   # no tag in this batch - stay silent, original renders unchanged
 
@@ -90,7 +98,15 @@ else
 fi
 # ask_next: same orange as "wants input" (a question is coming), plain text, no glyph.
 BADGE_ASK="$(printf '%s[[ QUESTION NEXT ]]%s' "$C_OR" "$C_RS")"
-SEDSCRIPT='s/^operator:want_input$/'"$BADGE_WANT"'/; s/^operator:ask_next$/'"$BADGE_ASK"'/; s/^operator:no_input_required\|reason:.+$/'"$BADGE_NONE"'/'
+# Hand-back badges: a shared "YOU RUN:" prefix (the operator, not the agent, runs the next line) and
+# two colours of their own, so neither reads as a turn-end badge. Policy (persists) is bold red,
+# one-off is bold cyan; the words differ too, so a monochrome or NO_COLOR read still tells them apart.
+# No glyph in either mode: the words carry the distinction.
+C_PO="$(printf '\033[1;31m')"; C_OO="$(printf '\033[1;36m')"
+[ -n "${NO_COLOR:-}" ] && { C_PO=""; C_OO=""; }
+BADGE_POLICY="$(printf '%s[[ YOU RUN: POLICY CHANGE, PERSISTS ]]%s' "$C_PO" "$C_RS")"
+BADGE_ONEOFF="$(printf '%s[[ YOU RUN: ONE-OFF ]]%s' "$C_OO" "$C_RS")"
+SEDSCRIPT='s/^operator:want_input$/'"$BADGE_WANT"'/; s/^operator:ask_next$/'"$BADGE_ASK"'/; s/^operator:no_input_required\|reason:.+$/'"$BADGE_NONE"'/; s/^([[:space:]]*)operator:run\|kind:policy[[:space:]]*$/\1'"$BADGE_POLICY"'/; s/^([[:space:]]*)operator:run\|kind:oneoff[[:space:]]*$/\1'"$BADGE_ONEOFF"'/'
 STRIPPED="$(printf '%s' "$DELTA" | sed -E "$SEDSCRIPT")"
 # A sed failure (absent from a restricted PATH, no -E support) yields an empty capture with no
 # error surfaced - opus reviewer, 2026-09-17, MEDIUM: unguarded, that would publish

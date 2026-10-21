@@ -12,7 +12,7 @@
 #   agent-tiers reach list
 # reach list shows reach-guard's user allowlist ($CFG/reach-guard/allow.tsv); it needs no jq and never
 # writes. The CLI never writes that file: the user adds a row with the printf line reach-guard's prompt
-# shows (see docs/after-install.md).
+# shows (see docs/extending.md#reach-guard-allowlist).
 # Every effect goes through one function: edit_settings (the only settings.json writer, at most one
 # call per run, backup first), remove_path (the only rm), run_engine (scripts/install-flat.sh) and
 # run_reader (scripts/detect-env.sh, scripts/kit-gate.sh). agent-tiers.selfcheck.sh lints the rest.
@@ -33,7 +33,7 @@ usage() {
     '  --dry-run       print the plan --yes would apply, write and run nothing (install, configure)' \
     '' \
     'usage: agent-tiers reach list   show the reach-guard user allowlist (read-only; the CLI never writes it,' \
-    '                                see docs/after-install.md to add a row)'
+    '                                see docs/extending.md#reach-guard-allowlist to add a row)'
 }
 bad_usage() { [ $# -gt 0 ] && err "$*"; usage >&2; exit 2; }
 abort() { printf '\n' ; err 'aborted, nothing written'; exit 1; }
@@ -443,7 +443,7 @@ if [ "$cmd" = remove ]; then
       --arg ek "$env_keys" --arg slc "$sl_main" --arg ssc "$sl_sub" || exit 1
   fi
   nbak=$(ls -1 "$settings".bak-* 2>/dev/null | wc -l | tr -d ' ')
-  printf '%s\n' 'Not automated (see docs/uninstall.md):' \
+  printf '%s\n' 'Not automated (see docs/install.md#remove):' \
     "  $nbak settings.json.bak-* file(s) next to $settings, left as recovery copies" \
     '  ~/.codex-homes (per-session Codex config copies)' \
     '  per-project artifacts written by /agent-tiers:init' \

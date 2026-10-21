@@ -89,12 +89,23 @@
 # `verb` rows; docker only with a remote daemon or a context change; `gh api` is ro for a GET with no
 # body flag and only `readopt` flags, graphql is act. gh subcommands other than api are group gh_write,
 # off by default. Command words: `argv` wrappers are walked through (an unknown wrapper option followed
-# by a dash word is unsure when a class word is present); an opaque command word is unsure, except a
+# by a dash word is unsure when a class word is present; one followed by a class program in any case,
+# env -i SSH, nice -5 SSH, is walked into as that program); an opaque command word is unsure, except a
 # plain parameter (a dollar sign and a bare name, braced or not), a leading ~ path, or a glob with a literal
 # directory part whose last component can match no class program or wrapper name (./*.sh), which are
-# unsure only beside a class word; an
-# unknown command not on the `noexec` list whose first operand is a class program is unsure; a command
-# holding a 0x1D or 0x1F byte and a class word is unsure.
+# unsure only beside a class word; a plain $NAME or ${NAME} whose value in the environment the hook
+# inherited (the Bash tool base environment) runs a class program, in any case, is unsure outright (a
+# variable set only by the shell profile or earlier in the command, or named RG_*, is not seen); an
+# unknown command not on the `noexec` list (plus the built-in cd pushd popd mkdir rmdir touch) whose
+# first operand is a class program in lowercase (du -sh AWS passes) is unsure; a command
+# holding a 0x1A, 0x1D, 0x1E or 0x1F byte and a class word is unsure. On a coarse route (parser library
+# or class data missing, over 20,000 characters, a control byte, over 200 segments) the class word is
+# also read in any case at a command position (capcw: after redirects and their target word, assignments,
+# shell keywords and wrappers with their -options and bare numbers), and the whole command is scanned, not
+# the text up to a 0x1A. The depth cap (substitutions nested deeper than 3) uses the same test. Both also
+# get the position-blind protection scan (blind_scan), where a protected script name is denied beside a
+# write verb, a >, or an interpreter word (an icls name, a shell only with a later -c style cluster); in a
+# capped body that is by name, so a dev copy path written there is denied too.
 #
 # Protection: Edit/Write/MultiEdit/NotebookEdit into the user reach-guard dir, the kit data file, the kit
 # (and state dir) .state/reach-guard/ or .state/off/reach-guard, and, in the kit this guard runs from only
@@ -117,37 +128,60 @@
 # diff/status/blame without --output; no write redirect, no tee, no -i; less without -o, --log-file or a
 # + command); any write onto a settings*.json destination, wherever it is (redirect, cp/mv/ln/install
 # target, tee, sponge, dd of=, sed -i; the verb found anywhere in the segment, so launchers are covered),
-# sent to the Edit tool instead; and a write onto reach-guard*.sh, kit-gate.sh or options.tsv (or a glob
-# word matching one) by the same destination rules, an rm, unlink, shred, truncate or mv of one, or a
-# cp, ln, install or mv of one into a directory-like destination. The stand-down word rule skips a jq,
-# echo, printf (no -v) or git commit/tag/notes with a message, at top level outside any group or compound,
-# with no write redirect, whose output goes nowhere or only into pure readers. A word those rules flag
-# denies only when it lands anywhere inside the kit this guard runs from (any depth), the user
-# reach-guard dir or the state dir, in a path holding one of them, or, for a last-component glob, in the
-# user dir parent; it passes when it is a literal path (a leading ~/ allowed) that lands outside all
-# three, so a dev copy of the kit is not protected. Only a write redirect target or a write verb operand
-# (rm unlink shred truncate mv cp ln install tee sponge, sed -i, dd of=, a cd/pushd target) is placed;
-# any other flagged word (a find pattern, a word under another program) denies by name. Placing:
-# resolved like the Edit route (lexical, readlink -f, the path and its directory through cd -P); a
-# relative word joins the payload cwd, moved only by a leading run of plain `cd <dir>`/`pushd <dir>`
-# segments of the top-level command joined by && (replaced) or ; or a newline (old and new unioned).
+# sent to the Edit tool instead; and a write onto reach-guard*.sh, kit-gate.sh, options.tsv, guard-cmdpos.sh
+# or hooks.json (or a glob word matching one) by the same destination rules, an rm, unlink, shred, truncate or
+# mv of one, or a cp, ln, install or mv of one into a directory-like destination. The stand-down word rule
+# skips a jq, echo, printf (no -v) or git commit/tag/notes with a message, at top level outside any group or
+# compound, with no write redirect, whose output goes nowhere or only into pure readers. A word those rules
+# flag denies only when it lands anywhere inside the kit this guard runs from (any depth), the user
+# reach-guard dir or the state dir, in a path holding one of them, or, for a last-component glob, in the user
+# dir parent; it passes when it is a literal path (a leading ~/ allowed) that lands outside all three, so a
+# dev copy of the kit is not protected. Only a write redirect target or a write verb operand (rm unlink shred
+# truncate mv cp ln install tee sponge, sed -i, dd of=, a cd/pushd target) is placed; any other flagged word
+# (a find pattern, a word under another program) denies by name. Placing: resolved like the Edit route
+# (lexical, readlink -f, the path and its directory through cd -P); a relative word joins the payload cwd,
+# moved only by a leading run of plain `cd <dir>`/`pushd <dir>` segments of the top-level command joined by &&
+# (replaced) or ; or a newline (old and new unioned).
 # Unplaceable, so denied by name as before: a word with an expansion, a non-path character, a ~ other
 # than a leading ~/ (a ~user form, ~ after = or :), a glob in a directory component, or a glob anywhere
 # but an rm or unlink operand or an mv source; every relative word when there is no payload cwd, when
 # a cd, pushd, popd, chdir, eval, source, dot script or opaque command word appears anywhere else in
-# the command, or, with a leading cd, when the command holds a group, compound, !, quoted newline, ||
-# or CDPATH/cdpath text, or past 32 possible directories; any word in a segment with a chdir option
-# (clustered -C, a --chdir/--directory/--cwd prefix, -execdir, sudo or run0 -D and the like), find -exec,
-# -ok or -delete, xargs, parallel, or a container, chroot or remote launcher; any word in a command
-# holding a segment that may make or move a symlink (ln, mv, cp with an option, tar, rsync, unzip,
-# mount, patch, git checkout/switch/restore/apply/worktree/clone/stash/reset/merge/pull). Cap: past 32
-# placed paths in one command, the command is denied (fail closed).
+# the command, or, with a leading cd, when the command holds a group, compound, !, a quoted newline (joined or
+# not), || or CDPATH/cdpath text, or past 32 possible directories; any word in a segment with a chdir option
+# (clustered -C, a --chdir/--directory/--cwd prefix, -execdir, sudo or run0 -D and the like), find -exec, -ok
+# or -delete, xargs, parallel, or a container, chroot or remote launcher; any word in a command holding a
+# segment that may make or move a symlink (ln, mv, cp with an option, tar, rsync, unzip, mount, patch, git
+# checkout/switch/restore/apply/worktree/clone/stash/reset/merge/pull). Cap: past 32 placed paths in one
+# command, the command is denied (fail closed). Cap: past 200 segments (parsed segments plus twice the
+# substitution bodies extracted) the command skips the parse and gets the coarse class-word scan (unsure
+# on a class word, a protected-path scan always), since the parse loop costs a few awk processes per segment and a
+# timed-out hook lets the call run.
 # Naming, reading, running and `git add` of those files pass; a segment whose command word, walked
 # through the argv wrapper rows, is a reader (the pure-read list without less, rg without --pre, git
 # diff/status/blame/log/show/grep without --output or -O) is exempt from the word rules, never from a
-# redirect. hooks.json and guard-cmdpos.sh have no Bash rule. A cd/pushd judges its own write redirects;
-# a cd/pushd into a protected directory (or the kit or state .state/off) makes every later segment with
-# a command word or a write redirect a protected write.
+# redirect. A cd/pushd judges its own write redirects; a cd/pushd into a protected directory (or the
+# kit or state .state/off) makes every later segment with a command word or a write redirect a
+# protected write.
+# Interpreter inline code, in a segment that is not a pure read: each word in turn (until one gives
+# code, so env -u node python3 -c is read) whose lowercase
+# basename is python, python2, python3, python3.N, pypy, pypy3, node, nodejs, bun, deno, perl, perl5.N,
+# ruby or php, or bash sh zsh dash ksh with a -c style cluster before their first operand (an -o/+o or
+# -O/+O word, or a short cluster holding o or O, takes the next word as its value, -euo pipefail), gives code
+# text: the python/pypy -c word (or attached -cCODE), the node/nodejs/bun -e/--eval/-p/--print word
+# (a short cluster ending in e or p, -pe; --eval=CODE and --print=CODE attached), the php -r word, the
+# words after deno eval, every perl/ruby -e word (a short cluster whose leading letters hold e, perl
+# also E: the text after it, -eCODE or -leCODE, or else the next word), each of those plus every word
+# after the code word (argv operands), every word after a shell -c; a substitution placeholder in that
+# text adds its original body and, when the raw command holds <<, the whole raw command; an
+# interpreter with no inline code, no script operand and no option but a lone -, in a segment with a
+# stdin redirect (< << <<- <<<) or after a | or |&, reads stdin, and the whole raw command is its code
+# text (added once per command, so a long command is not rescanned per segment). Every maximal path-like run
+# ([A-Za-z0-9._/~@%+-]) of that text whose basename is a protected name above, or that the
+# reach-guard/reach-classes component rule flags, is placed like a write operand and denied when it
+# lands in the running kit, read or write alike (the guard cannot tell them apart in code); a run right
+# after $ { } or a backtick, one holding %, or a relative one when the code text holds chdir is denied
+# by name. Running a script file (sh <kit>/scripts/kit-gate.sh, python3 x.py, -m module) and an input
+# redirect are not judged.
 #
 # Ceilings it cannot see (disclosed): scripts, task runners and interpreters that reach out (./deploy.sh,
 # make, npm run, python with boto3 or paramiko), a script written by the Write tool and then run, aliases
@@ -161,24 +195,57 @@
 # interpreter (python, node) that names no stand-down key word - only the Edit route checks hooks rows;
 # an unknown launcher (no `wrapper` row) that takes an option value before its program (`x -o v ssh`)
 # is not seen, since only its first operand is tested. Protected script names are still writable through
-# git checkout/restore/apply, an interpreter (perl -i, python, node), another program's own output
-# option (sort -o, less -o, curl -o) or program option (git grep -O<program>), rm or mv fed their operands by xargs from stdin, a string wrapper
-# (bash -c), a path built at run time, a hard link made earlier, a glob with no literal text (rm
-# scripts/*), a copy into an existing directory whose name holds a dot given with no trailing slash
-# (cp x/kit-gate.sh dir.d), or the removal or move of a whole directory holding them; on a case-sensitive filesystem a
-# differently cased name is denied too. A class program in another case (SSH) is read as that program
-# only at a command-word position; the class-word text scan of string wrappers and heredocs matches
-# lowercase only, so `bash -c 'SSH host'` is not seen. Slim arm: string wrappers (bash -c, sh -c, eval,
-# trap, watch, su -c, env -S, flock -c) and stdin wrappers (xargs, parallel, find -exec) are not walked
-# into, except xargs with only the options its own strict parser knows (no replace-style, optional-argument
-# or prefix form) running a docker-remote program (docker) whose literal first positional is no
-# `context`, with no unknown option before it, and whose given words name no remote daemon:
-# the words it appends cannot change that verdict. Otherwise a class word in such a segment (read with
-# quotes and backslashes removed) is unsure, and one
-# whose text holds $'..', a \x or octal escape, or ${..} with an operator is unsure outright; a string
-# built by a plain $var or a substitution printing a name is not seen. Any remote string holding a
-# metacharacter is act. A PreToolUse hook that times out gives no decision; the 20,000-character cap
-# bounds parse time.
+# git checkout/restore/apply, an interpreter whose code builds the path at run time (a variable,
+# os.path.join pieces: a bare protected basename in code text is placed relative to the cwd, so
+# os.path.join('<kit>/hooks','hooks.json') from a cwd outside the kit passes; a string decoded at
+# run time), runs a script file or reads its code from a file, or passes a value-taking option
+# before -c (python3 -W x,
+# so the value reads as a script operand; a python flag cluster ending in c, such as -Ic, is not read
+# as -c either), a shell reading a heredoc with no -c, another program's own output option (sort -o,
+# less -o, curl -o) or program option (git grep -O<program>), rm or mv fed their operands by xargs from
+# stdin, a string wrapper other than a shell -c (eval, su -c, env -S and the like), a path built at run
+# time, a hard link made earlier, a glob with no literal text (rm scripts/*), a copy into an existing
+# directory whose name holds a dot given with no trailing slash (cp x/kit-gate.sh dir.d), or the removal
+# or move of a whole directory holding them; on a case-sensitive filesystem a differently cased name is
+# denied too. A class program in another case (SSH) is read as that program only at a command-word
+# position; the class-word text scans that still match lowercase only are string wrappers, heredocs,
+# stdin wrappers, a stdin shell, an unbalanced segment, an opaque command word's segment, the class
+# word beside a variable command word and the first operand of an unknown launcher, so `bash -c 'SSH
+# host'` and `x SSH host` are not seen. Slim arm: string wrappers
+# (bash -c, sh -c, eval, trap, watch, su -c, env -S, flock -c) and stdin wrappers (xargs, parallel,
+# find -exec) are not walked into, except xargs with only the options its own strict parser knows (no
+# replace-style, optional-argument or prefix form) running a docker-remote program (docker) whose literal
+# first positional is no `context`, with no unknown option before it, and whose given words name no remote
+# daemon: the words it appends cannot change that verdict. Otherwise a class word in such a segment (read with
+# quotes and backslashes removed) is unsure, and one whose text holds $'..', a \x or octal escape, or ${..}
+# with an operator is unsure outright; a string built by a plain $var or a substitution printing a name is not
+# seen. Any remote string holding a metacharacter is act. A PreToolUse hook that times out gives no decision;
+# the 20,000-character cap and the 200-segment cap bound parse time. On a coarse route the protection scan
+# is position-blind, so a protected name next to any write verb or interpreter word elsewhere in the
+# command (cat hooks.json; rm tmp) is a false deny. An inherited environment value holding a newline
+# followed by NAME=text reads to envcw as a second value for NAME when NAME is also inherited, and both
+# values are tested (fails toward deny); a NAME the hook did not inherit is dropped.
+# hd_rule reads << without quote or comment awareness, so a quoted or commented << can open a heredoc.
+# The substitution extraction (ext in SUBS) does not know # comments: a quote, $( or backtick inside one
+# is read as live text, so it can open, or hide, a substitution body.
+# A capped body (substitutions nested deeper than 3) is judged by blind_scan without its parent's
+# interpreter, so interpreter code built inside one is not read.
+# An awk program, or a sed w command, that writes a file from its own code text is not read.
+# The raw command is read for interpreter code once per command, not once per interpreter segment.
+# A stdin interpreter is any interpreter word of a piped or stdin-redirected segment, also an operand
+# (cat x | tee /tmp/python3 is judged as python3 reading stdin, a false deny), since icode does not walk
+# the argv wrapper rows from the command word.
+# An inherited environment over 100000 bytes is not read: envcw then sees no variable values, so a
+# variable command word whose inherited value runs a class program ($DOCKER ps) is not caught.
+# hooks.json written through an unplaceable shape (a variable path, a command holding mv, ln, cp with an
+# option, tar or rsync, a non-leading cd, find -exec, xargs) is denied by name, also in a plugin repo or
+# a dev copy.
+# A newline inside a single- or double-quoted region (a multi-line commit message) stays inside its
+# segment, so a class word in it is an argument, not a command; a backslash-newline inside double
+# quotes is removed as a line continuation. A record holding $'..', ${, $(, a backtick, <<, a 0x1E
+# byte, a # comment with a quote or backslash in it, or a quote still open at its end is not joined:
+# every newline in it stays a segment boundary (the old per-line rule), and a fragment left with an
+# open quote and a class word is unsure.
 #
 # Logs (${AGENT_TIERS_GUARDS_LOG:-<kit>/.state/guards.log}) never carry command text or a gh query
 # string: `<ts> reach-guard deny|ask|allow: <group>/<program> <verb-row> target=<t> level=<l> why=<code>
@@ -188,8 +255,15 @@
 # `note:`. Fails open only for no jq and an unparseable payload.
 # Self-check: reach-guard.selfcheck.sh
 set -u
+# Snapshot the inherited environment before this script assigns anything: a name imported from the environment
+# stays exported when reassigned (CMD, INPUT, KIT, SID ...), so ENVIRON in the awk would read the script own
+# value. envcw reads the inherited value from here. Not exported: an inherited RG_ENV0 is unset first (which
+# drops its export flag), and only the cls awk, the one that runs envcw, is given the snapshot.
+unset RG_ENV0; RG_ENV0="$(env 2>/dev/null)"
 [ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 LC_ALL=C; export LC_ALL
+# an environment snapshot over 100000 bytes is dropped (an over-long string could fail the awk exec: fail open)
+[ ${#RG_ENV0} -gt 100000 ] && RG_ENV0=
 
 SELFDIR="$(CDPATH= cd -P "$(dirname "$0")" 2>/dev/null && pwd -P || true)"
 [ -n "$SELFDIR" ] || SELFDIR="$(dirname "$0")"
@@ -269,6 +343,7 @@ if [ -f "$SELFDIR/guard-cmdpos.sh" ] && (. "$SELFDIR/guard-cmdpos.sh") >/dev/nul
     command -v "$f" >/dev/null 2>&1 || LIBOK=0
   done
   [ -n "$(guard_ask_prefix "" subagent 2>/dev/null)" ] || LIBOK=0
+  [ -n "${GUARD_AWK_HDWORD:-}" ] || LIBOK=0
 fi
 if [ "$LIBOK" = 1 ]; then
   AGENT="$(guard_caller_agent "$INPUT")"
@@ -813,9 +888,15 @@ The command spans several lines: save it as a script and run that instead." ;; e
   printf '%s\nDo not retry a variant or route around it with another tool.' "$hb"
 }
 
+# RG_HDW: the library's shared heredoc-delimiter reader (hd_word, used by hd_rule) or, when the library
+# is missing or stale, a stub that recognises no opener, so the AWK text below still compiles in coarse
+# mode (an undefined function would fail awk and the coarse fallback would print nothing: fail open).
+if [ "$LIBOK" = 1 ]; then RG_HDW="$GUARD_AWK_HDWORD"; else RG_HDW='
+function hd_word(s, i) { HD_END = i + 2; return 0 }
+'; fi
 # AWK: the classifier. Modes: coarse (stdin = raw command: class word and raw protection scan only) and
 # cls (stdin = the token stream built below; env RG_CMD = raw command).
-AWK="$AWKLIB"'
+AWK="$AWKLIB$RG_HDW"'
 function hascw(t,   n, A, i) {
   n = split(t, A, /[^A-Za-z0-9_-]+/)
   for (i = 1; i <= n; i++) if (A[i] in CW) { CWW = A[i]; return 1 }
@@ -886,16 +967,16 @@ function pureread(s, cw,   i, t, p, nx) {
   return 1
 }
 function issetjson(w) { return tolower(base(w)) ~ /^settings.*\.json$/ }
-# isprotname(w): the basename (any case) is reach-guard*.sh, kit-gate.sh or options.tsv, or a glob word
-# with a literal residue that matches one of those names
+# isprotname(w): the basename (any case) is reach-guard*.sh, kit-gate.sh, options.tsv, guard-cmdpos.sh or
+# hooks.json, or a glob word with a literal residue that matches one of those names
 function isprotname(w,   b, lit, re) {
   b = tolower(base(w))
-  if (b ~ /^reach-guard.*\.sh$/ || b == "kit-gate.sh" || b == "options.tsv") return 1
+  if (b ~ /^reach-guard.*\.sh$/ || b == "kit-gate.sh" || b == "options.tsv" || b == "guard-cmdpos.sh" || b == "hooks.json") return 1
   if (b !~ /[*?[]/) return 0
   lit = b; gsub(/\[[^]]*\]/, "", lit); gsub(/[*?[]/, "", lit)
   if (lit == "") return 0
   re = glob2re(b)
-  return ("reach-guard.sh" ~ re || "reach-guard-grant.sh" ~ re || "reach-guard.selfcheck.sh" ~ re || "kit-gate.sh" ~ re || "options.tsv" ~ re)
+  return ("reach-guard.sh" ~ re || "reach-guard-grant.sh" ~ re || "reach-guard.selfcheck.sh" ~ re || "kit-gate.sh" ~ re || "options.tsv" ~ re || "guard-cmdpos.sh" ~ re || "hooks.json" ~ re)
 }
 function isk(w, nm) { return nm ? isprotname(w) : issetjson(w) }
 # hitw(p, nm, o): a destination p setw found; nm 0 (settings*.json) stops there, nm 1 (a protected script
@@ -1196,7 +1277,8 @@ function nset(A,   x, n) { n = 0; for (x in A) n++; return n }
 # set is replaced) or by ; or a newline (old and new unioned); a top-level separator after the run other
 # than && or a pipe brings back the directories a failed cd leaves. Unknown ("") for the whole command,
 # substitutions included: a cd-like word anywhere else (cdlike), a run cd joined by || | or &, or, with a
-# run, a group, compound, ! or quoted newline, a || anywhere, or CDPATH or cdpath text (any case); past
+# run, a group, compound, ! or quoted newline (an unbalanced `u` record, or a 0x1E rg_qjoin put in any
+# record text), a || anywhere, or CDPATH or cdpath text (any case); past
 # 32 directories. PFX[s] marks a run cd, PNW[s, 1..PNN[s]] where it went (for the cd taint). Any
 # aliasseg segment anywhere sets NORES.
 function cwdplan(   s, inpx, npx, x, sp, tail, ALT) {
@@ -1215,6 +1297,7 @@ function cwdplan(   s, inpx, npx, x, sp, tail, ALT) {
   }
   if (npx > 0) {
     if (RGRP["0"] || index(tolower(ENVIRON["RG_CMD"]), "cdpath")) RELOK = 0
+    for (x in RECT) if (index(RECT[x], "\036")) RELOK = 0
     for (s = 1; s <= NS; s++) if (SR[s] == "0" && (SEP[s] == "||" || SEP[s] == "?")) RELOK = 0
   }
   if (!RELOK) { split("", CSS); CSS[""] = 1; return }
@@ -1283,6 +1366,125 @@ function setexempt(s, cw,   i, t, p, op, tg, j, ok, ni, b) {
   cmdword(s)
   return ok && SEP[j] != "?"
 }
+# ---- interpreter inline code ----
+# icls(w): the interpreter family of a word by its lowercase basename: py (python, python2, python3,
+# python3.N, pypy, pypy3), js (node, nodejs, bun), deno, pl (perl, perl5.N), rb (ruby), php, sh (bash sh
+# zsh dash ksh); "" for any other word
+function icls(w) {
+  w = tolower(base(w))
+  if (w ~ /^(python|python2|python3|python3\.[0-9]+|pypy|pypy3)$/) return "py"
+  if (w ~ /^(node|nodejs|bun)$/) return "js"
+  if (w == "deno") return "deno"
+  if (w ~ /^(perl|perl5\.[0-9]+(\.[0-9]+)?)$/) return "pl"
+  if (w == "ruby") return "rb"
+  if (w == "php") return "php"
+  if (w ~ /^(bash|sh|zsh|dash|ksh)$/) return "sh"
+  return ""
+}
+# icode(s): 1 when an interpreter word of segment s runs code text the guard can read, left in ICT.
+# Every interpreter word is tried in turn (env -u node python3 -c ..., where the first is an option
+# value) until one gives code; its argv operands then hold every later word, so the search stops there.
+# Code text: the word after python/pypy -c (or the rest of an attached -cCODE); after node/nodejs/bun -e,
+# --eval, -p, --print or a short cluster ending in e or p (or the rest of --eval=CODE, --print=CODE);
+# after php -r; every non-option word after deno eval; every -e code of perl or ruby (see the cluster
+# rule in the loop); each of those plus every word after the code word (argv operands); every word
+# after the -c style cluster of a shell (an -o/+o/-O/+O word or a short cluster holding o or O takes the
+# next word as its value; a shell with no such cluster before its first operand is not judged). A
+# substitution placeholder in ICT adds its original body, and the whole raw command when that holds
+# `<<`. An interpreter that reads its code from stdin (no inline code, no script operand, no option but
+# a lone `-` or a no-value flag: python -u -B -E -I -s -S -q, node --no-warnings, perl -w, and the segment holds a stdin redirect `<` `<<` `<<-` `<<<` or follows a | or |&, or a
+# separator mksep could not line up (?), in its record) adds the whole raw command (heredoc bodies are stripped before the token stream is built).
+# The raw command is added at most once per command (RAWDONE), so a long command with many interpreter
+# words is scanned once, not once per segment. A script operand (python3 x.py, -m module, sh x.sh) and
+# an input redirect are never code text.
+function icode(s,   i, c, n, W, k, j, m, p, got, scr, opt, a, e, t, id, SEEN, CT, any, raw, rd, pp, nov) {
+  ICT = ""; any = 0; raw = 0
+  rd = 0; for (k = 1; k <= TN[s]; k++) if ((TT[s, k] == "r" || TT[s, k] == "R") && TP[s, k] ~ /^0?<(<-?|<<)? /) rd = 1
+  # SEP ? (mksep could not line the record up) may be a pipe: read the raw command
+  pp = (s > 1 && SR[s - 1] == SR[s] && (SEP[s - 1] == "|" || SEP[s - 1] == "|&" || SEP[s - 1] == "?"))
+  n = 0; for (k = 1; k <= TN[s]; k++) if (TT[s, k] == "w" || TT[s, k] == "o") W[++n] = TP[s, k]
+  for (m = 1; m <= n && !any; m++) {
+  if ((c = icls(W[m])) == "") continue
+  got = 0; scr = 0; opt = 0; a = 0; CT = ""
+  # flags that take no value and name no script leave the stdin rule on
+  nov = (c == "py") ? " -u -B -E -I -s -S -q " : (c == "js") ? " --no-warnings " : (c == "pl") ? " -w " : ""
+  for (j = m + 1; j <= n; j++) {
+    p = W[j]
+    if (c == "sh") {
+      if (p ~ /^-[A-Za-z]*c[A-Za-z]*$/) { got = 1; for (k = j + 1; k <= n; k++) CT = CT " " W[k]; break }
+      # -o/+o, -O/+O or a short cluster holding o or O takes the next word as its value (-euo pipefail)
+      if (p ~ /^[-+][A-Za-z]*[oO][A-Za-z]*$/) { j++; continue }
+      if (p !~ /^[-+]/) break
+      continue
+    }
+    if (c == "deno") {
+      if (p == "eval") { got = 1; for (k = j + 1; k <= n; k++) if (W[k] !~ /^-/) CT = CT " " W[k]; break }
+      if (p !~ /^-/) { scr = 1; break }
+      opt = 1; continue
+    }
+    if (c == "pl" || c == "rb") {
+      if (p ~ /^-./) {
+        if (!index(nov, " " p " ")) opt = 1
+        # the first e (perl also E) among the leading letters of a short cluster opens the code: the
+        # rest of the word (-eCODE, -leCODE), or the next word when nothing follows; an over-read of a
+        # value-taking letter (-MDevel) only adds text, which fails toward deny
+        e = 0
+        if (match(p, /^-[A-Za-z]*/)) {
+          t = substr(p, 2, RLENGTH - 1); e = index(t, "e")
+          if (c == "pl" && (k = index(t, "E")) && (!e || k < e)) e = k
+        }
+        if (e) { got = 1; t = substr(p, e + 2); CT = CT " " ((t == "") ? W[++j] : t) }
+        continue
+      }
+      if (got) { a = j; break }
+      if (p != "-") scr = 1
+      break
+    }
+    if (p == "-") break
+    if (c == "py" && p ~ /^-c/) { got = 1; if (p == "-c") { CT = W[j + 1]; a = j + 2 } else { CT = substr(p, 3); a = j + 1 }; break }
+    if (c == "js" && p ~ /^--(eval|print)=/) { got = 1; CT = substr(p, index(p, "=") + 1); a = j + 1; break }
+    if (c == "js" && (p == "--eval" || p == "--print" || p ~ /^-[A-Za-z]*[ep]$/)) { got = 1; CT = W[j + 1]; a = j + 2; break }
+    if (c == "php" && p == "-r") { got = 1; CT = W[j + 1]; a = j + 2; break }
+    if (p !~ /^-/ || (c == "py" && p == "-m")) { scr = 1; break }
+    if (!index(nov, " " p " ")) opt = 1
+  }
+  if (got) {
+    # every word after the code word is argv the code may use (sys.argv, process.argv, ARGV, $argv)
+    if (a) for (k = a; k <= n; k++) CT = CT " " W[k]
+    ICT = CT; any = 1
+  } else if (c != "sh" && !scr && !opt && (rd || pp)) raw = 1
+  }
+  if (any) {
+    # a substitution placeholder is followed by its original body (as segtext); heredoc bodies are
+    # stripped before the token stream is built, so a raw command holding << is added whole
+    t = ICT; e = 0
+    while (match(t, /\$__RG[0-9]+_/)) {
+      id = substr(t, RSTART + 5, RLENGTH - 6); t = substr(t, RSTART + RLENGTH); e = 1
+      if ((id in BO) && !(id in SEEN)) { SEEN[id] = 1; ICT = ICT " " BO[id] }
+    }
+    if (e && index(ENVIRON["RG_CMD"], "<<")) raw = 1
+  }
+  # the raw command, once per command (a later segment under another cwd set is not rescanned)
+  if (raw && !RAWDONE) { RAWDONE = 1; ICT = ICT " " ENVIRON["RG_CMD"]; any = 1 }
+  return any
+}
+# iscan(): every maximal path-like run ([A-Za-z0-9._/~@%+-]) of ICT whose basename isprotname() takes, or
+# that protword() flags, is placed like a write operand (absolute as is, a leading ~/ as the home form,
+# relative against the cwd set); a read is judged the same, since the guard cannot tell a read in the code text
+# from a write. Unplaceable, so denied by name: a run right after $ { } or a backtick (a
+# path built from a variable), one holding %, a relative one when the code text holds chdir (any
+# case), or any place() refuses. 1 = denied (PROT printed).
+function iscan(   x, tok, pre, lab, chd) {
+  x = ICT; chd = index(tolower(ICT), "chdir")
+  while (match(x, /[A-Za-z0-9._\/~@%+-]+/)) {
+    tok = substr(x, RSTART, RLENGTH); pre = (RSTART > 1) ? substr(x, RSTART - 1, 1) : ""
+    x = substr(x, RSTART + RLENGTH)
+    lab = protword(tok); if (lab == "" && isprotname(tok)) lab = base(tok)
+    if (lab == "") continue
+    if (pre ~ /[$`{}]/ || index(tok, "%") || (chd && tok !~ /^[\/~]/) || !place("f", tok, (tok ~ /^~\//), lab, 0)) { print "PROT\t" lab; return 1 }
+  }
+  return 0
+}
 function prot_scan(   s, prev, i, t, w, o, x, cw, tw, twi, tfl, kn, iscd, k) {
   prev = SUBSEP; split("", CSS); split("", CEM); split("", CDD); split("", NEWS)
   PCWD = ENVIRON["RG_PCWD"]; if (PCWD !~ /^\// || index(PCWD, "\n") || index(PCWD, "\t")) PCWD = ""
@@ -1337,6 +1539,8 @@ function prot_scan(   s, prev, i, t, w, o, x, cw, tw, twi, tfl, kn, iscd, k) {
         if (kn && KP[i] == "dd") w = substr(w, 4)
         if (!kn || !place("f", w, o, x, (t != "r" && t != "R" && KP[i] == "g"))) { print "PROT\t" x; return 1 }
       }
+      # interpreter inline code naming a protected file is placed the same way (icode, iscan)
+      if (icode(s) && iscan()) return 1
       if (settings_hit(ST[s]) && !setexempt(s, cw)) { print "PROT\tsettings"; return 1 }
       if (CWI > 0 || haswr(s)) { if (CARRY) { print "PROT\t(cwd)"; return 1 } for (k = 1; k <= NCDD; k++) emitc("d", CDD[k], "(cwd)") }
     }
@@ -1375,6 +1579,21 @@ function unsure_now(s, why, whyt) {
 function hidden(x) {
   return (index(x, "$\047") || x ~ /\\x[0-9A-Fa-f]/ || x ~ /\\[0-7]/ || x ~ /\$\{[^}]*[^A-Za-z0-9_}]/)
 }
+# envcw(s, p): p is $NAME or ${NAME} (a name, not a digit and not one of the guard own RG_ variables) and
+# its value in the hook environment, which is the Bash tool base environment, runs a class program.
+# A variable set only by the shell profile or earlier in the command is not visible here.
+function envcw(s, p,   nm, v, ne, ei, en) {
+  nm = p; sub(/^\$\{?/, "", nm); sub(/\}$/, "", nm)
+  if (nm !~ /^[A-Za-z_][A-Za-z0-9_]*$/ || nm ~ /^RG_/) return 0
+  if (!ENV0LOADED) {
+    ENV0LOADED = 1; ne = split(ENVIRON["RG_ENV0"], EL, "\n")
+    for (ei = 1; ei <= ne; ei++) if (EL[ei] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { en = substr(EL[ei], 1, index(EL[ei], "=") - 1); if (en in ENVIRON) ENV0[en] = ((en in ENV0) ? ENV0[en] "\n" : "") substr(EL[ei], length(en) + 2) }
+  }
+  v = ENV0[nm]
+  if (v == "" || !capcw(v)) return 0
+  L = "unsure"; WHY = "opaque-command"; WHYT = "the command word is a variable whose value in this environment runs " CWW; PRG = CWW; GRP = CWG[CWW]
+  return 1
+}
 # opaque_cmd(s, p): an opaque word at command position. A plain parameter (a dollar sign and a bare name or digit, braced or not), a
 # leading ~ path, a path whose directory part holds only plain parameters and whose last component
 # is literal ("$HOME/bin/tool"), and a glob globcmd accepts keep the class-word rule; anything else
@@ -1383,7 +1602,7 @@ function opaque_cmd(s, p) {
   if (p == "[" || p == "[[") return 0
   if (p !~ /\$__RG/ && (p ~ /^\$([A-Za-z_][A-Za-z0-9_]*|[0-9]|\{[A-Za-z_][A-Za-z0-9_]*\})$/ || p ~ /^~[^$`*?[{]*$/ || \
       (p ~ /^(\$([A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})|[A-Za-z0-9_.~\/-])*\/[A-Za-z0-9_.-]+$/)))
-    unsure_cw(s, "opaque-command", "the command word is a variable")
+    { if (!envcw(s, p)) unsure_cw(s, "opaque-command", "the command word is a variable") }
   else if (globcmd(p)) unsure_cw(s, "opaque-command", "the command word is a glob")
   else unsure_now(s, "opaque-command", "the command word is built at run time")
   return 1
@@ -1406,7 +1625,8 @@ function globcmd(p,   d, c, re, w) {
   return 1
 }
 function setl(l, why, whyt) { L = l; WHY = why; WHYT = whyt }
-function isprogword(x) { x = base(stripver(x)); return (x in CW) || (x in WRW) }
+# isprogword(x): x names a class program or a wrapper, in any case (a case-insensitive filesystem runs SSH as ssh)
+function isprogword(x,   l) { x = base(stripver(x)); l = tolower(x); return (x in CW) || (x in WRW) || (l in CW) || (l in WRW) }
 function strpresent(j, k,   n, A, a, m, p, c) {
   n = split(WR_STR[j], A, ",")
   for (a = 1; a <= n; a++) {
@@ -1855,7 +2075,35 @@ function addres(l, g, p, vpl, vpr, tg, na, why, whyt) {
   NRES++; XL[NRES] = l; XG[NRES] = g; XP[NRES] = p; XVL[NRES] = vpl; XVR[NRES] = vpr; XT[NRES] = tg
   XNA[NRES] = na; XW[NRES] = why; XWT[NRES] = whyt; XUNC[NRES] = ""
 }
-function hd_rule(c,   n, LN, i, line, tag, body, dash, uq, seg, rest, cand) {
+# capcw(t): raw text t holds a class program, in any case, at a command position. t is cut into pieces at a
+# newline, ; & | ( ) and a backtick (so $( too); in each piece quotes and backslashes are dropped from the
+# words, then leading redirects (with their target word), assignments, shell keywords and wrappers (with
+# their -options and bare numbers) are skipped and the first word left is the command word. The fixed wrapper list covers the built-in v1 list,
+# where WRW holds no rows. Sets CWW to the lowercase class name. Case-sensitive scans stay in hascw (prose
+# such as "Fix SSH key handling" must not match). The & of a redirect (2>&1, >&2, <&0, &>f, &>>f) is
+# dropped before the cut, so the redirect stays one word the redirect test below skips.
+function capcw(t,   n, P, i, m, W, j, w, lb, wrap) {
+  gsub(/[<>]&/, ">", t); gsub(/&>/, ">", t)
+  n = split(t, P, /[\n;&|()`]/)
+  for (i = 1; i <= n; i++) {
+    m = split(P[i], W, /[ \t]+/); wrap = 0
+    for (j = 1; j <= m; j++) {
+      w = W[j]; gsub(/[\047"\\]/, "", w)
+      if (w == "" || w ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+      # a redirect word skips itself and its target word; one with the target attached skips itself
+      if (w ~ /^[0-9]*(<|>|>>|<<|&>|&>>|>&|<&|>\|)$/) { j++; continue }
+      if (w ~ /^[0-9]*(&>|<|>)/) continue
+      if (index(" if then elif else do while until time ! { } ", " " w " ")) continue
+      lb = tolower(base(stripver(w)))
+      if ((lb in WRW) || index(" sudo doas env nice nohup timeout time command exec builtin stdbuf ionice chrt taskset setsid ", " " lb " ")) { wrap = 1; continue }
+      if (wrap && (w ~ /^-/ || w ~ /^[0-9]+$/)) continue
+      if (lb in CW) { CWW = lb; return 1 }
+      break
+    }
+  }
+  return 0
+}
+function hd_rule(c,   n, LN, i, line, tag, body, dash, uq, cand, k, m) {
   n = split(c, LN, "\n"); tag = ""
   for (i = 1; i <= n; i++) {
     line = LN[i]
@@ -1865,10 +2113,11 @@ function hd_rule(c,   n, LN, i, line, tag, body, dash, uq, seg, rest, cand) {
       else body = body "\n" line
       continue
     }
-    if (match(line, /<<-?[ \t]*([A-Za-z_][A-Za-z0-9_]*|\047[^\047]*\047|"[^"]*")/) && substr(line, RSTART + 2, 1) != "<" && (RSTART == 1 || substr(line, RSTART - 1, 1) != "<")) {
-      seg = substr(line, RSTART, RLENGTH)
-      dash = (seg ~ /^<<-/); rest = seg; sub(/^<<-?[ \t]*/, "", rest)
-      uq = (rest !~ /^[\047"]/); gsub(/^[\047"]|[\047"]$/, "", rest); tag = rest; body = ""
+    # each `<<` not part of a longer `<` run (`<<<`), first one hd_word accepts opens the heredoc
+    m = length(line)
+    for (k = 1; k < m; k++) {
+      if (substr(line, k, 2) != "<<" || substr(line, k + 2, 1) == "<" || (k > 1 && substr(line, k - 1, 1) == "<")) continue
+      if (hd_word(line, k)) { dash = HD_DASH; uq = !HD_Q; tag = HD_TAG; body = ""; break }
     }
   }
   if (tag != "" && uq && (index(body, "$(") || index(body, "`")) && hascw(body)) return 1
@@ -1878,6 +2127,8 @@ BEGIN {
   split("if then elif else fi do done while until time in esac ! { } ( )", A, " "); for (i in A) KW[A[i]] = 1
   split("cat head tail less wc ls stat file diff cmp md5sum sha256sum grep", A, " "); for (i in A) PRL[A[i]] = 1
   load(ENVIRON["RG_UCF"], "user"); load(ENVIRON["RG_KF"], "kit"); loadallow(ENVIRON["RG_UAF"])
+  # built-in noexec words: a folder named like a class program (cd Docker, mkdir AWS) is not a launcher operand
+  split("cd pushd popd mkdir rmdir touch", A, " "); for (i in A) NOEX[A[i]] = 1
   # session grants for read-only Bash reach: `<group> TAB <target>`, exact strings (RG_RGF is /dev/null unless attended Lead)
   f = ENVIRON["RG_RGF"]
   if (f != "" && f != "/dev/null") { while ((getline l < f) > 0) if (split(l, A, "\t") == 2 && A[1] != "" && A[2] != "") RGR[A[1] SUBSEP A[2]] = 1; close(f) }
@@ -1888,17 +2139,36 @@ BEGIN {
     CW["gh"] = 1; CWG["gh"] = "gh_api"
   }
   for (b in BAD) print "BAD\t" b
-  if (mode == "coarse") RS = "\032"
 }
-mode == "coarse" {
-  n = split($0, A, /[ \t\n;&|<>()"\047`=]+/)
-  for (i = 1; i <= n; i++) if (protword(A[i]) != "") { print "PROT\t" protword(A[i]); exit }
-  if (settings_hit($0)) { print "PROT\tsettings"; exit }
-  for (i = 1; i <= n; i++) if (issetjson(A[i]) && tolower($0) ~ />|(^|[^A-Za-z0-9_-])(cp|mv|ln|install|tee|dd|sed)([^A-Za-z0-9_-]|$)/) { print "PROTS\t" base(A[i]); exit }
-  for (i = 1; i <= n; i++) if (isprotname(A[i]) && tolower($0) ~ />|(^|[^A-Za-z0-9_-])(cp|mv|ln|install|tee|dd|sed|rm|unlink|shred|truncate)([^A-Za-z0-9_-]|$)/) { print "PROT\t" base(A[i]); exit }
-  if (hascw($0)) print "CW\t" CWW "\t" CWG[CWW]
-  exit
+mode == "coarse" { COARSE = (NR > 1 ? COARSE "\n" : "") $0; next }
+# coarse_scan(): the whole input (every record, so a 0x1A or any other byte hides nothing) is scanned once, in END
+function coarse_scan() {
+  if (blind_scan(COARSE)) exit
+  if (hascw(COARSE) || capcw(COARSE)) print "CW\t" CWW "\t" CWG[CWW]
 }
+# blind_scan(t): the position-blind protection scan of coarse_scan and of a depth-capped body, by name
+# only: a protword word, a settings stand-down word, a settings*.json word with a write verb or > anywhere,
+# a protected script name with a write verb or > anywhere, or with an interpreter word (icls, a shell only
+# with a later -c style cluster) anywhere, since inline code is not read here. Prints PROT or PROTS; 1 = hit.
+function blind_scan(t,   n, A, i, k, sc, ip, lt, wv, wvs) {
+  n = split(t, A, /[ \t\n;&|<>()"\047`=]+/)
+  for (i = 1; i <= n; i++) if (protword(A[i]) != "") { print "PROT\t" protword(A[i]); return 1 }
+  if (settings_hit(t)) { print "PROT\tsettings"; return 1 }
+  # each write-verb test runs once per call, not once per word (a repeated name must stay linear)
+  lt = tolower(t)
+  wvs = (lt ~ />|(^|[^A-Za-z0-9_-])(cp|mv|ln|install|tee|dd|sed)([^A-Za-z0-9_-]|$)/)
+  wv = (lt ~ />|(^|[^A-Za-z0-9_-])(cp|mv|ln|install|tee|dd|sed|rm|unlink|shred|truncate)([^A-Za-z0-9_-]|$)/)
+  if (wvs) for (i = 1; i <= n; i++) if (issetjson(A[i])) { print "PROTS\t" base(A[i]); return 1 }
+  # one pass from the end: sc says a -c style word was seen later than word i
+  ip = 0; sc = 0
+  for (i = n; i >= 1 && !ip; i--) {
+    if ((k = icls(A[i])) != "" && (k != "sh" || sc)) ip = 1
+    if (A[i] ~ /^-[A-Za-z]*c[A-Za-z]*$/) sc = 1
+  }
+  if (ip || wv) for (i = 1; i <= n; i++) if (isprotname(A[i])) { print "PROT\t" base(A[i]); return 1 }
+  return 0
+}
+/^X\tsegcap$/ { SEGCAP = 1; next }
 /^R\t/ { CUR = substr($0, 3); next }
 /^T\t/ { p = substr($0, 3); gsub(/\035/, "\n", p); gsub(/\037/, "\t", p); RECT[CUR] = p; next }
 /^S\t/ { NS++; SR[NS] = CUR; ST[NS] = substr($0, 3); TN[NS] = 0; next }
@@ -1906,8 +2176,13 @@ mode == "coarse" {
 /^C\t/ { p = substr($0, 3); j = index(p, "\t"); NCAP++; CAPT[NCAP] = substr(p, j + 1); next }
 NS > 0 { TN[NS]++; TT[NS, TN[NS]] = substr($0, 1, 1); TP[NS, TN[NS]] = substr($0, 2); if (substr($0, 1, 1) == "w" && substr($0, 2) == "case") HASCASE[SR[NS]] = 1 }
 END {
+  if (mode == "coarse") { coarse_scan(); exit }
   if (mode != "cls") exit
+  if (SEGCAP) { print "SEGCAP"; exit }
   if (prot_scan()) exit
+  # a body nested deeper than 3 never reaches prot_scan: the blind scan judges it by name, so a dev copy
+  # path written there is denied too (accepted: capped bodies are rare)
+  for (i = 1; i <= NCAP; i++) { CPX = CAPT[i]; gsub(/\035/, "\n", CPX); gsub(/\037/, "\t", CPX); if (blind_scan(CPX)) exit }
   RAWT = ENVIRON["RG_CMD"]; gsub(/["\047\\]/, "", RAWT)
   RAWCW = hascw(ENVIRON["RG_CMD"]) || hascw(RAWT); RAWCWW = CWW
   if (hd_rule(ENVIRON["RG_CMD"])) addres("unsure", CWG[CWW], CWW, "-", "", "", 1, "heredoc-subst", "a heredoc body runs a substitution next to a class word")
@@ -1918,7 +2193,7 @@ END {
     if (L == "ro" || L == "act" || L == "unsure") addres(L, GRP, PRG, VPL, VPR, TGT, NOALLOW || L == "unsure", WHY, WHYT)
     else if (ISCMD) OTHER = 1
   }
-  for (i = 1; i <= NCAP; i++) if (hascw(CAPT[i])) addres("unsure", CWG[CWW], CWW, "-", "", "", 1, "depth-cap", "substitutions nested deeper than 3 levels")
+  for (i = 1; i <= NCAP; i++) if (hascw(CAPT[i]) || capcw(CAPT[i])) addres("unsure", CWG[CWW], CWW, "-", "", "", 1, "depth-cap", "substitutions nested deeper than 3 levels")
   if (NRES == 0) exit
   dec = ""; d = 0
   for (r = 1; r <= NRES; r++) if ((XL[r] == "act" || XL[r] == "unsure") && !covered(r)) { dec = "deny"; d = r; break }
@@ -1948,6 +2223,7 @@ END {
 # each body a record of its own (depth cap 3). Output: R <id> <text> / B <id> <original body> / C <id>
 # <capped body>, newlines as GS and tabs as US inside a field.
 SUBS='
+# the control-byte route (0x1A, 0x1D, 0x1E, 0x1F) keeps a 0x1A byte out of this awk
 BEGIN { RS = "\032"; SQ = "\047"; DQ = "\042" }
 function enc(x) { gsub(/\n/, "\035", x); gsub(/\t/, "\037", x); return x }
 function pclose(s, p,   n, d, q, ch) {
@@ -2019,7 +2295,7 @@ coarse() { # coarse <why-code> <why-text> <note|"">: protection raw scan, then c
       f="${out##*PROT"$TAB"}"; f="${f%%"
 "*}"
       rg_log "deny: protected-write route=Bash file=$(clean "$f")$(agl)"
-      emit deny "reach-guard: this command touches reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, or a settings stand-down key ($f), outside a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
+      emit deny "reach-guard: this command touches reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, the parser library, the hooks wiring, or a settings stand-down key ($f), outside a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
       exit 0 ;;
     *"CW$TAB"*)
       l="${out##*CW"$TAB"}"; l="${l%%"
@@ -2038,8 +2314,7 @@ coarse() { # coarse <why-code> <why-text> <note|"">: protection raw scan, then c
 [ "$LIBOK" = 1 ] || coarse "fallback" "guard-cmdpos.sh is missing or stale, so the command cannot be parsed" "guard-cmdpos.sh missing or stale: class-word fallback"
 [ "$DATAOK" = 1 ] || coarse "fallback" "the kit class data is missing, so the command cannot be classified" "data/reach-classes.tsv missing or unreadable: built-in program list fallback"
 [ "${#CMD}" -le 20000 ] || coarse "length-cap" "the command is longer than 20,000 characters" ""
-case "$CMD" in *"$(printf '\035')"* | *"$(printf '\037')"*) coarse "control-byte" "the command holds a 0x1D or 0x1F control byte" "" ;; esac
-
+case "$CMD" in *"$(printf '\032')"* | *"$(printf '\035')"* | *"$(printf '\036')"* | *"$(printf '\037')"*) coarse "control-byte" "the command holds a 0x1A, 0x1D, 0x1E or 0x1F control byte" "" ;; esac
 # session grants (read-only Bash reach): honoured only for the attended Lead with an id-shaped session_id
 BJ="$(printf '%s' "$INPUT" | jq -r '[(.tool_use_id // ""), (.session_id // ""),
   (.cwd // "" | tostring | if test("[\n\r\t]") then "" else . end)] | .[] | tostring | gsub("[\n\r]"; " ")' 2>/dev/null)"
@@ -2052,23 +2327,103 @@ TUOK=0; case "$TUID" in "" | *[!A-Za-z0-9_-]*) ;; *) TUOK=1 ;; esac
 RD="$STATE/reach-guard"; RGF=/dev/null
 [ "$SIDOK" = 1 ] && [ "$(guard_ask_decision "$SID" "$AGENT")" = ask ] && RGF="$RD/rgrant.$RSID"
 
+# rg_qjoin <record text>: the text with every newline inside a single- or double-quoted region turned into
+# 0x1E (guard_argv reads that as a payload newline, guard_split_segments_qsafe as an ordinary byte, so a
+# quoted multi-line argument stays one segment), and backslash-newline inside double quotes removed (a
+# line continuation). Prints the text unchanged (the old per-line rule) when it holds `$'`, `${`, `$(`,
+# a backtick, `<<` or a 0x1E byte, when a `#` comment holds a quote or a backslash (guard_argv does not
+# know comments and qsafe starts one after fewer characters, so either may track that quote), or when
+# the scan ends inside a quote. Scanner
+# as guard_argv: outside quotes `\X` is a pair and never opens a quote (backslash-newline keeps the
+# word-start state); a `#` at word start (first byte, after a blank, newline or one of ;&|()<>) runs to
+# the newline; single quotes are literal; in double quotes `\"` `\\` `\$` and a backslash-backtick pair
+# do not end the quote.
+RG_GS="$(printf '\035')"
+rg_qjoin() {
+  printf '%s' "$1" | awk '
+    BEGIN { SQ = "\047"; DQ = "\042"; RSB = "\036"; BQ = "\140" }
+    { s = s (NR > 1 ? "\n" : "") $0 }
+    END {
+      if (index(s, "$" SQ) || index(s, "${") || index(s, "$(") || index(s, BQ) || index(s, "<<") || index(s, RSB)) { printf "%s", s; exit }
+      n = length(s); q = 0; ws = 1; out = ""; i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (q == 0) {
+          if (c == "\\") { d = substr(s, i + 1, 1); out = out c d; i += 2; if (d != "\n") ws = 0; continue }
+          if (c == "#" && ws) {
+            e = index(substr(s, i), "\n"); cm = (e ? substr(s, i, e - 1) : substr(s, i))
+            if (index(cm, SQ) || index(cm, DQ) || index(cm, "\\")) { printf "%s", s; exit }
+            out = out cm; i += length(cm); continue
+          }
+          ws = (c == " " || c == "\t" || c == "\n" || index(";&|()<>", c) > 0)
+          if (c == SQ) q = 1; else if (c == DQ) q = 2
+          out = out c; i++; continue
+        }
+        if (q == 1) { if (c == SQ) q = 0; out = out (c == "\n" ? RSB : c); i++; continue }
+        if (c == "\\") {
+          d = substr(s, i + 1, 1)
+          if (d == "\n") { i += 2; continue }
+          if (d == DQ || d == "\\" || d == "$" || d == BQ) { out = out c d; i += 2; continue }
+          out = out c; i++; continue
+        }
+        if (c == DQ) q = 0
+        out = out (c == "\n" ? RSB : c); i++
+      }
+      printf "%s", (q ? s : out)
+    }
+  '
+}
 C2="$(guard_strip_heredocs "$CMD")"
-OUT="$(printf '%s' "$C2" | awk "$SUBS" 2>/dev/null | while IFS="$TAB" read -r k id rest; do
+# Segment cap: the parse loop costs a few processes per segment (a substitution body about two more), and
+# a timed-out hook lets the call run. The counter inside the loop below makes the cap exact (past 200
+# segments parsed it stops and the command takes the coarse route); this estimate is only the early exit
+# that skips the loop. NSEGB is twice the number of bodies SUBS extracts (its own B and C
+# records, so the quote state is the one ext uses: nothing in single quotes, $( and backticks in double
+# quotes), which covers the own record of each body. NSEGA is the segment count of the whole stripped text after
+# rg_qjoin, the same split the loop runs: rg_qjoin joins only a text holding no $( or backtick, where
+# SUBS finds no body inside quotes, so a joined quoted newline is one segment in both; any other text
+# stays split per line, which can only count more. The parent record keeps every separator outside its
+# bodies and the separators of each body are in the whole text too, so the sum stays an upper bound of the
+# segments parsed, except where qsafe does not reset its quote state inside a $( ) in double quotes:
+# separators of such a body can sit in a region it reads as quoted, which only the loop counter catches.
+SUBO="$(printf '%s' "$C2" | awk "$SUBS" 2>/dev/null)"
+NSEGB="$(printf '%s\n' "$SUBO" | awk '/^[BC]\t/ { n++ } END { print 2 * n }')"
+NSEGA="$(guard_split_segments_qsafe "$(rg_qjoin "$C2")" | wc -l)"
+NSEG=$((NSEGA + NSEGB))
+[ "$NSEG" -le 200 ] || coarse "segment-cap" "the command has more than 200 segments, too many to parse within the hook's time limit" ""
+# Each record runs through rg_qjoin first (only one that holds a newline); the T line is then the joined
+# text plus the record's trailing newlines, so mksep lines the segments up against what was split.
+# NSP counts the segments parsed: the inner loop reads a heredoc, so it runs in this subshell and the count
+# holds across records; past 200 it prints X segcap and both loops stop (the cls awk then prints SEGCAP).
+OUT="$({ [ -z "$SUBO" ] || printf '%s\n' "$SUBO"; } | { NSP=0; while IFS="$TAB" read -r k id rest; do
+  [ "$NSP" -le 200 ] || break
   case "$k" in
     (R)
-      printf 'R\t%s\nT\t%s\n' "$id" "$rest"
-      t="$(printf '%s' "$rest" | tr '\035\037' '\n\t')"
-      guard_split_segments_qsafe "$t" | while IFS= read -r seg; do
+      t="$(printf '%s' "$rest" | tr '\035\037' '\n\t')"; j="$t"
+      case "$t" in (*"
+"*) j="$(rg_qjoin "$t")" ;; esac
+      if [ "$j" = "$t" ]; then printf 'R\t%s\nT\t%s\n' "$id" "$rest"
+      else printf 'R\t%s\nT\t%s%s\n' "$id" "$(printf '%s' "$j" | tr '\n\t' '\035\037')" "${rest##*[!$RG_GS]}"; t="$j"; fi
+      # the dot keeps trailing empty segment lines through the command substitution
+      sl="$(guard_split_segments_qsafe "$t"; echo .)"
+      [ "$sl" = . ] && continue
+      sl="${sl%?.}"
+      while IFS= read -r seg; do
+        NSP=$((NSP + 1))
+        [ "$NSP" -le 200 ] || { printf 'X\tsegcap\n'; break; }
         printf 'S\t%s\n' "$seg"
         guard_argv "$seg"
-      done ;;
+      done <<EOF
+$sl
+EOF
+      ;;
     (*) printf '%s\t%s\t%s\n' "$k" "$id" "$rest" ;;
   esac
-done | RG_CMD="$CMD" RG_KF="$KF" RG_UCF="$UCF" RG_UAF="$UAF" RG_RGF="$RGF" RG_PCWD="$PCWD" awk -v mode=cls -v builtin=0 "$AWK" 2>/dev/null)"
+done; } | RG_ENV0="$RG_ENV0" RG_CMD="$CMD" RG_KF="$KF" RG_UCF="$UCF" RG_UAF="$UAF" RG_RGF="$RGF" RG_PCWD="$PCWD" awk -v mode=cls -v builtin=0 "$AWK" 2>/dev/null)"
 
 deny_prot() { # deny_prot <label>: a Bash protected write
   rg_log "deny: protected-write route=Bash file=$(clean "$1")$(agl)"
-  emit deny "reach-guard: this command writes to or acts on reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, or a settings stand-down key ($1), and it is not a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
+  emit deny "reach-guard: this command writes to or acts on reach-guard's own allowlist, class data, state or kill switch, reach-guard's own scripts, kit-gate.sh, the install options file, the parser library, the hooks wiring, or a settings stand-down key ($1), and it is not a pure read. No agent changes those, the session Lead included: the user does it by hand outside the agent session. Do not retry a variant or route around it with another tool."
   exit 0
 }
 # bp_check <CAND lines> <count>: prints HIT TAB the label of the first candidate that lands in the Bash protected set:
@@ -2133,6 +2488,7 @@ bp_check() {
     }' 2>/dev/null
 }
 
+case "$NLC$OUT$NLC" in (*"${NLC}SEGCAP$NLC"*) coarse "segment-cap" "the command has more than 200 segments, too many to parse within the hook's time limit" "" ;; esac
 DEC=""; CANDS=""; NCAND=0
 while IFS= read -r line; do
   case "$line" in

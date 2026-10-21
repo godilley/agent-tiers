@@ -12,8 +12,9 @@
 # FAIL-CLOSED class (SC-5.3), unlike the kit's fail-open guards: if jq is missing the payload cannot
 # be parsed precisely, so any Bash payload CONTAINING the word codex is denied (crude, stated in the
 # reason) rather than allowed. Anti-accident, not anti-adversary: `env`/`xargs`/`sh -c` indirection is
-# not chased - the audience is a Lead slipping into old habit, not a hostile agent. NOT auto-wired:
-# consent row, `install-flat.sh --with-codex-guard`. Selfcheck: codex-guard.selfcheck.sh.
+# not chased - the audience is a Lead slipping into old habit, not a hostile agent. Wiring: options.tsv
+# row, group delegation: the plugin route turns it on with that group in the plugin options; the flat
+# route wires it with `install-flat.sh --with-codex-guard`. Selfcheck: codex-guard.selfcheck.sh.
 set -u
 [ "$(sh "$(dirname "$0")/kit-gate.sh" "$0" </dev/null 2>/dev/null)" = standdown ] && exit 0
 # CLAUDE_PLUGIN_ROOT is not reliably set for a hook's own shell (only baked into flat-installed
@@ -110,14 +111,83 @@ if [ -z "$CMDSTR" ]; then
   esac
   exit 0
 fi
+# Quote masking: a quoted string is data, not command structure, so `rg -n 'a|codex exec|b' f` must not
+# read the `|` as a pipe into codex. One awk pass over the whole string (heredocs already stripped)
+# rewrites SCAN: outside quotes a backslash before a metacharacter, quote, blank or backslash becomes
+# `__`, before a newline a space, and before any other char just that char (`\codex` is codex); a `#`
+# that starts a word (after a blank, newline, ; & | ( or ), not after { or $) begins a comment, copied
+# raw to the end of its line; a comment holding a quote character falls back to the raw scan, because a
+# `#` misread as a comment would swallow a real quote and leave the mask out of step with the shell
+# (`[ ${#msg} -gt 0 ] && git commit -m 'a` / `b'` / `codex exec - # don't` once ALLOWED); inside '...' and $'...' every shell metacharacter (| ; & ( ) { } < > ` \ $) becomes `_` and
+# newline a space; inside "..." the same, EXCEPT that $(...) (parentheses counted) and backtick spans stay
+# raw because they execute. The quote characters themselves are deleted, so `"codex" exec -` and
+# `'codex' exec -` become a command-position codex and DENY. A quote in a comment, an unterminated quote, an unbalanced `$(`,
+# any awk failure, or a command over 20,000 characters (cap: the char walk is quadratic on some awks)
+# leaves SCAN unmasked: fail CLOSED, same as the heredoc fallback above.
+MASKED=""
+[ "${#SCAN}" -le 20000 ] && MASKED="$(printf '%s\n' "$SCAN" | awk '
+  function mk(c) { if (c == "\n") return " "; return (index("|;&(){}<>`\\$", c) ? "_" : c) }
+  { s = s (NR > 1 ? "\n" : "") $0 }
+  END {
+    sp = 1; st[1] = "N"; dp[1] = 0; out = ""; n = length(s)
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1); nx = substr(s, i + 1, 1); cur = st[sp]
+      if (cur == "S") { if (c == "\047") sp--; else out = out mk(c); continue }
+      if (cur == "A") {
+        if (c == "\\") { out = out "__"; i++ }
+        else if (c == "\047") sp--
+        else out = out mk(c)
+        continue
+      }
+      if (cur == "D") {
+        if (c == "\\") {
+          if (nx == "\"" || nx == "\\" || nx == "$" || nx == "`" || nx == "\n") { out = out "__"; i++ }
+          else out = out "_"
+        }
+        else if (c == "\"") sp--
+        else if (c == "$" && nx == "(") { out = out "$("; i++; sp++; st[sp] = "C"; dp[sp] = 0 }
+        else if (c == "`") { out = out c; sp++; st[sp] = "B"; dp[sp] = 0 }
+        else out = out mk(c)
+        continue
+      }
+      # code contexts: N (top level), C ($(...) in a double quote), B (backtick span in a double quote)
+      pv = (i > 1) ? substr(s, i - 1, 1) : "\n"
+      if (c == "#" && index(" \t\n;&|()", pv)) {
+        j = index(substr(s, i), "\n")
+        cm = (j == 0) ? substr(s, i) : substr(s, i, j - 1)
+        if (index(cm, "\047") || index(cm, "\"")) exit 1
+        out = out cm; if (j == 0) i = n; else i += j - 2
+        continue
+      }
+      if (c == "\\") {
+        if (nx == "\n") out = out " "
+        else if (nx == "" || index("|;&(){}<>`$\047\"\\ \t", nx)) out = out "__"
+        else out = out nx
+        i++
+      }
+      else if (c == "\047") { sp++; st[sp] = "S" }
+      else if (c == "$" && nx == "\047") { i++; sp++; st[sp] = "A" }
+      else if (c == "\"") { sp++; st[sp] = "D" }
+      else if (cur == "C" && c == "(") { dp[sp]++; out = out c }
+      else if (cur == "C" && c == ")") { out = out c; if (dp[sp] == 0) sp--; else dp[sp]-- }
+      else if (cur == "B" && c == "`") { out = out c; sp-- }
+      else out = out c
+    }
+    if (sp != 1) exit 1
+    printf "%s\n", out
+  }
+' 2>/dev/null)" && [ -n "$MASKED" ] && SCAN="$MASKED"
+
 # Command-position codex: line start or after ; & | ( { $( ` - optionally behind a bare launcher, then
 # codex as a whole word (followed by space, end of line, or a terminator like ; & | )).
 # The launcher list is every prefix that still leaves codex in command position AND is plain habit:
 # command/exec/nohup/sudo/time. It stops there deliberately - env/xargs/sh -c REWRITE the command and
 # chasing them is anti-adversary work this guard does not claim (see header).
 # Mentions inside strings/args (rg codex, echo codex, paths like codex-home-isolate.sh, and the
-# wrapper's own codex-run.sh) do not match; a QUOTED string containing '&& codex ' does false-positive
-# (known ceiling - split the command; the deny reason self-corrects).
+# wrapper's own codex-run.sh) do not match, and neither does a metacharacter inside a quoted string
+# (masked above). Ceiling: the mask is a lexical approximation, not a shell parser: it does not follow
+# `${..}` nesting inside "$(...)" beyond paren counting, and it falls back to the raw scan only on the
+# cases named above, not on every shape a real shell would read differently.
 if printf '%s\n' "$SCAN" | grep -Eq '(^|[;&|({]|\$\(|`)[[:space:]]*((command|exec|nohup|sudo|time)[[:space:]]+)?codex([[:space:];&|)]|$)'; then
   deny "$FIX"
 fi

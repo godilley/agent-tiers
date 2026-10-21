@@ -1,5 +1,5 @@
 # HOST card - model resolution + environment probes
-*card-v16 c=1888953955-14823 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v20 c=1154767000-16882 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the per-host runtime facts.** Load this card when resolving how a spawn's model/effort
 > actually lands, mapping a Lead model to a band, or deciding whether a background workflow survives -
@@ -160,3 +160,24 @@ difference is listed here, never a silent assumption about which host the operat
   denies with the fix instead of asking. No ask expects a human who cannot answer it (the unattended/
   subagent conversions above cover that), and no reason carries cc-gui's synthesiser substrings (lint
   check 6).
+- **A command handed back for the operator to run carries a tag line directly above it**
+  (2026-10-18, widened 2026-10-19): the Lead and every agent put one above every command they hand
+  back for the operator to run (not only `agent-tiers ...` or `!` commands), on the line directly above
+  the command; for a fenced command, on the line directly above the opening fence (outside it), so a
+  copied fence still starts with `!`. `operator:run|kind:policy` when running it changes the kit's guard
+  policy or safety state (reach-guard allowlist, grants, off switches, consent rows, kit settings;
+  reach-guard's `POLICY CHANGE (persists, you run it)`); everything else, `git push` included, is
+  `operator:run|kind:oneoff` (`RUN (one-off, you run it)`), read-only commands too. The kind follows
+  what the command does, not its name. In the native chat `notify-tag-strip` renders the tag as a
+  distinct badge; everywhere else it stays plain text, so the label words still carry the meaning. It
+  is not a turn-end tag: the reply still ends on its own `operator:` line. Arrival event for `!`
+  commands: the Stop hook `handback-tag-guard` (attention group, native CLI only, main session only
+  since Stop does not fire for subagents, attended sessions only) sends the turn back once per offending
+  reply within 10 minutes when a `!` command has no tag above it; one tag above a fence covers the whole
+  fence (a tag inside the fence above its first `!` line is also accepted), outside a fence each `!`
+  line needs its own tag, and an inline `! cmd` span is checked only on a line that also says run or
+  yourself. Not detected: bare commands without `!` (e.g. for a remote server), prose rule only; later
+  commands hidden inside an unclosed fence; any command in a reply ending `operator:ask_next` (that turn
+  already gets notify-tag-guard's ask send-back); notebook `!pip` lines in a python fence (skipped on
+  purpose). Known false positive: a warning like "Don't run
+  `! git reset --hard`" is flagged, so say in the reply that it is only an example.

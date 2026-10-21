@@ -64,7 +64,7 @@ trap cleanup EXIT
 # dir and the real options.tsv) with every kit-gate input cleared, so the live kit's state and the user's
 # real options can never stand the hook down or be touched. The notifier itself stays stubbed on PATH below.
 mkdir -p "$T/kit/scripts" "$T/kit/install" "$T/managed"
-cp "$SRC_DIR/notify.sh" "$SRC_DIR/notify-stop.sh" "$T/kit/scripts/" || fail "cannot copy hooks into sandbox"
+cp "$SRC_DIR/notify.sh" "$SRC_DIR/notify-stop.sh" "$SRC_DIR/guard-cmdpos.sh" "$T/kit/scripts/" || fail "cannot copy hooks into sandbox"
 cp -R "$SRC_DIR/assets" "$SRC_DIR/lib" "$T/kit/scripts/" || fail "cannot copy assets/lib into sandbox"
 sed "s|^_kg_managed=.*|_kg_managed='$T/managed'|" "$SRC_DIR/kit-gate.sh" > "$T/kit/scripts/kit-gate.sh"
 grep -qxF "_kg_managed='$T/managed'" "$T/kit/scripts/kit-gate.sh" || fail "_kg_managed not rewritten"
@@ -164,7 +164,7 @@ chmod +x "$NOHUP_STUB_DIR/nohup"
 # gains a new external dependency; anything not listed here is simply absent on every PATH built
 # from it, which is how every "tool missing" case below is constructed (no exclusion step needed).
 BASE_TOOLS="$T/base-tools"; mkdir -p "$BASE_TOOLS"
-for tool in sh jq tr cat printf dirname basename mkdir date cut awk head tail wc grep timeout sleep iconv od sed; do
+for tool in sh jq tr cat printf dirname basename mkdir date cut awk head tail wc grep timeout sleep iconv od sed cksum; do
   p="$(command -v "$tool" 2>/dev/null)" && [ -n "$p" ] && ln -sf "$p" "$BASE_TOOLS/$tool" 2>/dev/null
 done
 
@@ -608,7 +608,7 @@ grep -qx -- '-i' "$NOTIFY_SEND_CALLS" && fail "with the icon asset absent, notif
 # CLAUDE_CODE_ENTRYPOINT=cli throughout (opus reviewer, 2026-09-17, HIGH: a headless/claude -p
 # caller must never be blocked or pinged - see notify.sh's own gate comment).
 run_stop() { # $1=last_assistant_message
-  jq -cn --arg m "$1" '{hook_event_name:"Stop", last_assistant_message:$m}' | CLAUDE_CODE_ENTRYPOINT=cli PATH="$FULL_PATH" sh "$H" 2>"$T/stderr"
+  jq -cn --arg m "$1" '{hook_event_name:"Stop", session_id:"sn", last_assistant_message:$m}' | CLAUDE_CODE_ENTRYPOINT=cli PATH="$FULL_PATH" sh "$H" 2>"$T/stderr"
 }
 printf 'osc' > "$MODE_FILE"
 
@@ -624,6 +624,35 @@ out="$(run_stop "$(printf 'Three options above.\noperator:ask_next')")"
 
 out="$(run_stop "Just some prose, no tag at all.")"
 [ -z "$out" ] || fail "an absent/unparseable tag must stay SILENT (the sibling guard forces a retry) - got: $out"
+
+# Hand-back tag guard (lib/handback-tag.sh): an untagged `!` command reply that ends want_input stays
+# SILENT while handback-tag-guard is about to block it (no marker yet), pings once the guard has
+# already blocked that reply (marker older than a few seconds), and a tagged one pings normally.
+FENCE_HB='```'
+HB_MSG="$(printf 'Run this:\n%s\n! sudo pacman -S x\n%s\noperator:want_input' "$FENCE_HB" "$FENCE_HB")"
+out="$(run_stop "$HB_MSG")"
+[ -z "$out" ] || fail "an untagged hand-back with no guard marker yet must stay silent (the guard is about to block) - got: $out"
+. "$SRC_DIR/lib/handback-tag.sh"
+HB_MARK="$(handback_tag_marker "$T/kit" sn "$(handback_tag_flagged "$HB_MSG")")"
+mkdir -p "$(dirname "$HB_MARK")"; echo $(( $(date +%s) - 100 )) > "$HB_MARK"
+out="$(run_stop "$HB_MSG")"
+[ -n "$out" ] || fail "once the guard has blocked that reply (old marker) the retry must ping normally"
+rm -f "$HB_MARK"
+out="$(run_stop "$(printf 'Run this:\noperator:run|kind:oneoff\n%s\n! sudo pacman -S x\n%s\noperator:want_input' "$FENCE_HB" "$FENCE_HB")")"
+[ -n "$out" ] || fail "a tagged hand-back ending want_input must ping normally"
+case "$(printf '%s' "$out" | jq -r '.terminalSequence')" in *operator:run*) fail "the run tag line must not leak into the notification body" ;; esac
+# A marker older than 10 minutes means the guard will block that reply again: stay silent.
+echo $(( $(date +%s) - 700 )) > "$HB_MARK"
+out="$(run_stop "$HB_MSG")"
+[ -z "$out" ] || fail "a stale (over 10 minutes) guard marker means the guard blocks again: stay silent - got: $out"
+rm -f "$HB_MARK"
+# Unattended: the guard skips the session and writes no marker, so the hold must release and ping.
+mkdir -p "$T/kit/.state"; : > "$T/kit/.state/unattended.sn"
+out="$(run_stop "$HB_MSG")"
+[ -n "$out" ] || fail "an unattended session must still ping on an untagged hand-back (the guard skips it, no marker ever comes)"
+rm -f "$T/kit/.state/unattended.sn"
+out="$(run_stop "$HB_MSG")"
+[ -z "$out" ] || fail "attended again: an untagged hand-back with no marker must stay silent - got: $out"
 
 # A mixed signal (an earlier stray operator: line plus a valid one at the end) must ALSO stay
 # silent, not just an absent tag - live-demonstrated, 2026-09-17: this exact case used to fire a

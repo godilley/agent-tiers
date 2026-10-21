@@ -91,6 +91,49 @@ EOF')" = DENY ] || fail "codex before a later heredoc should DENY"
 [ "$(run 'cat > p.txt <<EOF
 codex exec -' )" = DENY ] || fail "unterminated heredoc containing a codex line should DENY (fail-closed)"
 
+# Quote masking: a metacharacter inside a quoted string is data, not a pipe or separator into codex;
+# $(...) and backticks inside double quotes still execute and still DENY; a quoted command word is
+# still codex; an unterminated quote falls back to the raw scan (fail-closed).
+Q="'"
+[ "$(run "rg -n ${Q}a|codex exec|b${Q} f")" = ALLOW ] || fail "a | inside a single-quoted pattern should ALLOW"
+[ "$(run 'rg -n "a|codex exec|b" f')" = ALLOW ] || fail "a | inside a double-quoted pattern should ALLOW"
+[ "$(run "grep -e ${Q}x; codex --version${Q} f")" = ALLOW ] || fail "a ; inside a single-quoted pattern should ALLOW"
+[ "$(run 'git commit -m "note: never run && codex here"')" = ALLOW ] || fail "&& codex inside a commit message should ALLOW"
+[ "$(run "echo ${Q}a&&codex exec${Q}")" = ALLOW ] || fail "&&codex exec inside single quotes should ALLOW"
+[ "$(run "rg ${Q}x${Q} -e \"(codex)\"")" = ALLOW ] || fail "(codex) inside double quotes should ALLOW"
+[ "$(run "printf ${Q}%s\\n${Q} \"a;codex x\"")" = ALLOW ] || fail "a;codex x inside double quotes should ALLOW"
+[ "$(run "echo ${Q}a
+codex exec${Q}")" = ALLOW ] || fail "codex on a new line inside a quoted string should ALLOW"
+[ "$(run 'rg a\|codex f')" = ALLOW ] || fail "a backslash-escaped | should ALLOW"
+[ "$(run 'echo "$(codex --version)"')" = DENY ] || fail "codex in \$(...) inside double quotes should DENY"
+[ "$(run 'echo "`codex --version`"')" = DENY ] || fail "codex in backticks inside double quotes should DENY"
+[ "$(run 'echo "x $(true; codex exec -) y"')" = DENY ] || fail "codex after ; inside \$(...) in double quotes should DENY"
+[ "$(run '"codex" exec -')" = DENY ] || fail "a double-quoted codex command word should DENY"
+[ "$(run "${Q}codex${Q} exec -")" = DENY ] || fail "a single-quoted codex command word should DENY"
+[ "$(run "x=${Q}a|b${Q}; codex exec -")" = DENY ] || fail "codex after a quoted assignment should DENY"
+[ "$(run 'echo "a" && codex exec -')" = DENY ] || fail "codex after && following a quoted word should DENY"
+[ "$(run "echo ${Q}x; codex exec -")" = DENY ] || fail "an unterminated quote should fall back to the raw scan and DENY"
+[ "$(run "\$${Q}a${Q} ; codex --version")" = DENY ] || fail "codex after an ANSI-C quoted word should DENY"
+[ "$(run "\$${Q}it\\${Q}s${Q} ; codex --version")" = DENY ] || fail "codex after an ANSI-C word with an escaped quote should DENY"
+[ "$(run "echo ${Q}a
+b${Q}
+codex exec -")" = DENY ] || fail "codex after a closed multi-line quote should DENY"
+[ "$(run "# it${Q}s a probe
+codex exec -
+# that${Q}s all")" = DENY ] || fail "a quote inside a comment must not hide a codex on the next line"
+[ "$(run 'echo "a" # it"s
+codex exec -')" = DENY ] || fail "a double quote inside a trailing comment must not hide a codex on the next line"
+[ "$(run "echo a#${Q}x; codex y${Q}")" = ALLOW ] || fail "a # inside a word is no comment (the quote after it is still masked)"
+[ "$(run "[ \${#msg} -gt 0 ] && git commit -m ${Q}subject
+body${Q}
+codex exec - # don${Q}t skip")" = DENY ] || fail "a # in \${#msg} is no comment, so the quote after it is not swallowed and codex on line 3 should DENY"
+[ "$(run "[ \${#msg} -gt 0 ] && rg ${Q}a|codex x${Q} f")" = ALLOW ] || fail "a # in \${#msg} is no comment, so the quoted | after it is still masked"
+[ "$(run "rg ${Q}a|codex x${Q} f # don${Q}t")" = DENY ] || fail "a comment holding a quote falls back to the raw scan (fail-closed, coarse)"
+[ "$(run "echo \$${Q}it\\${Q}s; codex x${Q}")" = ALLOW ] || fail "an escaped quote inside an ANSI-C string keeps the string open, so the ; codex in it should ALLOW"
+[ "$(run '\codex exec -')" = DENY ] || fail "a backslash-prefixed codex command word should DENY"
+[ "$(run 'sudo "codex" exec')" = DENY ] || fail "a launcher before a quoted codex should DENY"
+[ "$(run 'rg a\ codex f')" = ALLOW ] || fail "an escaped blank before codex should ALLOW"
+
 # Malformed (non-JSON) payloads: fail CLOSED when codex is mentioned, open otherwise.
 raw() { out="$(printf '%s' "$1" | sh "$GUARD" 2>/dev/null || true)"; if printf '%s' "$out" | grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"'; then echo DENY; else echo ALLOW; fi; }
 [ "$(raw 'not json but mentions codex here')" = DENY  ] || fail "unparseable payload mentioning codex should DENY (fail-closed)"

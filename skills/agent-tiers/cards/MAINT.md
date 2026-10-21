@@ -1,5 +1,5 @@
 # MAINT card - definition updates, staleness, gc, project-layer maintenance
-*card-v15 c=391926116-18523 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
+*card-v17 c=2307969860-19796 - bump on every normative edit (see MAINT-2); quote it when a return leans on this card's rules.*
 
 > **Single owner of the kit-maintenance machinery.** Load this card when adding / updating / removing a tier
 > artifact, editing an agent definition, running doctor/gc, or wiring the project layer - dispatched from the
@@ -58,6 +58,20 @@ on 2026-08-04 every kit obligation discharged by a PROGRAM was current (integrat
 skills) and every one discharged by an agent remembering was stale (`def-v` 4/7/11; MAINT-6 itself shipped
 without its bump, caught only by a review). Detection, not prevention: the obligation stands, but nothing
 now depends on anyone noticing.
+
+**At commit time the maintainer's `maint2-arrival-guard` hook denies two shapes** (export-ignored: a
+recipient's copy has no such hook, and this rule is judgement there) in the kit repo when the index already
+holds a staged `skills/agent-tiers/SKILL.md` or `cards/*.md` (it reads the index before the command runs,
+so what `git add X && git commit` in one call, `commit -a` or a pathspec commit adds is not what it
+checks), and only when
+`MAINT2_VERSION_TIMELINE` names an existing companion `version-timeline.tsv` (unset or missing skips both):
+a stamp whose version has no row there, and a body changed under an unmoved stamp (a pure re-stamp passes).
+A row matches on its prefix only (`<date><TAB>doctrine<TAB>doctrine<TAB><N><TAB>`, or
+`<date><TAB>card<TAB><card name><TAB><N><TAB>`, trailing tab required), so it goes in BEFORE the commit and
+its `kit-git:<sha>` is filled in after. The no-bump deny has one escape, `[no-doctrine-bump]` anywhere in
+the commit command, for a genuinely non-normative edit (typo, broken link, reflow), logged as a skip in
+guards.log; the missing-row deny has none. Separately, like the kit's other commit guards, it denies a
+`--git-dir`/`--work-tree` flag or a `cd`/`-C` target it cannot resolve (a shell variable): use a literal path.
 
 **Cards carry a `card-v<N>` stamp under the title - same bump-on-normative-edit rule, different purpose.**
 Cards hot-load as skill content (no watcher lag), so there is NO pending-refresh protocol for them; the stamp
